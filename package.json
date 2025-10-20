@@ -7,7 +7,7 @@
     "alexandria-browser/frontend"
   ],
   "scripts": {
-    "dev": "npm run --workspaces --if-present dev",
+    "dev": "npm run --workspaces --if-present --parallel dev",
     "build": "npm run --workspaces --if-present build",
     "start": "npm run --workspaces --if-present start"
   }
