@@ -16,6 +16,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
 
+import { SAMPLE_ARCHIVE_DOCS, type SampleArchiveDoc } from "./data/sampleArchiveDocs";
 import { isNSFWContent } from "./services/nsfwFilter";
 import { getSpellCorrector, type SpellcheckResult } from "./services/spellCorrector";
 
@@ -39,6 +40,15 @@ const ALLOWED_MEDIA_TYPES = new Set([
 const YEAR_PATTERN = /^\d{4}$/;
 
 type LinkStatus = "online" | "archived-only" | "offline";
+
+type ArchiveSearchResponse = Record<string, unknown> & {
+  response?: {
+    docs?: Array<Record<string, unknown>>;
+    numFound?: number;
+    start?: number;
+  };
+  fallback?: boolean;
+};
 
 type HandlerContext = {
   req: IncomingMessage;
@@ -174,6 +184,112 @@ async function evaluateLinkStatus(targetUrl: string): Promise<LinkStatus> {
   return "offline";
 }
 
+function extractYearValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.trunc(value);
+  }
+
+  if (typeof value === "string") {
+    const match = value.match(/(\d{4})/);
+    if (match) {
+      const parsed = Number.parseInt(match[1], 10);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+
+  return null;
+}
+
+function resolveDocumentYear(doc: SampleArchiveDoc): number | null {
+  const candidates: Array<unknown> = [doc.year, doc.date, doc.publicdate];
+  for (const candidate of candidates) {
+    const year = extractYearValue(candidate);
+    if (year !== null) {
+      return year;
+    }
+  }
+  return null;
+}
+
+function gatherSearchableText(doc: SampleArchiveDoc): string {
+  const values: string[] = [];
+
+  const append = (input: unknown) => {
+    if (typeof input === "string") {
+      values.push(input);
+    } else if (Array.isArray(input)) {
+      for (const entry of input) {
+        if (typeof entry === "string") {
+          values.push(entry);
+        }
+      }
+    }
+  };
+
+  append(doc.title);
+  append(doc.description);
+  append(doc.identifier);
+  append(doc.creator);
+  append(doc.collection);
+
+  return values.join(" ");
+}
+
+function performLocalArchiveSearch(
+  query: string,
+  page: number,
+  rows: number,
+  filters: { mediaType?: string; yearFrom?: string; yearTo?: string }
+): ArchiveSearchResponse {
+  const tokens = query
+    .toLowerCase()
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+
+  const requestedMediaType = filters.mediaType?.toLowerCase() ?? "";
+  const requestedYearFrom = filters.yearFrom ? Number.parseInt(filters.yearFrom, 10) : null;
+  const requestedYearTo = filters.yearTo ? Number.parseInt(filters.yearTo, 10) : null;
+
+  const matches = SAMPLE_ARCHIVE_DOCS.filter((doc) => {
+    if (requestedMediaType && doc.mediatype?.toLowerCase() !== requestedMediaType) {
+      return false;
+    }
+
+    const year = resolveDocumentYear(doc);
+    if (requestedYearFrom !== null && (year === null || year < requestedYearFrom)) {
+      return false;
+    }
+    if (requestedYearTo !== null && (year === null || year > requestedYearTo)) {
+      return false;
+    }
+
+    if (tokens.length === 0) {
+      return true;
+    }
+
+    const haystack = gatherSearchableText(doc).toLowerCase();
+    return tokens.every((token) => haystack.includes(token));
+  });
+
+  const safePage = Number.isFinite(page) && page > 0 ? page : 1;
+  const safeRows = Number.isFinite(rows) && rows > 0 ? rows : 20;
+  const startIndex = (safePage - 1) * safeRows;
+
+  const docs = matches.slice(startIndex, startIndex + safeRows).map((doc) => ({ ...doc }));
+
+  return {
+    response: {
+      docs,
+      numFound: matches.length,
+      start: startIndex
+    },
+    fallback: true
+  };
+}
+
 const routes: Record<string, Record<string, RouteHandler>> = {
   GET: {
     "/health": ({ res }) => {
@@ -244,6 +360,8 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
   const rowsParam = url.searchParams.get("rows") ?? "20";
   const page = Number.parseInt(pageParam, 10);
   const rows = Number.parseInt(rowsParam, 10);
+  const safePage = Number.isFinite(page) && page > 0 ? page : 1;
+  const safeRows = Number.isFinite(rows) && rows > 0 ? rows : 20;
 
   const mediaTypeParam = url.searchParams.get("mediaType")?.trim().toLowerCase() ?? "";
   const yearFromParam = url.searchParams.get("yearFrom")?.trim() ?? "";
@@ -305,8 +423,8 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
 
   requestUrl.searchParams.set("q", combinedQuery.length > 0 ? combinedQuery : searchExpression);
   requestUrl.searchParams.set("output", "json");
-  requestUrl.searchParams.set("page", Number.isFinite(page) && page > 0 ? String(page) : "1");
-  requestUrl.searchParams.set("rows", Number.isFinite(rows) && rows > 0 ? String(rows) : "20");
+  requestUrl.searchParams.set("page", String(safePage));
+  requestUrl.searchParams.set("rows", String(safeRows));
   requestUrl.searchParams.set(
     "fl",
     [
@@ -322,82 +440,115 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     ].join(",")
   );
 
+  let data: ArchiveSearchResponse | null = null;
+  let usedFallback = false;
+
   try {
     const response = await fetch(requestUrl);
     if (!response.ok) {
       throw new Error(`Archive API responded with status ${response.status}`);
     }
 
-    const data = (await response.json()) as Record<string, unknown> & {
-      response?: { docs?: Array<Record<string, unknown>> };
-    };
-    let spellcheck: SpellcheckResult | null = null;
+    data = (await response.json()) as ArchiveSearchResponse;
+  } catch (error) {
+    console.warn("Error fetching Internet Archive search results, using offline dataset", error);
+    data = performLocalArchiveSearch(query, safePage, safeRows, {
+      mediaType: mediaTypeParam,
+      yearFrom: yearFromParam,
+      yearTo: yearToParam
+    });
+    usedFallback = true;
+  }
 
-    if (Array.isArray(data?.response?.docs)) {
-      const combinedTexts: string[] = [];
-      data.response.docs = data.response.docs.map((doc) => {
-        if (doc && typeof doc === "object") {
-          const record = doc as Record<string, unknown>;
-          const textualFields: string[] = [];
+  if (!data) {
+    data = performLocalArchiveSearch(query, safePage, safeRows, {
+      mediaType: mediaTypeParam,
+      yearFrom: yearFromParam,
+      yearTo: yearToParam
+    });
+    usedFallback = true;
+  }
 
-          const possibleFields: Array<unknown> = [
-            record.title,
-            record.description,
-            record.identifier,
-            record.creator
-          ];
+  const docsRaw = data.response?.docs;
+  const docs = Array.isArray(docsRaw) ? (docsRaw as Array<Record<string, unknown>>) : [];
+  const combinedTexts: string[] = [];
+  const normalizedDocs = docs.map((doc) => {
+    if (doc && typeof doc === "object") {
+      const record = doc as Record<string, unknown>;
+      const textualFields: string[] = [];
+      const possibleFields: Array<unknown> = [
+        record.title,
+        record.description,
+        record.identifier,
+        record.creator
+      ];
 
-          for (const field of possibleFields) {
-            if (typeof field === "string") {
-              textualFields.push(field);
-            } else if (Array.isArray(field)) {
-              for (const entry of field) {
-                if (typeof entry === "string") {
-                  textualFields.push(entry);
-                }
-              }
+      for (const field of possibleFields) {
+        if (typeof field === "string") {
+          textualFields.push(field);
+        } else if (Array.isArray(field)) {
+          for (const entry of field) {
+            if (typeof entry === "string") {
+              textualFields.push(entry);
             }
           }
-
-          const combinedText = textualFields.join(" ");
-          if (combinedText) {
-            combinedTexts.push(combinedText);
-          }
-          return { ...record, nsfw: isNSFWContent(combinedText) };
         }
-
-        return doc;
-      });
-
-      if (combinedTexts.length > 0) {
-        spellCorrector.learnFromText(combinedTexts.join(" "));
       }
+
+      const combinedText = textualFields.join(" ");
+      if (combinedText) {
+        combinedTexts.push(combinedText);
+      }
+      return { ...record, nsfw: isNSFWContent(combinedText) };
     }
 
-    if (query.length > 0) {
-      const result = spellCorrector.checkQuery(query);
-      const trimmedCorrected = result.correctedQuery.trim();
-      const trimmedOriginal = result.originalQuery.trim();
-      if (
-        trimmedCorrected.length > 0 &&
-        trimmedOriginal.length > 0 &&
-        trimmedCorrected.toLowerCase() !== trimmedOriginal.toLowerCase()
-      ) {
-        spellcheck = result;
-      }
-    }
+    return doc;
+  });
 
-    sendJson(res, 200, {
-      ...data,
-      spellcheck
-    });
-  } catch (error) {
-    console.error("Error fetching Internet Archive search results", error);
-    sendJson(res, 502, {
-      error: "Failed to retrieve data from the Internet Archive.",
-      details: error instanceof Error ? error.message : String(error)
-    });
+  if (data.response) {
+    data.response = {
+      ...data.response,
+      docs: normalizedDocs
+    };
+  } else {
+    data.response = {
+      docs: normalizedDocs,
+      numFound: normalizedDocs.length,
+      start: 0
+    };
   }
+
+  if (combinedTexts.length > 0) {
+    spellCorrector.learnFromText(combinedTexts.join(" "));
+  }
+
+  let spellcheck: SpellcheckResult | null = null;
+
+  if (query.length > 0) {
+    const result = spellCorrector.checkQuery(query);
+    const trimmedCorrected = result.correctedQuery.trim();
+    const trimmedOriginal = result.originalQuery.trim();
+    if (
+      trimmedCorrected.length > 0 &&
+      trimmedOriginal.length > 0 &&
+      trimmedCorrected.toLowerCase() !== trimmedOriginal.toLowerCase()
+    ) {
+      spellcheck = result;
+    }
+  }
+
+  const payload: Record<string, unknown> = {
+    ...data,
+    spellcheck
+  };
+
+  if (usedFallback) {
+    payload.fallback = true;
+  } else if ("fallback" in payload) {
+    delete (payload as Record<string, unknown>).fallback;
+  }
+
+  sendJson(res, 200, payload);
 }
 
 async function handleWayback({ res, url }: HandlerContext): Promise<void> {
