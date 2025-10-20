@@ -30,6 +30,41 @@ alexandria-browser/
 * Node.js 18+
 * npm 9+
 
+#### Quick setup
+
+To install dependencies and build both workspaces in one go:
+
+```bash
+npm install --workspaces
+npm run build:alexandria
+```
+
+#### Windows setup using Anaconda Prompt
+
+1. Open **Anaconda Prompt** from the Start menu.
+2. If you prefer to isolate tools, create and activate a Conda environment with Node.js:
+   ```bash
+   conda create -n alexandria nodejs -y
+   conda activate alexandria
+   ```
+   Skip this step if Node.js 18+ and npm 9+ are already available on your system PATH.
+3. Navigate to the repository root (replace the path with your checkout location):
+   ```bash
+   cd C:\path\to\A1x6nd7a
+   ```
+4. Install workspace dependencies:
+   ```bash
+   npm install --workspaces
+   ```
+5. Run the combined build:
+   ```bash
+   npm run build:alexandria
+   ```
+6. When finished, deactivate the Conda environment if you created one:
+   ```bash
+   conda deactivate
+   ```
+
 #### Install dependencies
 
 ```bash
