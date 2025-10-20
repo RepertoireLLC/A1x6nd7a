@@ -81,9 +81,16 @@ function computeThumbnail(identifier: string, current?: string): string | undefi
 function enrichDoc(doc: ArchiveSearchDoc): ArchiveSearchDoc {
   const links = computeArchiveLinks(doc.identifier, doc.links);
   const thumbnail = computeThumbnail(doc.identifier, doc.thumbnail);
+  const archiveUrl = doc.archive_url ?? links.archive;
+  const originalUrl = doc.original_url ?? links.original ?? undefined;
+  const waybackUrl = doc.wayback_url ?? links.wayback ?? undefined;
+
   return {
     ...doc,
     links,
+    archive_url: archiveUrl,
+    ...(originalUrl ? { original_url: originalUrl } : {}),
+    ...(waybackUrl ? { wayback_url: waybackUrl } : {}),
     ...(thumbnail ? { thumbnail } : {})
   };
 }

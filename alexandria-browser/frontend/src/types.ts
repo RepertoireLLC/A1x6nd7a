@@ -16,6 +16,9 @@ export interface ArchiveSearchDoc {
   nsfw?: boolean;
   links?: ArchiveDocLinks;
   thumbnail?: string;
+  archive_url?: string;
+  original_url?: string;
+  wayback_url?: string;
 }
 
 export interface ArchiveDocLinks {
@@ -90,6 +93,9 @@ export interface ScrapeItem {
   publicdate?: string;
   downloads?: number;
   links?: ArchiveDocLinks;
+  archive_url?: string;
+  original_url?: string;
+  wayback_url?: string;
 }
 
 export interface ScrapeResponse {
