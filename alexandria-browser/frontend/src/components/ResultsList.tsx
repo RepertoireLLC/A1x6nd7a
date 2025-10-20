@@ -67,7 +67,7 @@ export function ResultsList({
     return (
       <>
         {suggestionNode}
-        <div className="results-message">No records found. Try refining your query.</div>
+        <div className="results-message">No archive results found. Try refining your query.</div>
       </>
     );
   }

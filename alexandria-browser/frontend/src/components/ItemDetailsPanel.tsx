@@ -86,7 +86,9 @@ export function ItemDetailsPanel({
   relatedError,
   onClose
 }: ItemDetailsPanelProps) {
-  const archiveUrl = `https://archive.org/details/${encodeURIComponent(doc.identifier)}`;
+  const archiveUrl = doc.links?.archive ?? `https://archive.org/details/${encodeURIComponent(doc.identifier)}`;
+  const waybackUrl = doc.links?.wayback ?? `https://web.archive.org/web/*/${archiveUrl}`;
+  const originalUrl = doc.links?.original;
   const description = getDescription(doc.description);
   const yearOrDate = getYearOrDate(doc);
 
@@ -104,10 +106,15 @@ export function ItemDetailsPanel({
             {Array.isArray(doc.creator) ? doc.creator.join(", ") : doc.creator ?? "Unknown creator"}
           </p>
           <div className="item-details-links">
+            {originalUrl ? (
+              <a href={originalUrl} target="_blank" rel="noreferrer">
+                Visit original source
+              </a>
+            ) : null}
             <a href={archiveUrl} target="_blank" rel="noreferrer">
               View on Internet Archive
             </a>
-            <a href={`https://web.archive.org/web/*/${archiveUrl}`} target="_blank" rel="noreferrer">
+            <a href={waybackUrl} target="_blank" rel="noreferrer">
               Wayback snapshots
             </a>
           </div>
@@ -160,7 +167,14 @@ export function ItemDetailsPanel({
           <ul className="related-items">
             {relatedItems.map((item) => (
               <li key={item.identifier}>
-                <a href={`https://archive.org/details/${encodeURIComponent(item.identifier)}`} target="_blank" rel="noreferrer">
+                <a
+                  href={
+                    item.links?.archive ??
+                    `https://archive.org/details/${encodeURIComponent(item.identifier)}`
+                  }
+                  target="_blank"
+                  rel="noreferrer"
+                >
                   <strong>{item.title ?? item.identifier}</strong>
                   <span className="related-item-meta">
                     {item.mediatype ?? "Unknown media"}

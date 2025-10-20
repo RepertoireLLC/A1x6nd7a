@@ -56,7 +56,7 @@ export async function searchArchive(
   rows: number,
   filters: SearchFilters
 ): Promise<ArchiveSearchResponse> {
-  const url = buildApiUrl("/api/search");
+  const url = buildApiUrl("/api/searchArchive");
   url.searchParams.set("q", query);
   url.searchParams.set("page", String(page));
   url.searchParams.set("rows", String(rows));
@@ -82,7 +82,21 @@ export async function searchArchive(
       );
     }
 
-    return (await response.json()) as ArchiveSearchResponse;
+    const rawBody = await response.text();
+    if (!rawBody.trim()) {
+      throw new Error("Search request returned an empty response body.");
+    }
+
+    try {
+      return JSON.parse(rawBody) as ArchiveSearchResponse;
+    } catch (parseError) {
+      const preview = rawBody.slice(0, 200).replace(/\s+/g, " ").trim();
+      const message =
+        parseError instanceof Error ? parseError.message : "Unexpected response payload.";
+      throw new Error(
+        `Search request returned invalid JSON. ${message}${preview ? ` — ${preview}` : ""}`.trim()
+      );
+    }
   } catch (error) {
     lastError = error;
   }

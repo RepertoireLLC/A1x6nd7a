@@ -195,7 +195,8 @@ function App() {
         }
       });
 
-    const archiveUrl = `https://archive.org/details/${encodeURIComponent(selectedDoc.identifier)}`;
+    const archiveUrl = selectedDoc.links?.archive ??
+      `https://archive.org/details/${encodeURIComponent(selectedDoc.identifier)}`;
 
     setTimelineState((previous) => ({ ...previous, loading: true, error: null }));
     void fetchCdxSnapshots(archiveUrl, 80)
@@ -403,7 +404,7 @@ function App() {
     const loadStatuses = async () => {
       const pairs = await Promise.all(
         results.map(async (doc) => {
-          const targetUrl = `https://archive.org/details/${encodeURIComponent(doc.identifier)}`;
+          const targetUrl = doc.links?.archive ?? `https://archive.org/details/${encodeURIComponent(doc.identifier)}`;
           try {
             const status = await checkLinkStatus(targetUrl);
             return [doc.identifier, status] as const;
@@ -495,7 +496,8 @@ function App() {
         identifier,
         title: doc.title || doc.identifier,
         mediatype: doc.mediatype,
-        addedAt: Date.now()
+        addedAt: Date.now(),
+        archiveUrl: doc.links?.archive
       };
       return [entry, ...previous];
     });
@@ -514,6 +516,18 @@ function App() {
   };
 
   const handleSaveSnapshot = async (identifier: string, archiveUrl: string) => {
+    if (!archiveUrl) {
+      setSaveMeta((previous) => ({
+        ...previous,
+        [identifier]: {
+          label: "Save to Archive",
+          disabled: false,
+          message: "Archive URL unavailable for this record.",
+          tone: "error"
+        }
+      }));
+      return;
+    }
     setSaveMeta((previous) => ({
       ...previous,
       [identifier]: {
