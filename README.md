@@ -30,6 +30,15 @@ alexandria-browser/
 * Node.js 18+
 * npm 9+
 
+#### Quick setup
+
+To install dependencies and build both workspaces in one go:
+
+```bash
+npm install --workspaces
+npm run build:alexandria
+```
+
 #### Install dependencies
 
 ```bash
