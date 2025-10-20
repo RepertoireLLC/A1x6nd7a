@@ -12,6 +12,7 @@ export interface ArchiveSearchDoc {
   date?: string;
   publicdate?: string;
   creator?: string | string[];
+  collection?: string | string[];
   nsfw?: boolean;
 }
 
@@ -33,6 +34,7 @@ export interface ArchiveSearchResponse {
     start?: number;
   };
   spellcheck?: SpellcheckPayload | null;
+  fallback?: boolean;
 }
 
 export type LinkStatus = "online" | "archived-only" | "offline" | "checking";
