@@ -11,9 +11,7 @@ import type {
 import { performFallbackArchiveSearch } from "../utils/fallbackSearch";
 
 const offlineFallbackPreference = import.meta.env.VITE_ENABLE_OFFLINE_FALLBACK;
-const OFFLINE_FALLBACK_ENABLED =
-  offlineFallbackPreference === "true" ||
-  (import.meta.env.DEV && offlineFallbackPreference !== "false");
+const OFFLINE_FALLBACK_ENABLED = offlineFallbackPreference === "true";
 
 function resolveApiBaseUrl(): string {
   const configuredUrl = import.meta.env.VITE_API_BASE_URL?.trim();
