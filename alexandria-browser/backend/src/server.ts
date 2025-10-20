@@ -129,6 +129,11 @@ function getEnv(name: string): string | undefined {
   return globalProcess?.env?.[name];
 }
 
+const nodeEnv = getEnv("NODE_ENV") ?? "development";
+const offlineFallbackEnv = getEnv("ENABLE_OFFLINE_FALLBACK");
+const offlineFallbackEnabled =
+  offlineFallbackEnv === "true" || (offlineFallbackEnv !== "false" && nodeEnv !== "production");
+
 function applyDefaultHeaders(
   init: RequestInit | undefined,
   additionalHeaders: Record<string, string> = {}
@@ -566,7 +571,15 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
 
     data = (await response.json()) as ArchiveSearchResponse;
   } catch (error) {
-    console.warn("Error fetching Internet Archive search results, using offline dataset", error);
+    console.warn("Error fetching Internet Archive search results", error);
+    if (!offlineFallbackEnabled) {
+      sendJson(res, 502, {
+        error: "Unable to retrieve Internet Archive search results.",
+        details: error instanceof Error ? error.message : String(error)
+      });
+      return;
+    }
+
     data = performLocalArchiveSearch(query, safePage, safeRows, {
       mediaType: mediaTypeParam,
       yearFrom: yearFromParam,
@@ -576,6 +589,14 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
   }
 
   if (!data) {
+    if (!offlineFallbackEnabled) {
+      sendJson(res, 502, {
+        error: "No Internet Archive search data returned.",
+        details: "The upstream search API responded without a payload."
+      });
+      return;
+    }
+
     data = performLocalArchiveSearch(query, safePage, safeRows, {
       mediaType: mediaTypeParam,
       yearFrom: yearFromParam,
@@ -685,7 +706,22 @@ async function handleMetadata({ res, url }: HandlerContext): Promise<void> {
     sendJson(res, 200, payload);
     return;
   } catch (error) {
-    console.warn("Metadata API request failed, falling back to sample dataset", error);
+    console.warn("Metadata API request failed", error);
+    if (!offlineFallbackEnabled) {
+      sendJson(res, 502, {
+        error: "Unable to retrieve metadata for the requested identifier.",
+        details: error instanceof Error ? error.message : String(error)
+      });
+      return;
+    }
+  }
+
+  if (!offlineFallbackEnabled) {
+    sendJson(res, 502, {
+      error: "Unable to retrieve metadata for the requested identifier.",
+      details: "The Internet Archive metadata service is unavailable."
+    });
+    return;
   }
 
   const fallback = getSampleMetadata(identifier);
@@ -758,7 +794,22 @@ async function handleCdx({ res, url }: HandlerContext): Promise<void> {
     sendJson(res, 200, { snapshots });
     return;
   } catch (error) {
-    console.warn("CDX API request failed, using offline snapshot timeline", error);
+    console.warn("CDX API request failed", error);
+    if (!offlineFallbackEnabled) {
+      sendJson(res, 502, {
+        error: "Unable to retrieve CDX snapshots for the requested URL.",
+        details: error instanceof Error ? error.message : String(error)
+      });
+      return;
+    }
+  }
+
+  if (!offlineFallbackEnabled) {
+    sendJson(res, 502, {
+      error: "Unable to retrieve CDX snapshots for the requested URL.",
+      details: "The Wayback Machine CDX service is unavailable."
+    });
+    return;
   }
 
   const fallback = getSampleCdxSnapshots(targetUrl);
@@ -812,7 +863,22 @@ async function handleScrape({ res, url }: HandlerContext): Promise<void> {
     sendJson(res, 200, { items, total, query });
     return;
   } catch (error) {
-    console.warn("Scrape API request failed, using offline highlights", error);
+    console.warn("Scrape API request failed", error);
+    if (!offlineFallbackEnabled) {
+      sendJson(res, 502, {
+        error: "Unable to retrieve highlight results from the Internet Archive.",
+        details: error instanceof Error ? error.message : String(error)
+      });
+      return;
+    }
+  }
+
+  if (!offlineFallbackEnabled) {
+    sendJson(res, 502, {
+      error: "Unable to retrieve highlight results from the Internet Archive.",
+      details: "The Internet Archive scrape service is unavailable."
+    });
+    return;
   }
 
   const fallback = getSampleScrapeResults(query);
@@ -944,7 +1010,6 @@ async function handleSave({ req, res }: HandlerContext): Promise<void> {
 }
 
 const port = Number.parseInt(getEnv("PORT") ?? "4000", 10);
-const nodeEnv = getEnv("NODE_ENV") ?? "development";
 
 if (nodeEnv !== "test") {
   server.listen(port, () => {

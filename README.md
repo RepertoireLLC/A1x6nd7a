@@ -85,6 +85,8 @@ npm run dev --workspace alexandria-browser/frontend
 
 The frontend expects the backend at `http://localhost:4000` by default. Override this via `VITE_API_BASE_URL` in a `.env` file placed beside `frontend/.env` if you host the API elsewhere.
 
+> **Tip:** The demo previously bundled mock datasets for offline browsing. Production builds now require the live API. Opt-in to the legacy behaviour locally by setting `VITE_ENABLE_OFFLINE_FALLBACK=true` for the frontend and `ENABLE_OFFLINE_FALLBACK=true` for the backend before starting the dev servers.
+
 #### Production build
 
 ```bash
@@ -113,7 +115,7 @@ npm run build --workspace alexandria-browser/frontend
 | Endpoint | Method | Description |
 | --- | --- | --- |
 | `/health` | GET | Lightweight health probe for orchestration. |
-| `/api/search` | GET | Proxies the Internet Archive Advanced Search API with fuzzy fallback, NSFW annotations, and optional filters. Parameters: `q`, `page`, `rows`, `mediaType`, `yearFrom`, `yearTo`. |
+| `/api/search` | GET | Proxies the Internet Archive Advanced Search API with fuzzy fallback (opt-in via `ENABLE_OFFLINE_FALLBACK=true`), NSFW annotations, and optional filters. Parameters: `q`, `page`, `rows`, `mediaType`, `yearFrom`, `yearTo`. |
 | `/api/wayback` | GET | Wraps the Wayback Machine availability endpoint. Parameter: `url`. |
 | `/api/status` | GET | Performs a guarded HEAD/GET probe and falls back to Wayback availability to classify a URL as online, archived-only, or offline. Parameter: `url`. |
 | `/api/save` | POST | Relays Save Page Now requests to archive a specific `url`. Returns snapshot link metadata when provided by the service. |
