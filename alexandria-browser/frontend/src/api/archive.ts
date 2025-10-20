@@ -1,6 +1,10 @@
 import type {
   ArchiveSearchResponse,
   LinkStatus,
+  ArchiveMetadataResponse,
+  CdxResponse,
+  ScrapeResponse,
+  WaybackAvailabilityResponse,
   SavePageResponse,
   SearchFilters
 } from "../types";
@@ -74,7 +78,7 @@ export async function getWaybackAvailability(url: string) {
     throw new Error(`Wayback availability failed with status ${response.status}`);
   }
 
-  return response.json() as Promise<unknown>;
+  return response.json() as Promise<WaybackAvailabilityResponse>;
 }
 
 /**
@@ -94,4 +98,42 @@ export async function requestSaveSnapshot(url: string): Promise<SavePageResponse
   }
 
   return (await response.json()) as SavePageResponse;
+}
+
+export async function fetchArchiveMetadata(identifier: string): Promise<ArchiveMetadataResponse> {
+  const request = new URL(`${API_BASE_URL}/api/metadata`);
+  request.searchParams.set("identifier", identifier);
+
+  const response = await fetch(request.toString());
+  if (!response.ok) {
+    throw new Error(`Metadata request failed with status ${response.status}`);
+  }
+
+  return (await response.json()) as ArchiveMetadataResponse;
+}
+
+export async function fetchCdxSnapshots(targetUrl: string, limit = 25): Promise<CdxResponse> {
+  const request = new URL(`${API_BASE_URL}/api/cdx`);
+  request.searchParams.set("url", targetUrl);
+  request.searchParams.set("limit", String(limit));
+
+  const response = await fetch(request.toString());
+  if (!response.ok) {
+    throw new Error(`CDX timeline request failed with status ${response.status}`);
+  }
+
+  return (await response.json()) as CdxResponse;
+}
+
+export async function scrapeArchive(query: string, count = 5): Promise<ScrapeResponse> {
+  const request = new URL(`${API_BASE_URL}/api/scrape`);
+  request.searchParams.set("query", query);
+  request.searchParams.set("count", String(count));
+
+  const response = await fetch(request.toString());
+  if (!response.ok) {
+    throw new Error(`Scrape request failed with status ${response.status}`);
+  }
+
+  return (await response.json()) as ScrapeResponse;
 }

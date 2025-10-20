@@ -17,12 +17,20 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
 
 import { SAMPLE_ARCHIVE_DOCS, type SampleArchiveDoc } from "./data/sampleArchiveDocs";
+import { SAMPLE_METADATA } from "./data/sampleMetadata";
+import { SAMPLE_CDX_SNAPSHOTS } from "./data/sampleCdxSnapshots";
+import { DEFAULT_SCRAPE_RESPONSE, SAMPLE_SCRAPE_RESULTS } from "./data/sampleScrapeResults";
 import { isNSFWContent } from "./services/nsfwFilter";
 import { getSpellCorrector, type SpellcheckResult } from "./services/spellCorrector";
 
 const ARCHIVE_SEARCH_ENDPOINT = "https://archive.org/advancedsearch.php";
 const WAYBACK_AVAILABILITY_ENDPOINT = "https://archive.org/wayback/available";
 const SAVE_PAGE_NOW_ENDPOINT = "https://web.archive.org/save/";
+const METADATA_ENDPOINT_BASE = "https://archive.org/metadata/";
+const CDX_SEARCH_ENDPOINT = "https://web.archive.org/cdx/search/cdx";
+const SCRAPE_SEARCH_ENDPOINT = "https://archive.org/services/search/v1/scrape";
+const DEFAULT_USER_AGENT =
+  getEnv("ARCHIVE_USER_AGENT") ?? "AlexandriaBrowser/1.0 (+https://alexandria-browser.example)";
 
 const ALLOWED_MEDIA_TYPES = new Set([
   "texts",
@@ -48,6 +56,42 @@ type ArchiveSearchResponse = Record<string, unknown> & {
     start?: number;
   };
   fallback?: boolean;
+};
+
+type ArchiveMetadataResponse = Record<string, unknown> & {
+  metadata?: Record<string, unknown>;
+  files?: Array<Record<string, unknown>>;
+  fallback?: boolean;
+};
+
+type CdxSnapshot = {
+  timestamp: string;
+  original: string;
+  status: string;
+  mime: string;
+  digest?: string;
+  length?: number;
+};
+
+type CdxResponse = {
+  snapshots: CdxSnapshot[];
+  fallback?: boolean;
+};
+
+type ScrapeItem = Record<string, unknown> & {
+  identifier: string;
+  title?: string;
+  mediatype?: string;
+  description?: string;
+  publicdate?: string;
+  downloads?: number;
+};
+
+type ScrapeResponse = {
+  items: ScrapeItem[];
+  total: number;
+  fallback?: boolean;
+  query: string;
 };
 
 type HandlerContext = {
@@ -83,6 +127,19 @@ function parseRequestUrl(req: IncomingMessage): URL {
 function getEnv(name: string): string | undefined {
   const globalProcess = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
   return globalProcess?.env?.[name];
+}
+
+function applyDefaultHeaders(
+  init: RequestInit | undefined,
+  additionalHeaders: Record<string, string> = {}
+): RequestInit {
+  const headers = new Headers(init?.headers);
+  headers.set("User-Agent", DEFAULT_USER_AGENT);
+  for (const [key, value] of Object.entries(additionalHeaders)) {
+    headers.set(key, value);
+  }
+
+  return { ...init, headers };
 }
 
 async function readRequestBody(req: IncomingMessage): Promise<string> {
@@ -134,22 +191,32 @@ async function evaluateLinkStatus(targetUrl: string): Promise<LinkStatus> {
   const timeout = setTimeout(() => controller.abort(), HEAD_TIMEOUT_MS);
 
   try {
-    const headResponse = await fetch(targetUrl, {
-      method: "HEAD",
-      redirect: "follow",
-      signal: controller.signal
-    });
+    const headResponse = await fetch(
+      targetUrl,
+      applyDefaultHeaders(
+        {
+          method: "HEAD",
+          redirect: "follow",
+          signal: controller.signal
+        }
+      )
+    );
 
     if (headResponse.ok || (headResponse.status >= 200 && headResponse.status < 400)) {
       return "online";
     }
 
     if (headResponse.status === 405 || headResponse.status === 501) {
-      const getResponse = await fetch(targetUrl, {
-        method: "GET",
-        redirect: "follow",
-        signal: controller.signal
-      });
+      const getResponse = await fetch(
+        targetUrl,
+        applyDefaultHeaders(
+          {
+            method: "GET",
+            redirect: "follow",
+            signal: controller.signal
+          }
+        )
+      );
 
       if (getResponse.ok || (getResponse.status >= 200 && getResponse.status < 400)) {
         return "online";
@@ -167,7 +234,7 @@ async function evaluateLinkStatus(targetUrl: string): Promise<LinkStatus> {
     const waybackUrl = new URL(WAYBACK_AVAILABILITY_ENDPOINT);
     waybackUrl.searchParams.set("url", targetUrl);
 
-    const waybackResponse = await fetch(waybackUrl);
+    const waybackResponse = await fetch(waybackUrl, applyDefaultHeaders(undefined, { Accept: "application/json" }));
     if (waybackResponse.ok) {
       const waybackData = (await waybackResponse.json()) as {
         archived_snapshots?: { closest?: unknown };
@@ -211,6 +278,51 @@ function resolveDocumentYear(doc: SampleArchiveDoc): number | null {
     }
   }
   return null;
+}
+
+function getSampleMetadata(identifier: string): ArchiveMetadataResponse | null {
+  const entry = SAMPLE_METADATA[identifier as keyof typeof SAMPLE_METADATA];
+  if (!entry) {
+    return null;
+  }
+
+  return {
+    metadata: { ...entry.metadata },
+    files: entry.files.map((file) => ({ ...file })),
+    fallback: true
+  } satisfies ArchiveMetadataResponse;
+}
+
+function getSampleCdxSnapshots(targetUrl: string): CdxResponse | null {
+  const snapshots = SAMPLE_CDX_SNAPSHOTS[targetUrl as keyof typeof SAMPLE_CDX_SNAPSHOTS];
+  if (!snapshots) {
+    return null;
+  }
+
+  return {
+    snapshots: snapshots.map((snapshot) => ({ ...snapshot })),
+    fallback: true
+  } satisfies CdxResponse;
+}
+
+function getSampleScrapeResults(query: string): ScrapeResponse {
+  const normalizedQuery = query.trim();
+  const entry = SAMPLE_SCRAPE_RESULTS[normalizedQuery as keyof typeof SAMPLE_SCRAPE_RESULTS];
+  if (entry) {
+    return {
+      items: entry.items.map((item) => ({ ...item })),
+      total: entry.total,
+      fallback: true,
+      query: normalizedQuery
+    } satisfies ScrapeResponse;
+  }
+
+  return {
+    items: DEFAULT_SCRAPE_RESPONSE.items.map((item) => ({ ...item })),
+    total: DEFAULT_SCRAPE_RESPONSE.total,
+    fallback: true,
+    query: normalizedQuery
+  } satisfies ScrapeResponse;
 }
 
 function gatherSearchableText(doc: SampleArchiveDoc): string {
@@ -297,7 +409,10 @@ const routes: Record<string, Record<string, RouteHandler>> = {
     },
     "/api/search": handleSearch,
     "/api/wayback": handleWayback,
-    "/api/status": handleStatus
+    "/api/status": handleStatus,
+    "/api/metadata": handleMetadata,
+    "/api/cdx": handleCdx,
+    "/api/scrape": handleScrape
   },
   POST: {
     "/api/save": handleSave
@@ -444,7 +559,7 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
   let usedFallback = false;
 
   try {
-    const response = await fetch(requestUrl);
+    const response = await fetch(requestUrl, applyDefaultHeaders(undefined, { Accept: "application/json" }));
     if (!response.ok) {
       throw new Error(`Archive API responded with status ${response.status}`);
     }
@@ -551,6 +666,159 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
   sendJson(res, 200, payload);
 }
 
+async function handleMetadata({ res, url }: HandlerContext): Promise<void> {
+  const identifier = url.searchParams.get("identifier")?.trim();
+  if (!identifier) {
+    sendJson(res, 400, { error: "Missing required query parameter 'identifier'." });
+    return;
+  }
+
+  const requestUrl = `${METADATA_ENDPOINT_BASE}${encodeURIComponent(identifier)}`;
+
+  try {
+    const response = await fetch(requestUrl, applyDefaultHeaders(undefined, { Accept: "application/json" }));
+    if (!response.ok) {
+      throw new Error(`Metadata API responded with status ${response.status}`);
+    }
+
+    const payload = (await response.json()) as ArchiveMetadataResponse;
+    sendJson(res, 200, payload);
+    return;
+  } catch (error) {
+    console.warn("Metadata API request failed, falling back to sample dataset", error);
+  }
+
+  const fallback = getSampleMetadata(identifier);
+  if (!fallback) {
+    sendJson(res, 502, {
+      error: "Unable to retrieve metadata for the requested identifier.",
+      details: "The Internet Archive metadata service is unavailable and no offline record exists."
+    });
+    return;
+  }
+
+  sendJson(res, 200, fallback);
+}
+
+async function handleCdx({ res, url }: HandlerContext): Promise<void> {
+  const targetUrl = url.searchParams.get("url")?.trim();
+  if (!targetUrl) {
+    sendJson(res, 400, { error: "Missing required query parameter 'url'." });
+    return;
+  }
+
+  const limitParam = url.searchParams.get("limit") ?? "25";
+  const limitValue = Number.parseInt(limitParam, 10);
+  const safeLimit = Number.isFinite(limitValue) && limitValue > 0 ? Math.min(limitValue, 200) : 25;
+
+  const requestUrl = new URL(CDX_SEARCH_ENDPOINT);
+  requestUrl.searchParams.set("url", targetUrl);
+  requestUrl.searchParams.set("output", "json");
+  requestUrl.searchParams.set("limit", String(safeLimit));
+  requestUrl.searchParams.set("fl", "timestamp,original,mimetype,statuscode,digest,length");
+  requestUrl.searchParams.append("filter", "statuscode:200");
+  requestUrl.searchParams.set("collapse", "digest");
+
+  try {
+    const response = await fetch(requestUrl, applyDefaultHeaders(undefined, { Accept: "application/json" }));
+    if (!response.ok) {
+      throw new Error(`CDX API responded with status ${response.status}`);
+    }
+
+    const raw = (await response.json()) as Array<unknown>;
+    const snapshots: CdxSnapshot[] = [];
+
+    if (Array.isArray(raw)) {
+      for (const row of raw) {
+        if (!Array.isArray(row)) {
+          continue;
+        }
+
+        const [timestamp, original, mime, status, digest, length] = row as Array<unknown>;
+        if (typeof timestamp !== "string" || typeof original !== "string") {
+          continue;
+        }
+
+        snapshots.push({
+          timestamp,
+          original,
+          mime: typeof mime === "string" ? mime : "",
+          status: typeof status === "string" ? status : typeof status === "number" ? String(status) : "",
+          digest: typeof digest === "string" ? digest : undefined,
+          length:
+            typeof length === "number"
+              ? length
+              : typeof length === "string"
+              ? Number.parseInt(length, 10)
+              : undefined
+        });
+      }
+    }
+
+    sendJson(res, 200, { snapshots });
+    return;
+  } catch (error) {
+    console.warn("CDX API request failed, using offline snapshot timeline", error);
+  }
+
+  const fallback = getSampleCdxSnapshots(targetUrl);
+  if (!fallback) {
+    sendJson(res, 502, {
+      error: "Unable to retrieve CDX snapshots for the requested URL.",
+      details: "The Wayback Machine CDX service is unavailable and no offline timeline exists."
+    });
+    return;
+  }
+
+  sendJson(res, 200, fallback);
+}
+
+async function handleScrape({ res, url }: HandlerContext): Promise<void> {
+  const query = url.searchParams.get("query")?.trim();
+  if (!query) {
+    sendJson(res, 400, { error: "Missing required query parameter 'query'." });
+    return;
+  }
+
+  const countParam = url.searchParams.get("count") ?? "5";
+  const countValue = Number.parseInt(countParam, 10);
+  const safeCount = Number.isFinite(countValue) && countValue > 0 ? Math.min(countValue, 50) : 5;
+  const fields = url.searchParams.getAll("field");
+  const sorts = url.searchParams.getAll("sort");
+
+  const requestUrl = new URL(SCRAPE_SEARCH_ENDPOINT);
+  requestUrl.searchParams.set("query", query);
+  requestUrl.searchParams.set("count", String(safeCount));
+
+  const requestedFields = fields.length > 0 ? fields : ["identifier", "title", "mediatype", "description", "downloads", "publicdate"];
+  for (const field of requestedFields) {
+    requestUrl.searchParams.append("fields[]", field);
+  }
+
+  for (const sort of sorts) {
+    requestUrl.searchParams.append("sorts[]", sort);
+  }
+
+  try {
+    const response = await fetch(requestUrl, applyDefaultHeaders(undefined, { Accept: "application/json" }));
+    if (!response.ok) {
+      throw new Error(`Scrape API responded with status ${response.status}`);
+    }
+
+    const payload = (await response.json()) as { items?: ScrapeItem[]; count?: number; total?: number };
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    const total = typeof payload.total === "number" ? payload.total : typeof payload.count === "number" ? payload.count : items.length;
+
+    sendJson(res, 200, { items, total, query });
+    return;
+  } catch (error) {
+    console.warn("Scrape API request failed, using offline highlights", error);
+  }
+
+  const fallback = getSampleScrapeResults(query);
+  sendJson(res, 200, fallback);
+}
+
 async function handleWayback({ res, url }: HandlerContext): Promise<void> {
   const targetUrl = url.searchParams.get("url")?.trim();
   if (!targetUrl) {
@@ -562,7 +830,7 @@ async function handleWayback({ res, url }: HandlerContext): Promise<void> {
   requestUrl.searchParams.set("url", targetUrl);
 
   try {
-    const response = await fetch(requestUrl);
+    const response = await fetch(requestUrl, applyDefaultHeaders(undefined, { Accept: "application/json" }));
     if (!response.ok) {
       throw new Error(`Wayback API responded with status ${response.status}`);
     }
@@ -629,10 +897,13 @@ async function handleSave({ req, res }: HandlerContext): Promise<void> {
   const saveUrl = `${SAVE_PAGE_NOW_ENDPOINT}${encodeURI(targetUrl)}`;
 
   try {
-    const response = await fetch(saveUrl, {
-      method: "GET",
-      redirect: "manual"
-    });
+    const response = await fetch(
+      saveUrl,
+      applyDefaultHeaders({
+        method: "GET",
+        redirect: "manual"
+      })
+    );
 
     const contentLocation = response.headers.get("content-location");
     const locationHeader = response.headers.get("location");

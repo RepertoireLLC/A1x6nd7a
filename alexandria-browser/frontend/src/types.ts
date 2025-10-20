@@ -47,6 +47,65 @@ export interface SavePageResponse {
   details?: string;
 }
 
+export interface ArchiveMetadataFile {
+  name: string;
+  format?: string;
+  size?: number;
+  mtime?: string;
+}
+
+export interface ArchiveMetadataResponse {
+  metadata?: Record<string, unknown>;
+  files?: ArchiveMetadataFile[];
+  fallback?: boolean;
+}
+
+export interface CdxSnapshot {
+  timestamp: string;
+  original: string;
+  status: string;
+  mime: string;
+  digest?: string;
+  length?: number;
+}
+
+export interface CdxResponse {
+  snapshots: CdxSnapshot[];
+  fallback?: boolean;
+}
+
+export interface ScrapeItem {
+  identifier: string;
+  title?: string;
+  mediatype?: string;
+  description?: string;
+  publicdate?: string;
+  downloads?: number;
+}
+
+export interface ScrapeResponse {
+  items: ScrapeItem[];
+  total: number;
+  fallback?: boolean;
+  query: string;
+}
+
+export interface WaybackAvailabilitySnapshot {
+  available?: boolean;
+  url?: string;
+  timestamp?: string;
+  status?: string;
+}
+
+export interface WaybackAvailabilityResponse {
+  url?: string;
+  archived_snapshots?: {
+    closest?: WaybackAvailabilitySnapshot;
+    [key: string]: WaybackAvailabilitySnapshot | undefined;
+  };
+  [key: string]: unknown;
+}
+
 export interface StoredSettings {
   theme: "light" | "dark";
   filterNSFW: boolean;
