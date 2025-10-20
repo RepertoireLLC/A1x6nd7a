@@ -1,0 +1,210 @@
+:root {
+  color-scheme: light dark;
+  --harmonia-font-primary: "Sora", "Inter", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --harmonia-radius-xs: 0.5rem;
+  --harmonia-radius-sm: 0.75rem;
+  --harmonia-radius-md: 1rem;
+  --harmonia-radius-lg: 1.5rem;
+  --harmonia-radius-pill: 999px;
+  --harmonia-border-weight: 1.5px;
+  --harmonia-shadow-soft: 0 25px 65px -45px rgba(80, 120, 255, 0.65);
+  --harmonia-shadow-strong: 0 18px 60px -32px rgba(108, 89, 255, 0.8);
+  --harmonia-transition: 220ms ease;
+  --harmonia-breath-duration: 8s;
+}
+
+:root::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+  background: radial-gradient(circle at 20% 20%, rgba(96, 165, 250, 0.22), transparent 55%),
+    radial-gradient(circle at 80% 10%, rgba(167, 139, 250, 0.18), transparent 50%),
+    radial-gradient(circle at 15% 80%, rgba(45, 212, 191, 0.2), transparent 55%);
+  opacity: 0.9;
+  filter: blur(12px);
+}
+
+body {
+  font-family: var(--harmonia-font-primary);
+}
+
+[data-theme="dark"] {
+  --harmonia-background: radial-gradient(circle at top, #05070f, #020308 55%, #010104 95%);
+  --harmonia-surface: rgba(13, 16, 35, 0.86);
+  --harmonia-surface-alt: rgba(32, 39, 83, 0.35);
+  --harmonia-surface-muted: rgba(9, 11, 23, 0.75);
+  --harmonia-border: rgba(93, 133, 255, 0.35);
+  --harmonia-border-strong: rgba(145, 110, 255, 0.55);
+  --harmonia-text: #f5f7ff;
+  --harmonia-text-muted: rgba(198, 210, 255, 0.75);
+  --harmonia-glow-primary: rgba(84, 143, 255, 0.38);
+  --harmonia-glow-accent: rgba(110, 231, 183, 0.28);
+  --harmonia-accent: #60a5fa;
+  --harmonia-accent-strong: #a855f7;
+  --harmonia-gold: #f9f5ff;
+  --harmonia-divider: rgba(99, 102, 241, 0.2);
+}
+
+[data-theme="light"] {
+  --harmonia-background: radial-gradient(circle at top, #ffffff, #f5f7ff 55%, #e8edff 100%);
+  --harmonia-surface: rgba(255, 255, 255, 0.9);
+  --harmonia-surface-alt: rgba(255, 255, 255, 0.7);
+  --harmonia-surface-muted: rgba(247, 249, 255, 0.8);
+  --harmonia-border: rgba(180, 192, 255, 0.6);
+  --harmonia-border-strong: rgba(199, 164, 255, 0.65);
+  --harmonia-text: #10122b;
+  --harmonia-text-muted: rgba(39, 43, 82, 0.72);
+  --harmonia-glow-primary: rgba(140, 170, 255, 0.38);
+  --harmonia-glow-accent: rgba(244, 196, 94, 0.32);
+  --harmonia-accent: #3b82f6;
+  --harmonia-accent-strong: #a855f7;
+  --harmonia-gold: #cfc7ff;
+  --harmonia-divider: rgba(149, 156, 255, 0.2);
+}
+
+.harmonia-card {
+  position: relative;
+  background: var(--harmonia-surface);
+  border-radius: var(--harmonia-radius-lg);
+  border: var(--harmonia-border-weight) solid color-mix(in srgb, var(--harmonia-border) 70%, transparent);
+  box-shadow: var(--harmonia-shadow-soft);
+  transition: transform var(--harmonia-transition), box-shadow var(--harmonia-transition),
+    border-color var(--harmonia-transition), background var(--harmonia-transition);
+  backdrop-filter: blur(16px);
+}
+
+.harmonia-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: 0 0 45px -18px var(--harmonia-glow-primary);
+  opacity: 0;
+  transition: opacity var(--harmonia-transition);
+}
+
+.harmonia-card:hover::after,
+.harmonia-card:focus-within::after {
+  opacity: 1;
+}
+
+.harmonia-glow-button {
+  border: var(--harmonia-border-weight) solid color-mix(in srgb, var(--harmonia-border) 80%, transparent);
+  border-radius: var(--harmonia-radius-pill);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--harmonia-accent) 55%, transparent),
+      color-mix(in srgb, var(--harmonia-accent-strong) 45%, transparent));
+  color: #ffffff;
+  font-weight: 600;
+  padding: 0.55rem 1.6rem;
+  cursor: pointer;
+  transition: transform var(--harmonia-transition), box-shadow var(--harmonia-transition), filter var(--harmonia-transition);
+  box-shadow: 0 18px 40px -24px var(--harmonia-glow-primary);
+}
+
+.harmonia-glow-button:hover,
+.harmonia-glow-button:focus-visible {
+  transform: translateY(-1px) scale(1.01);
+  filter: brightness(1.05);
+  box-shadow: var(--harmonia-shadow-strong);
+}
+
+.harmonia-chip {
+  border-radius: var(--harmonia-radius-pill);
+  border: 1px solid color-mix(in srgb, var(--harmonia-border) 60%, transparent);
+  padding: 0.4rem 1.05rem;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--harmonia-glow-primary) 45%, transparent),
+      color-mix(in srgb, var(--harmonia-glow-accent) 65%, transparent));
+  color: var(--harmonia-text);
+  font-size: 0.8rem;
+  letter-spacing: 0.01em;
+  transition: transform var(--harmonia-transition), box-shadow var(--harmonia-transition), border-color var(--harmonia-transition);
+}
+
+.harmonia-chip:hover,
+.harmonia-chip:focus-visible {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--harmonia-border-strong) 70%, transparent);
+  box-shadow: 0 12px 28px -20px var(--harmonia-glow-accent);
+}
+
+.harmonia-divider {
+  height: 1px;
+  width: 100%;
+  background: linear-gradient(90deg, transparent, var(--harmonia-divider), transparent);
+}
+
+.harmonia-node {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 50%;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--harmonia-accent) 35%, transparent),
+      color-mix(in srgb, var(--harmonia-accent-strong) 55%, transparent));
+  border: 1px solid color-mix(in srgb, var(--harmonia-border-strong) 65%, transparent);
+  color: #fff;
+  box-shadow: 0 18px 30px -18px var(--harmonia-glow-accent);
+  position: relative;
+  overflow: hidden;
+}
+
+.harmonia-node::after {
+  content: "";
+  position: absolute;
+  inset: 8%;
+  border-radius: inherit;
+  background: radial-gradient(circle at center, rgba(255, 255, 255, 0.2), transparent 70%);
+  animation: harmonia-breathe var(--harmonia-breath-duration) ease-in-out infinite;
+}
+
+@keyframes harmonia-breathe {
+  0%,
+  100% {
+    transform: scale(0.98);
+    opacity: 0.75;
+  }
+  50% {
+    transform: scale(1.02);
+    opacity: 1;
+  }
+}
+
+.harmonia-pulse-ring {
+  position: absolute;
+  inset: -35%;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--harmonia-glow-primary) 45%, transparent);
+  animation: harmonia-ring 6s ease-in-out infinite;
+}
+
+@keyframes harmonia-ring {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(0.9);
+    opacity: 0.5;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 0.65rem;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--harmonia-border) 65%, transparent);
+  border-radius: var(--harmonia-radius-pill);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}

@@ -9,7 +9,7 @@ interface SearchBarProps {
 }
 
 /**
- * SearchBar renders the combined address/search bar with autocomplete.
+ * SearchBar renders the combined address/search bar with autocomplete styled for Harmonia.
  */
 export function SearchBar({
   value,
@@ -20,42 +20,56 @@ export function SearchBar({
 }: SearchBarProps) {
   const suggestionSet = useMemo(() => Array.from(new Set(suggestions)), [suggestions]);
 
+  const handleSubmit = () => {
+    onSubmit();
+  };
+
   return (
     <div className="search-bar" role="search">
-      <input
-        list="alexandria-search-suggestions"
-        type="search"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            onSubmit();
-          }
-        }}
-        placeholder="Search the archives or paste a URL..."
-        aria-label="Search the web and archives"
-      />
+      <div className="search-bar-input">
+        <span className="search-icon harmonia-node" aria-hidden="true">
+          <span className="harmonia-pulse-ring" aria-hidden="true" />
+          ⟁
+        </span>
+        <input
+          list="alexandria-search-suggestions"
+          type="search"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              handleSubmit();
+            }
+          }}
+          placeholder="Seek the Alexandria archives or paste a URL"
+          aria-label="Search the web and archives"
+        />
+        <button type="button" className="search-button harmonia-glow-button" onClick={handleSubmit}>
+          Initiate Search
+        </button>
+      </div>
+
       <datalist id="alexandria-search-suggestions">
         {suggestionSet.map((item) => (
           <option key={item} value={item} />
         ))}
       </datalist>
-      <button type="button" className="search-button" onClick={onSubmit} aria-label="Search">
-        Search
-      </button>
-      <div className="suggestions-list" aria-live="polite">
-        {suggestionSet.slice(0, 5).map((suggestion) => (
-          <button
-            key={suggestion}
-            type="button"
-            className="suggestion-chip"
-            onClick={() => onSelectSuggestion(suggestion)}
-          >
-            {suggestion}
-          </button>
-        ))}
-      </div>
+
+      {suggestionSet.length > 0 ? (
+        <div className="suggestions-list" aria-live="polite">
+          {suggestionSet.slice(0, 5).map((suggestion) => (
+            <button
+              key={suggestion}
+              type="button"
+              className="suggestion-chip harmonia-chip"
+              onClick={() => onSelectSuggestion(suggestion)}
+            >
+              {suggestion}
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

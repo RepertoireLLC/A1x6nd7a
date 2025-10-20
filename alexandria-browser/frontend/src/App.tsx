@@ -7,7 +7,7 @@ import {
   type ChangeEvent
 } from "react";
 
-import { BrowserControls } from "./components/BrowserControls";
+import { BrowserNav } from "./components/BrowserNav";
 import { SearchBar } from "./components/SearchBar";
 import { Sidebar } from "./components/Sidebar";
 import { ResultsList } from "./components/ResultsList";
@@ -534,7 +534,7 @@ function App() {
         <p className="tagline">Preserve Everything · No Gatekeepers · Serve the Seeker · Build Open and Forkable</p>
       </header>
 
-      <BrowserControls
+      <BrowserNav
         canGoBack={canGoBack}
         canGoForward={canGoForward}
         canRefresh={canRefresh}
@@ -542,17 +542,8 @@ function App() {
         onForward={goForward}
         onRefresh={refresh}
         onHome={goHome}
-      />
-
-      <div className="search-panel">
-        <button
-          type="button"
-          className="sidebar-toggle"
-          onClick={() => setSidebarOpen(true)}
-          aria-label="Open sidebar"
-        >
-          ☰ Library
-        </button>
+        onOpenLibrary={() => setSidebarOpen(true)}
+      >
         <SearchBar
           value={query}
           suggestions={suggestionList}
@@ -560,6 +551,9 @@ function App() {
           onSubmit={handleSubmit}
           onSelectSuggestion={handleSuggestionClick}
         />
+      </BrowserNav>
+
+      <div className="search-panel harmonia-card">
         <div className="filter-row" role="group" aria-label="Search filters">
           <label>
             <span>Media type</span>
