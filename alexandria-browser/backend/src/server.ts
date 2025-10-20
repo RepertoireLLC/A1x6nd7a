@@ -30,7 +30,8 @@ const METADATA_ENDPOINT_BASE = "https://archive.org/metadata/";
 const CDX_SEARCH_ENDPOINT = "https://web.archive.org/cdx/search/cdx";
 const SCRAPE_SEARCH_ENDPOINT = "https://archive.org/services/search/v1/scrape";
 const DEFAULT_USER_AGENT =
-  getEnv("ARCHIVE_USER_AGENT") ?? "AlexandriaBrowser/1.0 (+https://alexandria-browser.example)";
+  getEnv("ARCHIVE_USER_AGENT") ??
+  "Mozilla/5.0 (compatible; AlexandriaBrowser/1.0; +https://github.com/harmonia-labs/alexandria-browser)";
 
 const ALLOWED_MEDIA_TYPES = new Set([
   "texts",
@@ -131,8 +132,7 @@ function getEnv(name: string): string | undefined {
 
 const nodeEnv = getEnv("NODE_ENV") ?? "development";
 const offlineFallbackEnv = getEnv("ENABLE_OFFLINE_FALLBACK");
-const offlineFallbackEnabled =
-  offlineFallbackEnv === "true" || (offlineFallbackEnv !== "false" && nodeEnv !== "production");
+const offlineFallbackEnabled = offlineFallbackEnv === "true";
 
 function applyDefaultHeaders(
   init: RequestInit | undefined,
