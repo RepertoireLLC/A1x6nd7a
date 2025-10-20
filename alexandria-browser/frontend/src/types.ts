@@ -14,6 +14,14 @@ export interface ArchiveSearchDoc {
   creator?: string | string[];
   collection?: string | string[];
   nsfw?: boolean;
+  links?: ArchiveDocLinks;
+  thumbnail?: string;
+}
+
+export interface ArchiveDocLinks {
+  archive: string;
+  original?: string | null;
+  wayback?: string | null;
 }
 
 export interface SpellcheckCorrection {
@@ -81,6 +89,7 @@ export interface ScrapeItem {
   description?: string;
   publicdate?: string;
   downloads?: number;
+  links?: ArchiveDocLinks;
 }
 
 export interface ScrapeResponse {
@@ -132,4 +141,5 @@ export interface BookmarkEntry {
   title: string;
   addedAt: number;
   mediatype?: string;
+  archiveUrl?: string;
 }

@@ -8,6 +8,12 @@ export interface SampleArchiveDoc {
   publicdate?: string;
   creator?: string | string[];
   collection?: string | string[];
+  links?: {
+    archive: string;
+    original?: string | null;
+    wayback?: string | null;
+  };
+  thumbnail?: string;
 }
 
 export const SAMPLE_ARCHIVE_DOCS: SampleArchiveDoc[] = [

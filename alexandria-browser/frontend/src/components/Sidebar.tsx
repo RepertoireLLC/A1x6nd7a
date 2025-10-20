@@ -66,7 +66,10 @@ export function Sidebar({
               <li key={bookmark.identifier}>
                 <div className="sidebar-list-item">
                   <a
-                    href={`https://archive.org/details/${encodeURIComponent(bookmark.identifier)}`}
+                    href={
+                      bookmark.archiveUrl ??
+                      `https://archive.org/details/${encodeURIComponent(bookmark.identifier)}`
+                    }
                     target="_blank"
                     rel="noreferrer"
                   >

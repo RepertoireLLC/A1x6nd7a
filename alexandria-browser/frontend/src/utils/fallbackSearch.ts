@@ -1,5 +1,5 @@
 import { SAMPLE_ARCHIVE_DOCS } from "../data/sampleArchiveDocs";
-import type { ArchiveSearchDoc, ArchiveSearchResponse, SearchFilters } from "../types";
+import type { ArchiveDocLinks, ArchiveSearchDoc, ArchiveSearchResponse, SearchFilters } from "../types";
 
 function extractYearValue(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -54,6 +54,40 @@ function gatherSearchableText(doc: ArchiveSearchDoc): string {
   return values.join(" ");
 }
 
+function computeArchiveLinks(identifier: string, existing?: ArchiveDocLinks): ArchiveDocLinks {
+  if (existing?.archive) {
+    const wayback = existing.wayback ?? `https://web.archive.org/web/*/${existing.archive}`;
+    return { ...existing, wayback };
+  }
+
+  const archiveUrl = `https://archive.org/details/${encodeURIComponent(identifier)}`;
+  return {
+    archive: archiveUrl,
+    original: existing?.original ?? null,
+    wayback: `https://web.archive.org/web/*/${archiveUrl}`
+  };
+}
+
+function computeThumbnail(identifier: string, current?: string): string | undefined {
+  if (current) {
+    return current;
+  }
+  if (!identifier || identifier.startsWith("http://") || identifier.startsWith("https://")) {
+    return undefined;
+  }
+  return `https://archive.org/services/img/${encodeURIComponent(identifier)}`;
+}
+
+function enrichDoc(doc: ArchiveSearchDoc): ArchiveSearchDoc {
+  const links = computeArchiveLinks(doc.identifier, doc.links);
+  const thumbnail = computeThumbnail(doc.identifier, doc.thumbnail);
+  return {
+    ...doc,
+    links,
+    ...(thumbnail ? { thumbnail } : {})
+  };
+}
+
 export function performFallbackArchiveSearch(
   query: string,
   page: number,
@@ -97,7 +131,7 @@ export function performFallbackArchiveSearch(
   const safeRows = Number.isFinite(rows) && rows > 0 ? rows : 20;
   const startIndex = (safePage - 1) * safeRows;
 
-  const docs = matches.slice(startIndex, startIndex + safeRows).map((doc) => ({ ...doc }));
+  const docs = matches.slice(startIndex, startIndex + safeRows).map((doc) => enrichDoc({ ...doc }));
 
   return {
     response: {

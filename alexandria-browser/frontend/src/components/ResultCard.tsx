@@ -47,8 +47,9 @@ export function ResultCard({
   saveTone,
   snapshotUrl
 }: ResultCardProps) {
-  const archiveUrl = `https://archive.org/details/${encodeURIComponent(doc.identifier)}`;
-  const waybackUrl = `https://web.archive.org/web/*/${archiveUrl}`;
+  const archiveUrl = doc.links?.archive ?? `https://archive.org/details/${encodeURIComponent(doc.identifier)}`;
+  const waybackUrl = doc.links?.wayback ?? `https://web.archive.org/web/*/${archiveUrl}`;
+  const originalUrl = doc.links?.original && doc.links.original !== archiveUrl ? doc.links.original : null;
   const description = getDescription(doc.description);
   const yearOrDate = getYearOrDate(doc);
   const creator = Array.isArray(doc.creator) ? doc.creator.join(", ") : doc.creator ?? "";
@@ -66,9 +67,13 @@ export function ResultCard({
     <li className={cardClasses.join(" ")}>
       <div className={`result-body${filterNSFW && isNSFW ? " result-body-blurred" : ""}`}>
         <div className="result-header">
-          <span className="result-media" aria-hidden="true">
-            {mediaIcon(doc.mediatype)}
-          </span>
+          <div className="result-thumb-wrapper" aria-hidden="true">
+            {doc.thumbnail ? (
+              <img src={doc.thumbnail} alt="" className="result-thumbnail" loading="lazy" />
+            ) : (
+              <span className="result-media" aria-hidden="true">{mediaIcon(doc.mediatype)}</span>
+            )}
+          </div>
           <div>
             <a href={archiveUrl} target="_blank" rel="noreferrer" className="result-title">
               {doc.title || doc.identifier}
@@ -86,6 +91,11 @@ export function ResultCard({
             {STATUS_LABELS[status]}
           </span>
           <div className="result-links">
+            {originalUrl ? (
+              <a href={originalUrl} target="_blank" rel="noreferrer">
+                Visit original source
+              </a>
+            ) : null}
             <a href={archiveUrl} target="_blank" rel="noreferrer">
               View on Internet Archive
             </a>

@@ -59,6 +59,12 @@ type ArchiveSearchResponse = Record<string, unknown> & {
   fallback?: boolean;
 };
 
+type ArchiveLinks = {
+  archive: string;
+  original?: string | null;
+  wayback?: string | null;
+};
+
 type ArchiveMetadataResponse = Record<string, unknown> & {
   metadata?: Record<string, unknown>;
   files?: Array<Record<string, unknown>>;
@@ -106,6 +112,80 @@ type RouteHandler = (context: HandlerContext) => Promise<void> | void;
 const HEAD_TIMEOUT_MS = 7000;
 
 const spellCorrector = getSpellCorrector();
+
+function ensureUrlString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    return new URL(trimmed).toString();
+  } catch {
+    return null;
+  }
+}
+
+function buildArchiveLinks(identifier: unknown, originalField?: unknown): ArchiveLinks | null {
+  const identifierString = typeof identifier === "string" ? identifier.trim() : "";
+  const identifierLooksLikeUrl = /^https?:\/\//i.test(identifierString);
+  const originalUrl = ensureUrlString(originalField);
+  const preferredOriginal = identifierLooksLikeUrl ? ensureUrlString(identifierString) : originalUrl;
+
+  const archiveUrlBase = identifierLooksLikeUrl
+    ? ensureUrlString(identifierString)
+    : identifierString
+    ? `https://archive.org/details/${encodeURIComponent(identifierString)}`
+    : null;
+
+  const archiveUrl = archiveUrlBase ?? preferredOriginal;
+  if (!archiveUrl) {
+    return null;
+  }
+
+  const waybackTarget = archiveUrlBase ?? preferredOriginal;
+  const waybackUrl = waybackTarget ? `https://web.archive.org/web/*/${waybackTarget}` : null;
+
+  return {
+    archive: archiveUrl,
+    original: preferredOriginal,
+    wayback: waybackUrl
+  };
+}
+
+function buildArchiveThumbnail(identifier: unknown): string | null {
+  if (typeof identifier !== "string" || !identifier.trim() || /^https?:\/\//i.test(identifier)) {
+    return null;
+  }
+  const encoded = encodeURIComponent(identifier.trim());
+  return `https://archive.org/services/img/${encoded}`;
+}
+
+function attachArchiveLinks(record: Record<string, unknown>): Record<string, unknown> {
+  if (record.links) {
+    return record;
+  }
+
+  const links = buildArchiveLinks(record.identifier, record.original ?? record.url);
+  const thumbnail = buildArchiveThumbnail(record.identifier);
+
+  if (!links && !thumbnail) {
+    return record;
+  }
+
+  const next: Record<string, unknown> = { ...record };
+  if (links) {
+    next.links = links;
+  }
+  if (thumbnail && !next.thumbnail) {
+    next.thumbnail = thumbnail;
+  }
+  return next;
+}
 
 function setCorsHeaders(res: ServerResponse): void {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -395,7 +475,7 @@ function performLocalArchiveSearch(
   const safeRows = Number.isFinite(rows) && rows > 0 ? rows : 20;
   const startIndex = (safePage - 1) * safeRows;
 
-  const docs = matches.slice(startIndex, startIndex + safeRows).map((doc) => ({ ...doc }));
+  const docs = matches.slice(startIndex, startIndex + safeRows).map((doc) => attachArchiveLinks({ ...doc }));
 
   return {
     response: {
@@ -413,6 +493,7 @@ const routes: Record<string, Record<string, RouteHandler>> = {
       sendJson(res, 200, { status: "ok" });
     },
     "/api/search": handleSearch,
+    "/api/searchArchive": handleSearch,
     "/api/wayback": handleWayback,
     "/api/status": handleStatus,
     "/api/metadata": handleMetadata,
@@ -619,6 +700,8 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
         record.creator
       ];
 
+      const withLinks = attachArchiveLinks(record);
+
       for (const field of possibleFields) {
         if (typeof field === "string") {
           textualFields.push(field);
@@ -635,7 +718,7 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       if (combinedText) {
         combinedTexts.push(combinedText);
       }
-      return { ...record, nsfw: isNSFWContent(combinedText) };
+      return { ...withLinks, nsfw: isNSFWContent(combinedText) };
     }
 
     return doc;
@@ -857,7 +940,8 @@ async function handleScrape({ res, url }: HandlerContext): Promise<void> {
     }
 
     const payload = (await response.json()) as { items?: ScrapeItem[]; count?: number; total?: number };
-    const items = Array.isArray(payload.items) ? payload.items : [];
+    const itemsRaw = Array.isArray(payload.items) ? payload.items : [];
+    const items = itemsRaw.map((item) => attachArchiveLinks({ ...item })) as ScrapeItem[];
     const total = typeof payload.total === "number" ? payload.total : typeof payload.count === "number" ? payload.count : items.length;
 
     sendJson(res, 200, { items, total, query });
@@ -882,7 +966,8 @@ async function handleScrape({ res, url }: HandlerContext): Promise<void> {
   }
 
   const fallback = getSampleScrapeResults(query);
-  sendJson(res, 200, fallback);
+  const items = fallback.items.map((item) => attachArchiveLinks({ ...item })) as ScrapeItem[];
+  sendJson(res, 200, { ...fallback, items });
 }
 
 async function handleWayback({ res, url }: HandlerContext): Promise<void> {
