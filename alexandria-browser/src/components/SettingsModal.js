@@ -2,9 +2,13 @@ import { toggleKeyword } from '../utils/nsfwFilter.js';
 
 export function createSettingsModal({
   initialNSFWEnabled,
+  initialPageSize,
+  pageSizeOptions = [],
   keywords,
   onToggleNSFW,
   onKeywordsChange,
+  onChangePageSize,
+  onResetSettings,
   onClose
 }) {
   const overlay = document.createElement('div');
@@ -45,6 +49,39 @@ export function createSettingsModal({
 
   nsfwToggleWrapper.appendChild(nsfwToggle);
   content.appendChild(nsfwToggleWrapper);
+
+  const preferencesSection = document.createElement('div');
+  preferencesSection.className = 'settings-section';
+
+  const pageSizeLabel = document.createElement('label');
+  pageSizeLabel.className = 'settings-label';
+  pageSizeLabel.textContent = 'Results per page';
+
+  const pageSizeSelect = document.createElement('select');
+  pageSizeSelect.className = 'settings-select';
+  const normalizedOptions = pageSizeOptions.length ? pageSizeOptions : [10, 20, 50];
+  const numericOptions = [];
+  normalizedOptions.forEach((option) => {
+    const value = Number(option);
+    if (!Number.isFinite(value) || value <= 0) {
+      return;
+    }
+    const opt = document.createElement('option');
+    opt.value = String(value);
+    opt.textContent = `${value} results`;
+    pageSizeSelect.appendChild(opt);
+    numericOptions.push(value);
+  });
+  const initialSize = numericOptions.find((value) => value === Number(initialPageSize)) ?? numericOptions[0] ?? 10;
+  pageSizeSelect.value = String(initialSize);
+
+  pageSizeSelect.addEventListener('change', () => {
+    onChangePageSize?.(Number(pageSizeSelect.value));
+  });
+
+  pageSizeLabel.appendChild(pageSizeSelect);
+  preferencesSection.appendChild(pageSizeLabel);
+  content.appendChild(preferencesSection);
 
   const keywordSection = document.createElement('div');
   keywordSection.className = 'keyword-section';
@@ -102,6 +139,20 @@ export function createSettingsModal({
   });
 
   content.appendChild(keywordSection);
+
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+
+  const resetButton = document.createElement('button');
+  resetButton.type = 'button';
+  resetButton.className = 'danger-button';
+  resetButton.textContent = 'Reset preferences';
+  resetButton.addEventListener('click', () => {
+    onResetSettings?.();
+  });
+
+  actions.appendChild(resetButton);
+  content.appendChild(actions);
   dialog.appendChild(content);
   overlay.appendChild(dialog);
 
@@ -120,5 +171,18 @@ export function createSettingsModal({
     }
   });
 
-  return { overlay, open, close, renderKeywords };
+  function setNSFWEnabled(enabled) {
+    nsfwToggle.checked = Boolean(enabled);
+  }
+
+  function setPageSize(size) {
+    const desired = numericOptions.find((value) => value === Number(size));
+    if (desired) {
+      pageSizeSelect.value = String(desired);
+    } else if (numericOptions.length > 0) {
+      pageSizeSelect.value = String(numericOptions[0]);
+    }
+  }
+
+  return { overlay, open, close, renderKeywords, setNSFWEnabled, setPageSize };
 }
