@@ -56,7 +56,7 @@ export async function searchArchive(
   rows: number,
   filters: SearchFilters
 ): Promise<ArchiveSearchResponse> {
-  const url = buildApiUrl("/api/search");
+  const url = buildApiUrl("/api/searchArchive");
   url.searchParams.set("q", query);
   url.searchParams.set("page", String(page));
   url.searchParams.set("rows", String(rows));
