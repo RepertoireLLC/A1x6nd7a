@@ -60,15 +60,18 @@ npm run build --workspace alexandria-browser/frontend
 ### Features
 
 * **Clean search UI** — centered Google-like query bar, responsive theming, and accessible layout.
+* **Built-in browser controls** — back, forward, refresh, and home buttons mimic a lightweight browser session over saved searches.
 * **Internet Archive search** — proxied through `/api/search` using the [Advanced Search API](https://archive.org/developers/internetarchive/advancedsearch.html) with fuzzy term expansion.
 * **Wayback availability** — `/api/wayback` surfaces data from the [Wayback Availability API](https://archive.org/help/wayback_api.php) and `/api/status` augments it with live HEAD/GET probing.
+* **Live web checks** — direct URL searches run availability probes and surface links to open the live site or archived snapshots.
 * **Result presentation** — cards display title, snippet, media glyph, provenance metadata, Wayback link, and status badge inside a scrollable container.
 * **Pagination & scroll reset** — previous/next controls update query parameters, report `Page X of Y`, and focus the new batch automatically.
 * **Advanced filtering** — limit results by media type or year range to mirror Internet Archive advanced search capabilities.
-* **NSFW safeguarding** — backend keyword filter flags sensitive records; the UI blurs them by default with a user-controlled reveal toggle.
+* **NSFW safeguarding** — backend keyword filter flags sensitive records; the UI blurs them by default with a user-controlled reveal toggle inside Settings.
 * **Spell correction** — a Norvig-inspired service suggests corrections and emits fuzzy Solr clauses, powering “Did you mean…” flows.
 * **Save Page Now integration** — `/api/save` relays preservation requests to `https://web.archive.org/save/` and reports snapshot links.
-* **Persistent preferences** — localStorage stores theme, NSFW toggle, last query, and preferred results-per-page.
+* **Bookmarks & history** — sidebar keeps a persistent library of saved archive items and your recent searches with quick re-run controls.
+* **Persistent preferences** — localStorage stores theme, NSFW toggle, last query, results-per-page, and saved sidebar state.
 
 ### Backend API
 
