@@ -214,6 +214,63 @@ const nodeEnv = getEnv("NODE_ENV") ?? "development";
 const offlineFallbackEnv = getEnv("ENABLE_OFFLINE_FALLBACK");
 const offlineFallbackEnabled = offlineFallbackEnv === "true";
 
+const NETWORK_ERROR_CODES = new Set([
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "ENETUNREACH"
+]);
+
+const NETWORK_ERROR_MESSAGE_PATTERN =
+  /(ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|NetworkError)/i;
+
+function isNetworkError(error: unknown): boolean {
+  if (!error) {
+    return false;
+  }
+
+  if (error instanceof TypeError && error.message === "fetch failed") {
+    return true;
+  }
+
+  const candidates: unknown[] = [error];
+  if (typeof error === "object" && error !== null && "cause" in error) {
+    const cause = (error as { cause?: unknown }).cause;
+    if (cause) {
+      candidates.push(cause);
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+
+    const withCode = candidate as { code?: unknown; message?: unknown };
+    const code = withCode.code;
+    if (typeof code === "string" && NETWORK_ERROR_CODES.has(code)) {
+      return true;
+    }
+
+    const message = withCode.message;
+    if (typeof message === "string" && NETWORK_ERROR_MESSAGE_PATTERN.test(message)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function shouldUseOfflineFallback(error: unknown): boolean {
+  if (offlineFallbackEnabled) {
+    return true;
+  }
+  return isNetworkError(error);
+}
+
 function applyDefaultHeaders(
   init: RequestInit | undefined,
   additionalHeaders: Record<string, string> = {}
@@ -643,6 +700,7 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
 
   let data: ArchiveSearchResponse | null = null;
   let usedFallback = false;
+  let lastSearchError: unknown;
 
   try {
     const response = await fetch(requestUrl, applyDefaultHeaders(undefined, { Accept: "application/json" }));
@@ -653,28 +711,22 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     data = (await response.json()) as ArchiveSearchResponse;
   } catch (error) {
     console.warn("Error fetching Internet Archive search results", error);
-    if (!offlineFallbackEnabled) {
-      sendJson(res, 502, {
-        error: "Unable to retrieve Internet Archive search results.",
-        details: error instanceof Error ? error.message : String(error)
-      });
-      return;
-    }
-
-    data = performLocalArchiveSearch(query, safePage, safeRows, {
-      mediaType: mediaTypeParam,
-      yearFrom: yearFromParam,
-      yearTo: yearToParam
-    });
-    usedFallback = true;
+    lastSearchError = error;
   }
 
   if (!data) {
-    if (!offlineFallbackEnabled) {
-      sendJson(res, 502, {
-        error: "No Internet Archive search data returned.",
-        details: "The upstream search API responded without a payload."
-      });
+    if (!shouldUseOfflineFallback(lastSearchError)) {
+      if (lastSearchError) {
+        sendJson(res, 502, {
+          error: "Unable to retrieve Internet Archive search results.",
+          details: lastSearchError instanceof Error ? lastSearchError.message : String(lastSearchError)
+        });
+      } else {
+        sendJson(res, 502, {
+          error: "No Internet Archive search data returned.",
+          details: "The upstream search API responded without a payload."
+        });
+      }
       return;
     }
 
@@ -779,6 +831,8 @@ async function handleMetadata({ res, url }: HandlerContext): Promise<void> {
 
   const requestUrl = `${METADATA_ENDPOINT_BASE}${encodeURIComponent(identifier)}`;
 
+  let metadataError: unknown;
+
   try {
     const response = await fetch(requestUrl, applyDefaultHeaders(undefined, { Accept: "application/json" }));
     if (!response.ok) {
@@ -790,19 +844,18 @@ async function handleMetadata({ res, url }: HandlerContext): Promise<void> {
     return;
   } catch (error) {
     console.warn("Metadata API request failed", error);
-    if (!offlineFallbackEnabled) {
-      sendJson(res, 502, {
-        error: "Unable to retrieve metadata for the requested identifier.",
-        details: error instanceof Error ? error.message : String(error)
-      });
-      return;
-    }
+    metadataError = error;
   }
 
-  if (!offlineFallbackEnabled) {
+  if (!shouldUseOfflineFallback(metadataError)) {
     sendJson(res, 502, {
       error: "Unable to retrieve metadata for the requested identifier.",
-      details: "The Internet Archive metadata service is unavailable."
+      details:
+        metadataError instanceof Error
+          ? metadataError.message
+          : metadataError
+          ? String(metadataError)
+          : "The Internet Archive metadata service is unavailable."
     });
     return;
   }
@@ -837,6 +890,8 @@ async function handleCdx({ res, url }: HandlerContext): Promise<void> {
   requestUrl.searchParams.set("fl", "timestamp,original,mimetype,statuscode,digest,length");
   requestUrl.searchParams.append("filter", "statuscode:200");
   requestUrl.searchParams.set("collapse", "digest");
+
+  let cdxError: unknown;
 
   try {
     const response = await fetch(requestUrl, applyDefaultHeaders(undefined, { Accept: "application/json" }));
@@ -878,19 +933,18 @@ async function handleCdx({ res, url }: HandlerContext): Promise<void> {
     return;
   } catch (error) {
     console.warn("CDX API request failed", error);
-    if (!offlineFallbackEnabled) {
-      sendJson(res, 502, {
-        error: "Unable to retrieve CDX snapshots for the requested URL.",
-        details: error instanceof Error ? error.message : String(error)
-      });
-      return;
-    }
+    cdxError = error;
   }
 
-  if (!offlineFallbackEnabled) {
+  if (!shouldUseOfflineFallback(cdxError)) {
     sendJson(res, 502, {
       error: "Unable to retrieve CDX snapshots for the requested URL.",
-      details: "The Wayback Machine CDX service is unavailable."
+      details:
+        cdxError instanceof Error
+          ? cdxError.message
+          : cdxError
+          ? String(cdxError)
+          : "The Wayback Machine CDX service is unavailable."
     });
     return;
   }
@@ -933,6 +987,8 @@ async function handleScrape({ res, url }: HandlerContext): Promise<void> {
     requestUrl.searchParams.append("sorts[]", sort);
   }
 
+  let scrapeError: unknown;
+
   try {
     const response = await fetch(requestUrl, applyDefaultHeaders(undefined, { Accept: "application/json" }));
     if (!response.ok) {
@@ -948,19 +1004,18 @@ async function handleScrape({ res, url }: HandlerContext): Promise<void> {
     return;
   } catch (error) {
     console.warn("Scrape API request failed", error);
-    if (!offlineFallbackEnabled) {
-      sendJson(res, 502, {
-        error: "Unable to retrieve highlight results from the Internet Archive.",
-        details: error instanceof Error ? error.message : String(error)
-      });
-      return;
-    }
+    scrapeError = error;
   }
 
-  if (!offlineFallbackEnabled) {
+  if (!shouldUseOfflineFallback(scrapeError)) {
     sendJson(res, 502, {
       error: "Unable to retrieve highlight results from the Internet Archive.",
-      details: "The Internet Archive scrape service is unavailable."
+      details:
+        scrapeError instanceof Error
+          ? scrapeError.message
+          : scrapeError
+          ? String(scrapeError)
+          : "The Internet Archive scrape service is unavailable."
     });
     return;
   }
