@@ -82,7 +82,21 @@ export async function searchArchive(
       );
     }
 
-    return (await response.json()) as ArchiveSearchResponse;
+    const rawBody = await response.text();
+    if (!rawBody.trim()) {
+      throw new Error("Search request returned an empty response body.");
+    }
+
+    try {
+      return JSON.parse(rawBody) as ArchiveSearchResponse;
+    } catch (parseError) {
+      const preview = rawBody.slice(0, 200).replace(/\s+/g, " ").trim();
+      const message =
+        parseError instanceof Error ? parseError.message : "Unexpected response payload.";
+      throw new Error(
+        `Search request returned invalid JSON. ${message}${preview ? ` — ${preview}` : ""}`.trim()
+      );
+    }
   } catch (error) {
     lastError = error;
   }
