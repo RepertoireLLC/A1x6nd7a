@@ -14,8 +14,7 @@
  * - Build Open and Forkable
  */
 
-import express, { type Request, type Response } from "express";
-import cors from "cors";
+import { createServer, type IncomingMessage, type ServerResponse } from "http";
 
 import { isNSFWContent } from "./services/nsfwFilter";
 import { getSpellCorrector, type SpellcheckResult } from "./services/spellCorrector";
@@ -41,13 +40,84 @@ const YEAR_PATTERN = /^\d{4}$/;
 
 type LinkStatus = "online" | "archived-only" | "offline";
 
+type HandlerContext = {
+  req: IncomingMessage;
+  res: ServerResponse;
+  url: URL;
+};
+
+type RouteHandler = (context: HandlerContext) => Promise<void> | void;
+
 const HEAD_TIMEOUT_MS = 7000;
 
 const spellCorrector = getSpellCorrector();
 
-const app = express();
-app.use(cors());
-app.use(express.json());
+function setCorsHeaders(res: ServerResponse): void {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
+function sendJson(res: ServerResponse, status: number, payload: unknown): void {
+  res.statusCode = status;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(payload));
+}
+
+function parseRequestUrl(req: IncomingMessage): URL {
+  const hostHeader = req.headers?.host ?? "localhost";
+  const requestUrl = req.url ?? "/";
+  return new URL(requestUrl, `http://${hostHeader}`);
+}
+
+function getEnv(name: string): string | undefined {
+  const globalProcess = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
+  return globalProcess?.env?.[name];
+}
+
+async function readRequestBody(req: IncomingMessage): Promise<string> {
+  const decoder = new TextDecoder();
+  let body = "";
+
+  return await new Promise<string>((resolve, reject) => {
+    req.on("data", (chunk) => {
+      if (typeof chunk === "string") {
+        body += chunk;
+      } else {
+        body += decoder.decode(chunk as ArrayBufferView, { stream: true });
+      }
+    });
+
+    req.on("end", () => {
+      body += decoder.decode();
+      resolve(body);
+    });
+
+    req.on("error", (error) => {
+      reject(error);
+    });
+  });
+}
+
+class HttpError extends Error {
+  constructor(public statusCode: number, message: string) {
+    super(message);
+    this.name = "HttpError";
+  }
+}
+
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const raw = await readRequestBody(req);
+  if (!raw.trim()) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch (error) {
+    throw new HttpError(400, "Request body must be valid JSON.");
+  }
+}
 
 async function evaluateLinkStatus(targetUrl: string): Promise<LinkStatus> {
   const controller = new AbortController();
@@ -104,36 +174,92 @@ async function evaluateLinkStatus(targetUrl: string): Promise<LinkStatus> {
   return "offline";
 }
 
-app.get("/health", (_req: Request, res: Response) => {
-  res.json({ status: "ok" });
-});
+const routes: Record<string, Record<string, RouteHandler>> = {
+  GET: {
+    "/health": ({ res }) => {
+      sendJson(res, 200, { status: "ok" });
+    },
+    "/api/search": handleSearch,
+    "/api/wayback": handleWayback,
+    "/api/status": handleStatus
+  },
+  POST: {
+    "/api/save": handleSave
+  }
+};
 
-app.get("/api/search", async (req: Request, res: Response) => {
-  const query = (req.query.q as string | undefined)?.trim();
-  if (!query) {
-    res.status(400).json({ error: "Missing required query parameter 'q'." });
+const server = createServer(async (req, res) => {
+  setCorsHeaders(res);
+
+  if (!req.method) {
+    sendJson(res, 400, { error: "Missing HTTP method." });
     return;
   }
 
-  const pageParam = (req.query.page as string | undefined) ?? "1";
-  const rowsParam = (req.query.rows as string | undefined) ?? "20";
+  if (req.method === "OPTIONS") {
+    res.statusCode = 204;
+    res.end();
+    return;
+  }
+
+  if (!req.url) {
+    sendJson(res, 404, { error: "Not found." });
+    return;
+  }
+
+  const url = parseRequestUrl(req);
+  const methodRoutes = routes[req.method];
+
+  if (!methodRoutes) {
+    res.setHeader("Allow", Object.keys(routes).join(","));
+    sendJson(res, 405, { error: "Method not allowed." });
+    return;
+  }
+
+  const handler = methodRoutes[url.pathname];
+  if (!handler) {
+    sendJson(res, 404, { error: "Not found." });
+    return;
+  }
+
+  try {
+    await handler({ req, res, url });
+  } catch (error) {
+    console.error("Unhandled error while processing request", error);
+    sendJson(res, 500, {
+      error: "Internal server error.",
+      details: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+async function handleSearch({ res, url }: HandlerContext): Promise<void> {
+  const query = url.searchParams.get("q")?.trim();
+  if (!query) {
+    sendJson(res, 400, { error: "Missing required query parameter 'q'." });
+    return;
+  }
+
+  const pageParam = url.searchParams.get("page") ?? "1";
+  const rowsParam = url.searchParams.get("rows") ?? "20";
   const page = Number.parseInt(pageParam, 10);
   const rows = Number.parseInt(rowsParam, 10);
 
-  const mediaTypeParam = (req.query.mediaType as string | undefined)?.trim().toLowerCase();
-  const yearFromParam = (req.query.yearFrom as string | undefined)?.trim();
-  const yearToParam = (req.query.yearTo as string | undefined)?.trim();
+  const mediaTypeParam = url.searchParams.get("mediaType")?.trim().toLowerCase() ?? "";
+  const yearFromParam = url.searchParams.get("yearFrom")?.trim() ?? "";
+  const yearToParam = url.searchParams.get("yearTo")?.trim() ?? "";
 
   if (mediaTypeParam && !ALLOWED_MEDIA_TYPES.has(mediaTypeParam)) {
-    res.status(400).json({
+    sendJson(res, 400, {
       error: "Invalid media type filter.",
-      details: "Supported media types include texts, audio, movies, image, software, web, data, collection, etree, and tvnews."
+      details:
+        "Supported media types include texts, audio, movies, image, software, web, data, collection, etree, and tvnews."
     });
     return;
   }
 
   if (yearFromParam && !YEAR_PATTERN.test(yearFromParam)) {
-    res.status(400).json({
+    sendJson(res, 400, {
       error: "Invalid start year.",
       details: "Year filters must be four-digit values (e.g., 1999)."
     });
@@ -141,7 +267,7 @@ app.get("/api/search", async (req: Request, res: Response) => {
   }
 
   if (yearToParam && !YEAR_PATTERN.test(yearToParam)) {
-    res.status(400).json({
+    sendJson(res, 400, {
       error: "Invalid end year.",
       details: "Year filters must be four-digit values (e.g., 2008)."
     });
@@ -149,26 +275,26 @@ app.get("/api/search", async (req: Request, res: Response) => {
   }
 
   if (yearFromParam && yearToParam && Number(yearFromParam) > Number(yearToParam)) {
-    res.status(400).json({
+    sendJson(res, 400, {
       error: "Invalid year range.",
       details: "The start year cannot be greater than the end year."
     });
     return;
   }
 
-  const url = new URL(ARCHIVE_SEARCH_ENDPOINT);
+  const requestUrl = new URL(ARCHIVE_SEARCH_ENDPOINT);
   const tokens = query.split(/\s+/).filter(Boolean);
   const fuzzyClause = tokens.map((token) => `${token}~`).join(" ");
   const searchExpression = fuzzyClause ? `(${query}) OR (${fuzzyClause})` : query;
 
   const filterExpressions: string[] = [];
-  if (mediaTypeParam && mediaTypeParam.length > 0) {
+  if (mediaTypeParam) {
     filterExpressions.push(`mediatype:(${mediaTypeParam})`);
   }
 
   if (yearFromParam || yearToParam) {
-    const yearFromValue = yearFromParam ?? "*";
-    const yearToValue = yearToParam ?? "*";
+    const yearFromValue = yearFromParam || "*";
+    const yearToValue = yearToParam || "*";
     filterExpressions.push(`year:[${yearFromValue} TO ${yearToValue}]`);
   }
 
@@ -177,11 +303,11 @@ app.get("/api/search", async (req: Request, res: Response) => {
     .map((part) => `(${part})`)
     .join(" AND ");
 
-  url.searchParams.set("q", combinedQuery.length > 0 ? combinedQuery : searchExpression);
-  url.searchParams.set("output", "json");
-  url.searchParams.set("page", Number.isFinite(page) && page > 0 ? String(page) : "1");
-  url.searchParams.set("rows", Number.isFinite(rows) && rows > 0 ? String(rows) : "20");
-  url.searchParams.set(
+  requestUrl.searchParams.set("q", combinedQuery.length > 0 ? combinedQuery : searchExpression);
+  requestUrl.searchParams.set("output", "json");
+  requestUrl.searchParams.set("page", Number.isFinite(page) && page > 0 ? String(page) : "1");
+  requestUrl.searchParams.set("rows", Number.isFinite(rows) && rows > 0 ? String(rows) : "20");
+  requestUrl.searchParams.set(
     "fl",
     [
       "identifier",
@@ -197,17 +323,19 @@ app.get("/api/search", async (req: Request, res: Response) => {
   );
 
   try {
-    const response = await fetch(url);
+    const response = await fetch(requestUrl);
     if (!response.ok) {
       throw new Error(`Archive API responded with status ${response.status}`);
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as Record<string, unknown> & {
+      response?: { docs?: Array<Record<string, unknown>> };
+    };
     let spellcheck: SpellcheckResult | null = null;
 
     if (Array.isArray(data?.response?.docs)) {
       const combinedTexts: string[] = [];
-      data.response.docs = data.response.docs.map((doc: unknown) => {
+      data.response.docs = data.response.docs.map((doc) => {
         if (doc && typeof doc === "object") {
           const record = doc as Record<string, unknown>;
           const textualFields: string[] = [];
@@ -259,74 +387,91 @@ app.get("/api/search", async (req: Request, res: Response) => {
       }
     }
 
-    res.json({
+    sendJson(res, 200, {
       ...data,
-      spellcheck,
+      spellcheck
     });
   } catch (error) {
     console.error("Error fetching Internet Archive search results", error);
-    res.status(502).json({
+    sendJson(res, 502, {
       error: "Failed to retrieve data from the Internet Archive.",
       details: error instanceof Error ? error.message : String(error)
     });
   }
-});
+}
 
-app.get("/api/wayback", async (req: Request, res: Response) => {
-  const targetUrl = (req.query.url as string | undefined)?.trim();
+async function handleWayback({ res, url }: HandlerContext): Promise<void> {
+  const targetUrl = url.searchParams.get("url")?.trim();
   if (!targetUrl) {
-    res.status(400).json({ error: "Missing required query parameter 'url'." });
+    sendJson(res, 400, { error: "Missing required query parameter 'url'." });
     return;
   }
 
-  const url = new URL(WAYBACK_AVAILABILITY_ENDPOINT);
-  url.searchParams.set("url", targetUrl);
+  const requestUrl = new URL(WAYBACK_AVAILABILITY_ENDPOINT);
+  requestUrl.searchParams.set("url", targetUrl);
 
   try {
-    const response = await fetch(url);
+    const response = await fetch(requestUrl);
     if (!response.ok) {
       throw new Error(`Wayback API responded with status ${response.status}`);
     }
 
     const data = await response.json();
-    res.json(data);
+    sendJson(res, 200, data);
   } catch (error) {
     console.error("Error fetching Wayback Machine availability", error);
-    res.status(502).json({
+    sendJson(res, 502, {
       error: "Failed to retrieve Wayback Machine availability.",
       details: error instanceof Error ? error.message : String(error)
     });
   }
-});
+}
 
-app.get("/api/status", async (req: Request, res: Response) => {
-  const targetUrl = (req.query.url as string | undefined)?.trim();
+async function handleStatus({ res, url }: HandlerContext): Promise<void> {
+  const targetUrl = url.searchParams.get("url")?.trim();
   if (!targetUrl) {
-    res.status(400).json({ error: "Missing required query parameter 'url'." });
+    sendJson(res, 400, { error: "Missing required query parameter 'url'." });
     return;
   }
 
   try {
     const status = await evaluateLinkStatus(targetUrl);
-    res.json({ status });
+    sendJson(res, 200, { status });
   } catch (error) {
     console.error("Error evaluating link status", error);
-    res.status(500).json({
+    sendJson(res, 500, {
       error: "Unable to evaluate link status.",
       details: error instanceof Error ? error.message : String(error)
     });
   }
-});
+}
 
-app.post("/api/save", async (req: Request, res: Response) => {
-  const targetUrl = (req.body?.url as string | undefined)?.trim();
+async function handleSave({ req, res }: HandlerContext): Promise<void> {
+  let payload: unknown;
+  try {
+    payload = await readJsonBody(req);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      sendJson(res, error.statusCode, { error: error.message });
+      return;
+    }
+
+    console.error("Error reading request body", error);
+    sendJson(res, 400, { error: "Unable to read request body." });
+    return;
+  }
+
+  const urlValue =
+    typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>).url : undefined;
+  const targetUrl = typeof urlValue === "string" ? urlValue.trim() : "";
+
   if (!targetUrl) {
-    res.status(400).json({ error: "Missing required field 'url' in request body." });
+    sendJson(res, 400, { error: "Missing required field 'url' in request body." });
     return;
   }
 
   if (!/^https?:\/\//i.test(targetUrl)) {
-    res.status(400).json({ error: "The provided URL must start with http:// or https://" });
+    sendJson(res, 400, { error: "The provided URL must start with http:// or https://" });
     return;
   }
 
@@ -351,7 +496,7 @@ app.post("/api/save", async (req: Request, res: Response) => {
 
     if (!success) {
       const message = `Save Page Now responded with status ${response.status}`;
-      res.status(502).json({
+      sendJson(res, 502, {
         success: false,
         error: message,
         snapshotUrl
@@ -359,30 +504,30 @@ app.post("/api/save", async (req: Request, res: Response) => {
       return;
     }
 
-    res.json({
+    sendJson(res, 200, {
       success: true,
       snapshotUrl,
-      message:
-        snapshotUrl
-          ? "Snapshot request accepted by Save Page Now."
-          : "Snapshot request sent to Save Page Now. Check back shortly for availability."
+      message: snapshotUrl
+        ? "Snapshot request accepted by Save Page Now."
+        : "Snapshot request sent to Save Page Now. Check back shortly for availability."
     });
   } catch (error) {
     console.error("Error requesting Save Page Now snapshot", error);
-    res.status(502).json({
+    sendJson(res, 502, {
       success: false,
       error: "Failed to contact the Save Page Now service.",
       details: error instanceof Error ? error.message : String(error)
     });
   }
-});
+}
 
-const PORT = process.env.PORT || 4000;
+const port = Number.parseInt(getEnv("PORT") ?? "4000", 10);
+const nodeEnv = getEnv("NODE_ENV") ?? "development";
 
-if (process.env.NODE_ENV !== "test") {
-  app.listen(PORT, () => {
-    console.log(`Alexandria Browser backend listening on port ${PORT}`);
+if (nodeEnv !== "test") {
+  server.listen(port, () => {
+    console.log(`Alexandria Browser backend listening on port ${port}`);
   });
 }
 
-export default app;
+export default server;
