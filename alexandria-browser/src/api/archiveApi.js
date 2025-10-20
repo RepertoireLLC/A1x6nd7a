@@ -1,5 +1,7 @@
 import { getFuzzySuggestion } from '../utils/fuzzySearch.js';
 
+const metadataCache = new Map(); // ADD: Cache metadata lookups to avoid redundant Internet Archive metadata requests across pagination.
+
 const BASE_URL = 'https://archive.org/advancedsearch.php';
 const METADATA_URL = 'https://archive.org/metadata/';
 
@@ -47,11 +49,22 @@ async function fetchJson(url) {
 }
 
 async function fetchOriginalUrl(identifier) {
+  if (!identifier) {
+    return null; // FIX: Guard against undefined identifiers to prevent unnecessary fetch attempts.
+  }
+
+  if (metadataCache.has(identifier)) {
+    return metadataCache.get(identifier); // ADD: Serve metadata results from cache to reduce latency and console noise.
+  }
+
   try {
     const metadata = await fetchJson(`${METADATA_URL}${encodeURIComponent(identifier)}`);
-    return metadata?.metadata?.originalurl || null;
+    const resolvedUrl = metadata?.metadata?.originalurl || null;
+    metadataCache.set(identifier, resolvedUrl); // ADD: Remember successful lookups for subsequent requests in the same session.
+    return resolvedUrl;
   } catch (error) {
     console.warn('Unable to resolve original URL for', identifier, error);
+    metadataCache.set(identifier, null); // ADD: Cache failures as null so we do not retry the same failing request repeatedly.
     return null;
   }
 }
