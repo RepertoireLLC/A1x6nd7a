@@ -50,6 +50,8 @@ npm run dev --workspace alexandria-browser/frontend
 
 The frontend expects the backend at `http://localhost:4000` by default. Override this via `VITE_API_BASE_URL` in a `.env` file placed beside `frontend/.env` if you host the API elsewhere.
 
+By default the backend requires live access to archive.org services. If you're developing offline, export `ARCHIVE_ENABLE_OFFLINE_DATA=true` before launching the backend and `VITE_ENABLE_OFFLINE_DATA=true` before building or serving the frontend to opt into the bundled sample datasets.
+
 #### Production build
 
 ```bash

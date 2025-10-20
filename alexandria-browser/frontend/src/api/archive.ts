@@ -1,12 +1,18 @@
 import type {
   ArchiveSearchResponse,
   LinkStatus,
+  ArchiveMetadataResponse,
+  CdxResponse,
+  ScrapeResponse,
+  WaybackAvailabilityResponse,
   SavePageResponse,
   SearchFilters
 } from "../types";
 import { performFallbackArchiveSearch } from "../utils/fallbackSearch";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
+const ENABLE_OFFLINE_DATA =
+  (import.meta.env.VITE_ENABLE_OFFLINE_DATA ?? "false").toString().toLowerCase() === "true";
 
 /**
  * Execute an archive search request with the provided parameters.
@@ -35,12 +41,23 @@ export async function searchArchive(
   try {
     const response = await fetch(url.toString());
     if (!response.ok) {
-      console.warn(`Search request failed with status ${response.status}; using local fallback dataset.`);
+      const errorMessage = `Search request failed with status ${response.status}`;
+      if (!ENABLE_OFFLINE_DATA) {
+        throw new Error(errorMessage);
+      }
+
+      console.warn(`${errorMessage}; using local fallback dataset.`);
       return performFallbackArchiveSearch(query, page, rows, filters);
     }
 
     return (await response.json()) as ArchiveSearchResponse;
   } catch (error) {
+    if (!ENABLE_OFFLINE_DATA) {
+      throw new Error(
+        `Search request failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+
     console.warn("Search request failed, using local fallback dataset.", error);
     return performFallbackArchiveSearch(query, page, rows, filters);
   }
@@ -74,7 +91,7 @@ export async function getWaybackAvailability(url: string) {
     throw new Error(`Wayback availability failed with status ${response.status}`);
   }
 
-  return response.json() as Promise<unknown>;
+  return response.json() as Promise<WaybackAvailabilityResponse>;
 }
 
 /**
@@ -94,4 +111,42 @@ export async function requestSaveSnapshot(url: string): Promise<SavePageResponse
   }
 
   return (await response.json()) as SavePageResponse;
+}
+
+export async function fetchArchiveMetadata(identifier: string): Promise<ArchiveMetadataResponse> {
+  const request = new URL(`${API_BASE_URL}/api/metadata`);
+  request.searchParams.set("identifier", identifier);
+
+  const response = await fetch(request.toString());
+  if (!response.ok) {
+    throw new Error(`Metadata request failed with status ${response.status}`);
+  }
+
+  return (await response.json()) as ArchiveMetadataResponse;
+}
+
+export async function fetchCdxSnapshots(targetUrl: string, limit = 25): Promise<CdxResponse> {
+  const request = new URL(`${API_BASE_URL}/api/cdx`);
+  request.searchParams.set("url", targetUrl);
+  request.searchParams.set("limit", String(limit));
+
+  const response = await fetch(request.toString());
+  if (!response.ok) {
+    throw new Error(`CDX timeline request failed with status ${response.status}`);
+  }
+
+  return (await response.json()) as CdxResponse;
+}
+
+export async function scrapeArchive(query: string, count = 5): Promise<ScrapeResponse> {
+  const request = new URL(`${API_BASE_URL}/api/scrape`);
+  request.searchParams.set("query", query);
+  request.searchParams.set("count", String(count));
+
+  const response = await fetch(request.toString());
+  if (!response.ok) {
+    throw new Error(`Scrape request failed with status ${response.status}`);
+  }
+
+  return (await response.json()) as ScrapeResponse;
 }

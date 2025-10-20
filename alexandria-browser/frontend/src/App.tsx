@@ -13,10 +13,15 @@ import { Sidebar } from "./components/Sidebar";
 import { ResultsList } from "./components/ResultsList";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { LiveStatusCard } from "./components/LiveStatusCard";
+import { WaybackAvailabilityCard } from "./components/WaybackAvailabilityCard";
 import {
   searchArchive,
   checkLinkStatus,
-  requestSaveSnapshot
+  requestSaveSnapshot,
+  fetchArchiveMetadata,
+  fetchCdxSnapshots,
+  scrapeArchive,
+  getWaybackAvailability
 } from "./api/archive";
 import {
   loadBookmarks,
@@ -29,13 +34,18 @@ import {
 } from "./utils/storage";
 import { isLikelyUrl, isYearValid, normalizeYear } from "./utils/validators";
 import type {
+  ArchiveMetadataResponse,
   ArchiveSearchDoc,
   BookmarkEntry,
+  CdxResponse,
   LinkStatus,
+  ScrapeItem,
   SearchHistoryEntry,
   SpellcheckCorrection,
-  StoredSettings
+  StoredSettings,
+  WaybackAvailabilityResponse
 } from "./types";
+import { ItemDetailsPanel } from "./components/ItemDetailsPanel";
 
 const RESULTS_PER_PAGE_OPTIONS = [10, 20, 50];
 const MEDIA_TYPE_OPTIONS = [
@@ -111,6 +121,22 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<"bookmarks" | "history" | "settings">("bookmarks");
   const [liveStatus, setLiveStatus] = useState<LinkStatus | null>(null);
+  const [selectedDoc, setSelectedDoc] = useState<ArchiveSearchDoc | null>(null);
+  const [metadataState, setMetadataState] = useState<{
+    data: ArchiveMetadataResponse | null;
+    loading: boolean;
+    error: string | null;
+  }>({ data: null, loading: false, error: null });
+  const [timelineState, setTimelineState] = useState<{
+    data: CdxResponse | null;
+    loading: boolean;
+    error: string | null;
+  }>({ data: null, loading: false, error: null });
+  const [relatedItems, setRelatedItems] = useState<ScrapeItem[]>([]);
+  const [relatedFallback, setRelatedFallback] = useState(false);
+  const [relatedError, setRelatedError] = useState<string | null>(null);
+  const [waybackDetails, setWaybackDetails] = useState<WaybackAvailabilityResponse | null>(null);
+  const [waybackError, setWaybackError] = useState<string | null>(null);
 
   const resultsContainerRef = useRef<HTMLDivElement | null>(null);
   const bootstrapped = useRef(false);
@@ -140,6 +166,89 @@ function App() {
     saveBookmarks(bookmarks);
   }, [bookmarks]);
 
+  useEffect(() => {
+    if (!selectedDoc) {
+      setMetadataState({ data: null, loading: false, error: null });
+      setTimelineState({ data: null, loading: false, error: null });
+      setRelatedItems([]);
+      setRelatedFallback(false);
+      setRelatedError(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    setMetadataState((previous) => ({ ...previous, loading: true, error: null }));
+    void fetchArchiveMetadata(selectedDoc.identifier)
+      .then((payload) => {
+        if (!cancelled) {
+          setMetadataState({ data: payload, loading: false, error: null });
+        }
+      })
+      .catch((metadataError) => {
+        if (!cancelled) {
+          setMetadataState({
+            data: null,
+            loading: false,
+            error: metadataError instanceof Error ? metadataError.message : String(metadataError)
+          });
+        }
+      });
+
+    const archiveUrl = `https://archive.org/details/${encodeURIComponent(selectedDoc.identifier)}`;
+
+    setTimelineState((previous) => ({ ...previous, loading: true, error: null }));
+    void fetchCdxSnapshots(archiveUrl, 80)
+      .then((payload) => {
+        if (!cancelled) {
+          setTimelineState({ data: payload, loading: false, error: null });
+        }
+      })
+      .catch((timelineError) => {
+        if (!cancelled) {
+          setTimelineState({
+            data: null,
+            loading: false,
+            error: timelineError instanceof Error ? timelineError.message : String(timelineError)
+          });
+        }
+      });
+
+    const collections = Array.isArray(selectedDoc.collection)
+      ? selectedDoc.collection
+      : selectedDoc.collection
+      ? [selectedDoc.collection]
+      : [];
+    const primaryCollection = collections[0];
+    const query = primaryCollection
+      ? `collection:${primaryCollection}`
+      : selectedDoc.mediatype
+      ? `mediatype:(${selectedDoc.mediatype})`
+      : selectedDoc.title ?? selectedDoc.identifier;
+
+    setRelatedError(null);
+    setRelatedFallback(false);
+    void scrapeArchive(query, 6)
+      .then((payload) => {
+        if (!cancelled) {
+          const filtered = payload.items.filter((item) => item.identifier !== selectedDoc.identifier);
+          setRelatedItems(filtered);
+          setRelatedFallback(Boolean(payload.fallback));
+        }
+      })
+      .catch((relatedErr) => {
+        if (!cancelled) {
+          setRelatedItems([]);
+          setRelatedFallback(false);
+          setRelatedError(relatedErr instanceof Error ? relatedErr.message : String(relatedErr));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedDoc]);
+
   const suggestionList = useMemo(() => {
     const historyQueries = history.map((entry) => entry.query);
     const bookmarkTitles = bookmarks.map((bookmark) => bookmark.title || bookmark.identifier);
@@ -152,6 +261,12 @@ function App() {
       setIsLoading(true);
       setError(null);
       setFallbackNotice(null);
+      setSelectedDoc(null);
+      setMetadataState({ data: null, loading: false, error: null });
+      setTimelineState({ data: null, loading: false, error: null });
+      setRelatedItems([]);
+      setRelatedFallback(false);
+      setRelatedError(null);
 
       const normalizedYearFrom = normalizeYear(yearFrom);
       const normalizedYearTo = normalizeYear(yearTo);
@@ -228,17 +343,28 @@ function App() {
 
         if (payload.fallback) {
           setLiveStatus(null);
+          setWaybackDetails(null);
+          setWaybackError(null);
         } else if (isLikelyUrl(searchQuery)) {
           setLiveStatus("checking");
+          setWaybackDetails(null);
+          setWaybackError(null);
           try {
-            const status = await checkLinkStatus(searchQuery);
+            const [status, availability] = await Promise.all([
+              checkLinkStatus(searchQuery),
+              getWaybackAvailability(searchQuery)
+            ]);
             setLiveStatus(status);
+            setWaybackDetails(availability);
           } catch (statusError) {
             console.warn("Failed to check live status", statusError);
             setLiveStatus("offline");
+            setWaybackError(statusError instanceof Error ? statusError.message : String(statusError));
           }
         } else {
           setLiveStatus(null);
+          setWaybackDetails(null);
+          setWaybackError(null);
         }
       } catch (fetchError) {
         console.error(fetchError);
@@ -379,6 +505,14 @@ function App() {
     setBookmarks((previous) => previous.filter((bookmark) => bookmark.identifier !== identifier));
   };
 
+  const openDetails = (doc: ArchiveSearchDoc) => {
+    setSelectedDoc(doc);
+  };
+
+  const closeDetails = () => {
+    setSelectedDoc(null);
+  };
+
   const handleSaveSnapshot = async (identifier: string, archiveUrl: string) => {
     setSaveMeta((previous) => ({
       ...previous,
@@ -463,6 +597,7 @@ function App() {
     setSuggestionCorrections([]);
     setHasSearched(false);
     setLiveStatus(null);
+    setSelectedDoc(null);
   };
 
   const clearHistory = () => {
@@ -495,6 +630,7 @@ function App() {
     setSuggestedQuery(null);
     setSuggestionCorrections([]);
     setLiveStatus(null);
+    setSelectedDoc(null);
     const trimmedQuery = defaults.lastQuery.trim();
     setQuery(trimmedQuery);
     setActiveQuery(null);
@@ -621,6 +757,9 @@ function App() {
       </div>
 
       {liveStatus ? <LiveStatusCard url={activeQuery ?? query} status={liveStatus} /> : null}
+      {waybackDetails || waybackError ? (
+        <WaybackAvailabilityCard url={activeQuery ?? query} payload={waybackDetails} error={waybackError} />
+      ) : null}
 
       <section className="results-container" aria-live="polite" ref={resultsContainerRef}>
         <ResultsList
@@ -636,6 +775,7 @@ function App() {
           resultsPerPage={resultsPerPage}
           onPageChange={handlePageChange}
           onToggleBookmark={toggleBookmark}
+          onOpenDetails={openDetails}
           bookmarkedIds={bookmarkedIdentifiers}
           onSaveSnapshot={handleSaveSnapshot}
           saveMeta={saveMeta}
@@ -658,6 +798,22 @@ function App() {
         onRemoveBookmark={removeBookmark}
         settingsPanel={settingsPanel}
       />
+
+      {selectedDoc ? (
+        <ItemDetailsPanel
+          doc={selectedDoc}
+          metadata={metadataState.data}
+          metadataLoading={metadataState.loading}
+          metadataError={metadataState.error}
+          timeline={timelineState.data}
+          timelineLoading={timelineState.loading}
+          timelineError={timelineState.error}
+          relatedItems={relatedItems}
+          relatedFallback={relatedFallback}
+          relatedError={relatedError}
+          onClose={closeDetails}
+        />
+      ) : null}
     </div>
   );
 }

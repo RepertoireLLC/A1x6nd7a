@@ -8,6 +8,7 @@ interface ResultCardProps {
   isBookmarked: boolean;
   onToggleBookmark: (identifier: string, doc: ArchiveSearchDoc) => void;
   onSaveSnapshot: (identifier: string, url: string) => void;
+  onOpenDetails: (doc: ArchiveSearchDoc) => void;
   saveLabel: string;
   saveDisabled: boolean;
   saveState: string | null;
@@ -39,6 +40,7 @@ export function ResultCard({
   isBookmarked,
   onToggleBookmark,
   onSaveSnapshot,
+  onOpenDetails,
   saveLabel,
   saveDisabled,
   saveState,
@@ -96,6 +98,9 @@ export function ResultCard({
               onClick={() => onToggleBookmark(doc.identifier, doc)}
             >
               {isBookmarked ? "★ Remove bookmark" : "☆ Bookmark"}
+            </button>
+            <button type="button" className="details-button" onClick={() => onOpenDetails(doc)}>
+              Details
             </button>
             <button
               type="button"
