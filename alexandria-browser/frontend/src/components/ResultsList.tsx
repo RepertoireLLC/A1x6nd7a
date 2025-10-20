@@ -16,6 +16,7 @@ interface ResultsListProps {
   resultsPerPage: number;
   onPageChange: (direction: "previous" | "next") => void;
   onToggleBookmark: (identifier: string, doc: ArchiveSearchDoc) => void;
+  onOpenDetails: (doc: ArchiveSearchDoc) => void;
   bookmarkedIds: Set<string>;
   onSaveSnapshot: (identifier: string, url: string) => void;
   saveMeta: Record<string, { label: string; disabled: boolean; message: string | null; snapshotUrl?: string; tone?: "success" | "error" | "info" }>;
@@ -39,6 +40,7 @@ export function ResultsList({
   resultsPerPage,
   onPageChange,
   onToggleBookmark,
+  onOpenDetails,
   bookmarkedIds,
   onSaveSnapshot,
   saveMeta,
@@ -102,6 +104,7 @@ export function ResultsList({
               isBookmarked={bookmarkedIds.has(doc.identifier)}
               onToggleBookmark={onToggleBookmark}
               onSaveSnapshot={onSaveSnapshot}
+              onOpenDetails={onOpenDetails}
               saveLabel={meta.label}
               saveDisabled={meta.disabled}
               saveState={meta.message}
