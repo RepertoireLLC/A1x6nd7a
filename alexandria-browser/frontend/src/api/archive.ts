@@ -84,7 +84,23 @@ export async function searchArchive(
       );
     }
 
-    return (await response.json()) as ArchiveSearchResponse;
+    const responseForErrorHandling = response.clone();
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!contentType.toLowerCase().includes("application/json")) {
+      throw await buildResponseError(
+        responseForErrorHandling,
+        "Search request failed. The server returned an unexpected response format."
+      );
+    }
+
+    try {
+      return (await response.json()) as ArchiveSearchResponse;
+    } catch (error) {
+      throw await buildResponseError(
+        responseForErrorHandling,
+        "Search request failed. The server returned malformed data."
+      );
+    }
   } catch (error) {
     lastError = error;
   }
