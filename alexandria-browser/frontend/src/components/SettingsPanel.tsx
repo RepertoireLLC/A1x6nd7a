@@ -5,6 +5,7 @@ interface SettingsPanelProps {
   onToggleNSFW: (next: boolean) => void;
   onClearHistory: () => void;
   onClearBookmarks: () => void;
+  onResetPreferences: () => void; // ADD: Handler to restore default preference values.
 }
 
 /**
@@ -16,7 +17,8 @@ export function SettingsPanel({
   onToggleTheme,
   onToggleNSFW,
   onClearHistory,
-  onClearBookmarks
+  onClearBookmarks,
+  onResetPreferences
 }: SettingsPanelProps) {
   return (
     <div className="settings-panel">
@@ -39,6 +41,12 @@ export function SettingsPanel({
       </button>
       <button type="button" className="danger" onClick={onClearBookmarks}>
         Clear bookmarks
+      </button>
+      <button
+        type="button"
+        onClick={onResetPreferences} // ADD: Reset control clears cached preferences without touching saved library data.
+      >
+        Reset saved preferences
       </button>
     </div>
   );

@@ -8,7 +8,8 @@ const SETTINGS_KEY = "alexandria-browser-settings";
 const HISTORY_KEY = "alexandria-browser-history";
 const BOOKMARKS_KEY = "alexandria-browser-bookmarks";
 
-const DEFAULT_SETTINGS: StoredSettings = {
+// ADD: Default preference snapshot used when initializing or resetting stored settings.
+export const DEFAULT_SETTINGS: StoredSettings = {
   theme: "light",
   filterNSFW: true,
   lastQuery: "",
@@ -93,4 +94,17 @@ export function loadBookmarks(): BookmarkEntry[] {
  */
 export function saveBookmarks(bookmarks: BookmarkEntry[]) {
   writeJSON(BOOKMARKS_KEY, bookmarks);
+}
+
+// ADD: Remove the persisted settings blob and return a fresh copy of default values.
+export function resetStoredSettings(): StoredSettings {
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.removeItem(SETTINGS_KEY);
+    } catch (error) {
+      console.warn("Failed to clear saved settings", error);
+    }
+  }
+
+  return { ...DEFAULT_SETTINGS };
 }

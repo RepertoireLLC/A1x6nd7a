@@ -22,6 +22,7 @@ import {
   loadBookmarks,
   loadHistory,
   loadSettings,
+  resetStoredSettings,
   saveBookmarks,
   saveHistory,
   saveSettings
@@ -461,6 +462,34 @@ function App() {
     setBookmarks([]);
   };
 
+  // ADD: Provide a one-click way to restore all persisted preferences to their defaults.
+  const resetPreferences = () => {
+    const defaults = resetStoredSettings();
+    initialSettings.current = defaults;
+    setTheme(defaults.theme);
+    setFilterNSFW(defaults.filterNSFW);
+    setResultsPerPage(defaults.resultsPerPage);
+    setMediaType(defaults.mediaType);
+    setYearFrom(defaults.yearFrom);
+    setYearTo(defaults.yearTo);
+    setPage(1);
+    setError(null);
+    setIsLoading(false);
+    setResults([]);
+    setStatuses({});
+    setSaveMeta({});
+    setTotalResults(null);
+    setTotalPages(null);
+    setSuggestedQuery(null);
+    setSuggestionCorrections([]);
+    setLiveStatus(null);
+    const trimmedQuery = defaults.lastQuery.trim();
+    setQuery(trimmedQuery);
+    setActiveQuery(null);
+    setHasSearched(false);
+    setHistoryIndex(-1);
+  };
+
   const suggestionNode = suggestedQuery ? (
     <div className="spellcheck-suggestion" role="note">
       Did you mean
@@ -489,10 +518,12 @@ function App() {
       onToggleNSFW={setFilterNSFW}
       onClearHistory={clearHistory}
       onClearBookmarks={clearBookmarks}
+      onResetPreferences={resetPreferences}
     />
   );
 
-  const canGoBack = history.length > 0 && historyIndex < history.length - 1;
+  // FIX: Require a valid history pointer before enabling the Back button to avoid false positives after resets.
+  const canGoBack = history.length > 0 && historyIndex >= 0 && historyIndex < history.length - 1;
   const canGoForward = history.length > 0 && historyIndex > 0;
   const canRefresh = Boolean(activeQuery) && !isLoading;
 
