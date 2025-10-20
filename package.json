@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "npm run --workspaces --if-present --parallel dev",
     "build": "npm run --workspaces --if-present build",
-    "start": "npm run --workspaces --if-present start"
+    "start": "npm run --workspaces --if-present start",
+    "build:alexandria": "npm run build --workspace alexandria-browser/backend && npm run build --workspace alexandria-browser/frontend"
   }
 }
