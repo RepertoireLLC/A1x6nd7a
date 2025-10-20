@@ -4,6 +4,9 @@ import { createResultCard } from './src/components/ResultCard.js';
 import { createPaginationControls } from './src/components/PaginationControls.js';
 import { createSettingsModal } from './src/components/SettingsModal.js';
 import { applyNSFWFilter, getKeywords } from './src/utils/nsfwFilter.js';
+import { loadPreferences, savePreferences } from './src/utils/preferences.js';
+
+const storedPreferences = loadPreferences(); // ADD: Hydrate state with persisted user settings so the interface restores the last session automatically.
 
 const state = {
   query: '',
@@ -15,7 +18,7 @@ const state = {
   loading: false,
   error: null,
   suggestion: null,
-  nsfwFiltering: true,
+  nsfwFiltering: storedPreferences.nsfwFiltering ?? true, // FIX: Respect the saved NSFW toggle state instead of always defaulting to enabled.
   keywords: []
 };
 
@@ -172,6 +175,7 @@ const settingsModal = createSettingsModal({
     state.nsfwFiltering = enabled;
     const baseResults = state.rawResults.length ? state.rawResults : state.results.map(({ nsfw, ...rest }) => rest);
     state.results = await applyNSFWFilter(baseResults, enabled);
+    savePreferences({ nsfwFiltering: enabled }); // ADD: Persist the user's NSFW preference immediately after every toggle.
     renderResults();
   },
   onKeywordsChange: async (updated) => {
@@ -188,6 +192,7 @@ const settingsModal = createSettingsModal({
 });
 
 document.body.appendChild(settingsModal.overlay);
+settingsModal.setNSFWToggle(state.nsfwFiltering); // ADD: Ensure the modal toggle reflects persisted preferences before the first open.
 
 initializeKeywords();
 

@@ -114,11 +114,15 @@ export function createSettingsModal({
     onClose?.();
   }
 
+  function setNSFWToggle(value) {
+    nsfwToggle.checked = value; // ADD: Keep the toggle input synchronized when preferences change outside the modal.
+  }
+
   overlay.addEventListener('click', (event) => {
     if (event.target === overlay) {
       close();
     }
   });
 
-  return { overlay, open, close, renderKeywords };
+  return { overlay, open, close, renderKeywords, setNSFWToggle };
 }
