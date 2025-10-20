@@ -86,9 +86,11 @@ export function ItemDetailsPanel({
   relatedError,
   onClose
 }: ItemDetailsPanelProps) {
-  const archiveUrl = doc.links?.archive ?? `https://archive.org/details/${encodeURIComponent(doc.identifier)}`;
-  const waybackUrl = doc.links?.wayback ?? `https://web.archive.org/web/*/${archiveUrl}`;
-  const originalUrl = doc.links?.original;
+  const fallbackArchiveUrl = `https://archive.org/details/${encodeURIComponent(doc.identifier)}`;
+  const archiveUrl = doc.archive_url ?? doc.links?.archive ?? fallbackArchiveUrl;
+  const waybackUrl = doc.wayback_url ?? doc.links?.wayback ?? `https://web.archive.org/web/*/${archiveUrl}`;
+  const rawOriginal = doc.original_url ?? doc.links?.original ?? null;
+  const originalUrl = rawOriginal && rawOriginal !== archiveUrl ? rawOriginal : null;
   const description = getDescription(doc.description);
   const yearOrDate = getYearOrDate(doc);
 
@@ -112,7 +114,7 @@ export function ItemDetailsPanel({
               </a>
             ) : null}
             <a href={archiveUrl} target="_blank" rel="noreferrer">
-              View on Internet Archive
+              View on archive.org
             </a>
             <a href={waybackUrl} target="_blank" rel="noreferrer">
               Wayback snapshots
@@ -169,6 +171,7 @@ export function ItemDetailsPanel({
               <li key={item.identifier}>
                 <a
                   href={
+                    item.archive_url ??
                     item.links?.archive ??
                     `https://archive.org/details/${encodeURIComponent(item.identifier)}`
                   }

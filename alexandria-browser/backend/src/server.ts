@@ -166,24 +166,72 @@ function buildArchiveThumbnail(identifier: unknown): string | null {
 }
 
 function attachArchiveLinks(record: Record<string, unknown>): Record<string, unknown> {
-  if (record.links) {
-    return record;
+  const existingLinks =
+    record.links && typeof record.links === "object"
+      ? (record.links as Record<string, unknown>)
+      : null;
+
+  const extractLinkValue = (value: unknown): string | null => {
+    if (typeof value !== "string") {
+      return null;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  };
+
+  const archiveFromRecord = extractLinkValue(existingLinks ? existingLinks["archive"] : null);
+  const originalFromRecord = extractLinkValue(existingLinks ? existingLinks["original"] : null);
+  const waybackFromRecord = extractLinkValue(existingLinks ? existingLinks["wayback"] : null);
+
+  const generatedLinks = buildArchiveLinks(
+    record.identifier,
+    originalFromRecord ?? record["original"] ?? record["url"]
+  );
+
+  let archive = archiveFromRecord ?? generatedLinks?.archive ?? null;
+  const original = originalFromRecord ?? generatedLinks?.original ?? null;
+  if (!archive && original) {
+    archive = original;
   }
+  const wayback =
+    waybackFromRecord ?? generatedLinks?.wayback ?? (archive ? `https://web.archive.org/web/*/${archive}` : null);
 
-  const links = buildArchiveLinks(record.identifier, record.original ?? record.url);
   const thumbnail = buildArchiveThumbnail(record.identifier);
+  const existingThumbnail = typeof record["thumbnail"] === "string" ? (record["thumbnail"] as string) : null;
+  const hasExistingThumbnail = Boolean(existingThumbnail && existingThumbnail.trim().length > 0);
 
-  if (!links && !thumbnail) {
+  if (!archive && !original && !wayback && !thumbnail) {
     return record;
   }
 
   const next: Record<string, unknown> = { ...record };
-  if (links) {
-    next.links = links;
+
+  if (archive) {
+    const nextLinks: ArchiveLinks = { archive };
+    if (original) {
+      nextLinks.original = original;
+    }
+    if (wayback) {
+      nextLinks.wayback = wayback;
+    }
+
+    next.links = nextLinks;
+
+    if (typeof next["archive_url"] !== "string" || (next["archive_url"] as string).length === 0) {
+      next["archive_url"] = archive;
+    }
+    if (original && (typeof next["original_url"] !== "string" || (next["original_url"] as string).length === 0)) {
+      next["original_url"] = original;
+    }
+    if (wayback && (typeof next["wayback_url"] !== "string" || (next["wayback_url"] as string).length === 0)) {
+      next["wayback_url"] = wayback;
+    }
   }
-  if (thumbnail && !next.thumbnail) {
-    next.thumbnail = thumbnail;
+
+  if (!hasExistingThumbnail && thumbnail) {
+    next["thumbnail"] = thumbnail;
   }
+
   return next;
 }
 
