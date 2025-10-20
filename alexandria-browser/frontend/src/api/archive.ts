@@ -10,7 +10,44 @@ import type {
 } from "../types";
 import { performFallbackArchiveSearch } from "../utils/fallbackSearch";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
+const offlineFallbackPreference = import.meta.env.VITE_ENABLE_OFFLINE_FALLBACK;
+const OFFLINE_FALLBACK_ENABLED =
+  offlineFallbackPreference === "true" ||
+  (import.meta.env.DEV && offlineFallbackPreference !== "false");
+
+function resolveApiBaseUrl(): string {
+  const configuredUrl = import.meta.env.VITE_API_BASE_URL?.trim();
+  if (configuredUrl) {
+    return configuredUrl.replace(/\/$/, "");
+  }
+
+  if (typeof window !== "undefined") {
+    const { hostname, protocol, port } = window.location;
+    const isLocalhost =
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "[::1]";
+
+    if (isLocalhost) {
+      return "http://localhost:4000";
+    }
+
+    if (protocol === "http:" || protocol === "https:") {
+      const originPort = port ? `:${port}` : "";
+      return `${protocol}//${hostname}${originPort}`;
+    }
+
+    return "http://localhost:4000";
+  }
+
+  return "http://localhost:4000";
+}
+
+const API_BASE_URL = resolveApiBaseUrl();
+
+function buildApiUrl(path: string): URL {
+  return new URL(path, `${API_BASE_URL}/`);
+}
 
 /**
  * Execute an archive search request with the provided parameters.
@@ -21,7 +58,7 @@ export async function searchArchive(
   rows: number,
   filters: SearchFilters
 ): Promise<ArchiveSearchResponse> {
-  const url = new URL(`${API_BASE_URL}/api/search`);
+  const url = buildApiUrl("/api/search");
   url.searchParams.set("q", query);
   url.searchParams.set("page", String(page));
   url.searchParams.set("rows", String(rows));
@@ -36,25 +73,53 @@ export async function searchArchive(
     url.searchParams.set("yearTo", filters.yearTo.trim());
   }
 
+  let lastError: unknown;
+
   try {
     const response = await fetch(url.toString());
     if (!response.ok) {
-      console.warn(`Search request failed with status ${response.status}; using local fallback dataset.`);
-      return performFallbackArchiveSearch(query, page, rows, filters);
+      throw await buildResponseError(
+        response,
+        `Search request failed with status ${response.status}.`
+      );
     }
 
-    return (await response.json()) as ArchiveSearchResponse;
+    const responseForErrorHandling = response.clone();
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!contentType.toLowerCase().includes("application/json")) {
+      throw await buildResponseError(
+        responseForErrorHandling,
+        "Search request failed. The server returned an unexpected response format."
+      );
+    }
+
+    try {
+      return (await response.json()) as ArchiveSearchResponse;
+    } catch (error) {
+      throw await buildResponseError(
+        responseForErrorHandling,
+        "Search request failed. The server returned malformed data."
+      );
+    }
   } catch (error) {
-    console.warn("Search request failed, using local fallback dataset.", error);
+    lastError = error;
+  }
+
+  if (OFFLINE_FALLBACK_ENABLED) {
+    console.warn("Search request failed, using local fallback dataset.", lastError);
     return performFallbackArchiveSearch(query, page, rows, filters);
   }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Search request failed. Please try again later.");
 }
 
 /**
  * Request link availability for the provided URL.
  */
 export async function checkLinkStatus(url: string): Promise<LinkStatus> {
-  const request = new URL(`${API_BASE_URL}/api/status`);
+  const request = buildApiUrl("/api/status");
   request.searchParams.set("url", url);
 
   const response = await fetch(request.toString());
@@ -70,7 +135,7 @@ export async function checkLinkStatus(url: string): Promise<LinkStatus> {
  * Query the Wayback Machine availability endpoint.
  */
 export async function getWaybackAvailability(url: string) {
-  const request = new URL(`${API_BASE_URL}/api/wayback`);
+  const request = buildApiUrl("/api/wayback");
   request.searchParams.set("url", url);
 
   const response = await fetch(request.toString());
@@ -85,7 +150,7 @@ export async function getWaybackAvailability(url: string) {
  * Ask the backend to request a Save Page Now snapshot for the URL.
  */
 export async function requestSaveSnapshot(url: string): Promise<SavePageResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/save`, {
+  const response = await fetch(buildApiUrl("/api/save").toString(), {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -101,7 +166,7 @@ export async function requestSaveSnapshot(url: string): Promise<SavePageResponse
 }
 
 export async function fetchArchiveMetadata(identifier: string): Promise<ArchiveMetadataResponse> {
-  const request = new URL(`${API_BASE_URL}/api/metadata`);
+  const request = buildApiUrl("/api/metadata");
   request.searchParams.set("identifier", identifier);
 
   const response = await fetch(request.toString());
@@ -113,7 +178,7 @@ export async function fetchArchiveMetadata(identifier: string): Promise<ArchiveM
 }
 
 export async function fetchCdxSnapshots(targetUrl: string, limit = 25): Promise<CdxResponse> {
-  const request = new URL(`${API_BASE_URL}/api/cdx`);
+  const request = buildApiUrl("/api/cdx");
   request.searchParams.set("url", targetUrl);
   request.searchParams.set("limit", String(limit));
 
@@ -126,7 +191,7 @@ export async function fetchCdxSnapshots(targetUrl: string, limit = 25): Promise<
 }
 
 export async function scrapeArchive(query: string, count = 5): Promise<ScrapeResponse> {
-  const request = new URL(`${API_BASE_URL}/api/scrape`);
+  const request = buildApiUrl("/api/scrape");
   request.searchParams.set("query", query);
   request.searchParams.set("count", String(count));
 
@@ -136,4 +201,43 @@ export async function scrapeArchive(query: string, count = 5): Promise<ScrapeRes
   }
 
   return (await response.json()) as ScrapeResponse;
+}
+
+async function buildResponseError(response: Response, fallbackMessage: string): Promise<Error> {
+  const contentType = response.headers.get("content-type") ?? "";
+  const responseClone = response.clone();
+
+  if (contentType.includes("application/json")) {
+    try {
+      const payload = (await responseClone.json()) as { error?: unknown; details?: unknown } | null;
+      const parts: string[] = [];
+      if (payload && typeof payload === "object") {
+        const errorText = payload.error;
+        const detailText = payload.details;
+        if (typeof errorText === "string" && errorText.trim()) {
+          parts.push(errorText.trim());
+        }
+        if (typeof detailText === "string" && detailText.trim()) {
+          parts.push(detailText.trim());
+        }
+      }
+
+      if (parts.length > 0) {
+        return new Error(`${fallbackMessage} ${parts.join(" ")}`.trim());
+      }
+    } catch (error) {
+      console.warn("Failed to parse error response payload", error);
+    }
+  }
+
+  try {
+    const text = (await response.text()).trim();
+    if (text) {
+      return new Error(`${fallbackMessage} ${text}`.trim());
+    }
+  } catch (error) {
+    console.warn("Failed to read error response body", error);
+  }
+
+  return new Error(fallbackMessage);
 }
