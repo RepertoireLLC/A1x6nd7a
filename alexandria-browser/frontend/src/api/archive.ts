@@ -8,7 +8,6 @@ import type {
   SavePageResponse,
   SearchFilters
 } from "../types";
-import { performFallbackArchiveSearch } from "../utils/fallbackSearch";
 
 const offlineFallbackPreference = import.meta.env.VITE_ENABLE_OFFLINE_FALLBACK;
 const OFFLINE_FALLBACK_ENABLED = offlineFallbackPreference === "true";
@@ -102,8 +101,18 @@ export async function searchArchive(
   }
 
   if (OFFLINE_FALLBACK_ENABLED) {
-    console.warn("Search request failed, using local fallback dataset.", lastError);
-    return performFallbackArchiveSearch(query, page, rows, filters);
+    console.warn("Search request failed, returning empty offline result set.", lastError);
+    const safePage = Number.isFinite(page) && page > 0 ? page : 1;
+    const safeRows = Number.isFinite(rows) && rows > 0 ? rows : 20;
+    return {
+      response: {
+        docs: [],
+        numFound: 0,
+        start: (safePage - 1) * safeRows
+      },
+      spellcheck: null,
+      fallback: true
+    } satisfies ArchiveSearchResponse;
   }
 
   throw lastError instanceof Error

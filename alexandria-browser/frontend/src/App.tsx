@@ -195,7 +195,9 @@ function App() {
         }
       });
 
-    const archiveUrl = selectedDoc.links?.archive ??
+    const archiveUrl =
+      selectedDoc.archive_url ??
+      selectedDoc.links?.archive ??
       `https://archive.org/details/${encodeURIComponent(selectedDoc.identifier)}`;
 
     setTimelineState((previous) => ({ ...previous, loading: true, error: null }));
@@ -288,7 +290,7 @@ function App() {
 
         if (payload.fallback) {
           setFallbackNotice(
-            "Working offline — showing a limited built-in dataset while the Alexandria backend is unreachable."
+            "Working offline — live Internet Archive search is currently unreachable."
           );
         }
 
@@ -404,7 +406,10 @@ function App() {
     const loadStatuses = async () => {
       const pairs = await Promise.all(
         results.map(async (doc) => {
-          const targetUrl = doc.links?.archive ?? `https://archive.org/details/${encodeURIComponent(doc.identifier)}`;
+          const targetUrl =
+            doc.archive_url ??
+            doc.links?.archive ??
+            `https://archive.org/details/${encodeURIComponent(doc.identifier)}`;
           try {
             const status = await checkLinkStatus(targetUrl);
             return [doc.identifier, status] as const;
@@ -497,7 +502,7 @@ function App() {
         title: doc.title || doc.identifier,
         mediatype: doc.mediatype,
         addedAt: Date.now(),
-        archiveUrl: doc.links?.archive
+        archiveUrl: doc.archive_url ?? doc.links?.archive
       };
       return [entry, ...previous];
     });

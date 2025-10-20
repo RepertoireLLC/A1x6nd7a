@@ -15,8 +15,8 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
+import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 
-import { SAMPLE_ARCHIVE_DOCS, type SampleArchiveDoc } from "./data/sampleArchiveDocs";
 import { SAMPLE_METADATA } from "./data/sampleMetadata";
 import { SAMPLE_CDX_SNAPSHOTS } from "./data/sampleCdxSnapshots";
 import { DEFAULT_SCRAPE_RESPONSE, SAMPLE_SCRAPE_RESULTS } from "./data/sampleScrapeResults";
@@ -166,24 +166,72 @@ function buildArchiveThumbnail(identifier: unknown): string | null {
 }
 
 function attachArchiveLinks(record: Record<string, unknown>): Record<string, unknown> {
-  if (record.links) {
-    return record;
+  const existingLinks =
+    record.links && typeof record.links === "object"
+      ? (record.links as Record<string, unknown>)
+      : null;
+
+  const extractLinkValue = (value: unknown): string | null => {
+    if (typeof value !== "string") {
+      return null;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  };
+
+  const archiveFromRecord = extractLinkValue(existingLinks ? existingLinks["archive"] : null);
+  const originalFromRecord = extractLinkValue(existingLinks ? existingLinks["original"] : null);
+  const waybackFromRecord = extractLinkValue(existingLinks ? existingLinks["wayback"] : null);
+
+  const generatedLinks = buildArchiveLinks(
+    record.identifier,
+    originalFromRecord ?? record["original"] ?? record["url"]
+  );
+
+  let archive = archiveFromRecord ?? generatedLinks?.archive ?? null;
+  const original = originalFromRecord ?? generatedLinks?.original ?? null;
+  if (!archive && original) {
+    archive = original;
   }
+  const wayback =
+    waybackFromRecord ?? generatedLinks?.wayback ?? (archive ? `https://web.archive.org/web/*/${archive}` : null);
 
-  const links = buildArchiveLinks(record.identifier, record.original ?? record.url);
   const thumbnail = buildArchiveThumbnail(record.identifier);
+  const existingThumbnail = typeof record["thumbnail"] === "string" ? (record["thumbnail"] as string) : null;
+  const hasExistingThumbnail = Boolean(existingThumbnail && existingThumbnail.trim().length > 0);
 
-  if (!links && !thumbnail) {
+  if (!archive && !original && !wayback && !thumbnail) {
     return record;
   }
 
   const next: Record<string, unknown> = { ...record };
-  if (links) {
-    next.links = links;
+
+  if (archive) {
+    const nextLinks: ArchiveLinks = { archive };
+    if (original) {
+      nextLinks.original = original;
+    }
+    if (wayback) {
+      nextLinks.wayback = wayback;
+    }
+
+    next.links = nextLinks;
+
+    if (typeof next["archive_url"] !== "string" || (next["archive_url"] as string).length === 0) {
+      next["archive_url"] = archive;
+    }
+    if (original && (typeof next["original_url"] !== "string" || (next["original_url"] as string).length === 0)) {
+      next["original_url"] = original;
+    }
+    if (wayback && (typeof next["wayback_url"] !== "string" || (next["wayback_url"] as string).length === 0)) {
+      next["wayback_url"] = wayback;
+    }
   }
-  if (thumbnail && !next.thumbnail) {
-    next.thumbnail = thumbnail;
+
+  if (!hasExistingThumbnail && thumbnail) {
+    next["thumbnail"] = thumbnail;
   }
+
   return next;
 }
 
@@ -210,9 +258,64 @@ function getEnv(name: string): string | undefined {
   return globalProcess?.env?.[name];
 }
 
+function configureArchiveProxyAgent(): void {
+  const proxyUrl = resolveProxyUrl();
+  if (!proxyUrl) {
+    return;
+  }
+
+  try {
+    const agent = new EnvHttpProxyAgent({
+      httpProxy: proxyUrl,
+      httpsProxy: proxyUrl,
+      noProxy: resolveNoProxyList() ?? undefined
+    });
+    setGlobalDispatcher(agent);
+    console.info("Archive HTTP client configured to route through the detected proxy endpoint.");
+  } catch (error) {
+    console.warn("Failed to configure proxy agent for archive requests.", error);
+  }
+}
+
+function resolveProxyUrl(): string | null {
+  const candidates = [
+    "ARCHIVE_HTTP_PROXY",
+    "ARCHIVE_HTTPS_PROXY",
+    "ARCHIVE_PROXY",
+    "https_proxy",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "HTTP_PROXY"
+  ];
+
+  for (const candidate of candidates) {
+    const value = getEnv(candidate);
+    if (value && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+
+  return null;
+}
+
+function resolveNoProxyList(): string | null {
+  const candidates = ["NO_PROXY", "no_proxy"];
+
+  for (const candidate of candidates) {
+    const value = getEnv(candidate);
+    if (value && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+
+  return null;
+}
+
 const nodeEnv = getEnv("NODE_ENV") ?? "development";
 const offlineFallbackEnv = getEnv("ENABLE_OFFLINE_FALLBACK");
 const offlineFallbackEnabled = offlineFallbackEnv === "true";
+
+configureArchiveProxyAgent();
 
 const NETWORK_ERROR_CODES = new Set([
   "ENOTFOUND",
@@ -393,35 +496,6 @@ async function evaluateLinkStatus(targetUrl: string): Promise<LinkStatus> {
   return "offline";
 }
 
-function extractYearValue(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return Math.trunc(value);
-  }
-
-  if (typeof value === "string") {
-    const match = value.match(/(\d{4})/);
-    if (match) {
-      const parsed = Number.parseInt(match[1], 10);
-      if (Number.isFinite(parsed)) {
-        return parsed;
-      }
-    }
-  }
-
-  return null;
-}
-
-function resolveDocumentYear(doc: SampleArchiveDoc): number | null {
-  const candidates: Array<unknown> = [doc.year, doc.date, doc.publicdate];
-  for (const candidate of candidates) {
-    const year = extractYearValue(candidate);
-    if (year !== null) {
-      return year;
-    }
-  }
-  return null;
-}
-
 function getSampleMetadata(identifier: string): ArchiveMetadataResponse | null {
   const entry = SAMPLE_METADATA[identifier as keyof typeof SAMPLE_METADATA];
   if (!entry) {
@@ -465,83 +539,6 @@ function getSampleScrapeResults(query: string): ScrapeResponse {
     fallback: true,
     query: normalizedQuery
   } satisfies ScrapeResponse;
-}
-
-function gatherSearchableText(doc: SampleArchiveDoc): string {
-  const values: string[] = [];
-
-  const append = (input: unknown) => {
-    if (typeof input === "string") {
-      values.push(input);
-    } else if (Array.isArray(input)) {
-      for (const entry of input) {
-        if (typeof entry === "string") {
-          values.push(entry);
-        }
-      }
-    }
-  };
-
-  append(doc.title);
-  append(doc.description);
-  append(doc.identifier);
-  append(doc.creator);
-  append(doc.collection);
-
-  return values.join(" ");
-}
-
-function performLocalArchiveSearch(
-  query: string,
-  page: number,
-  rows: number,
-  filters: { mediaType?: string; yearFrom?: string; yearTo?: string }
-): ArchiveSearchResponse {
-  const tokens = query
-    .toLowerCase()
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0);
-
-  const requestedMediaType = filters.mediaType?.toLowerCase() ?? "";
-  const requestedYearFrom = filters.yearFrom ? Number.parseInt(filters.yearFrom, 10) : null;
-  const requestedYearTo = filters.yearTo ? Number.parseInt(filters.yearTo, 10) : null;
-
-  const matches = SAMPLE_ARCHIVE_DOCS.filter((doc) => {
-    if (requestedMediaType && doc.mediatype?.toLowerCase() !== requestedMediaType) {
-      return false;
-    }
-
-    const year = resolveDocumentYear(doc);
-    if (requestedYearFrom !== null && (year === null || year < requestedYearFrom)) {
-      return false;
-    }
-    if (requestedYearTo !== null && (year === null || year > requestedYearTo)) {
-      return false;
-    }
-
-    if (tokens.length === 0) {
-      return true;
-    }
-
-    const haystack = gatherSearchableText(doc).toLowerCase();
-    return tokens.every((token) => haystack.includes(token));
-  });
-
-  const safePage = Number.isFinite(page) && page > 0 ? page : 1;
-  const safeRows = Number.isFinite(rows) && rows > 0 ? rows : 20;
-  const startIndex = (safePage - 1) * safeRows;
-
-  const docs = matches.slice(startIndex, startIndex + safeRows).map((doc) => attachArchiveLinks({ ...doc }));
-
-  return {
-    response: {
-      docs,
-      numFound: matches.length,
-      start: startIndex
-    },
-    fallback: true
-  };
 }
 
 const routes: Record<string, Record<string, RouteHandler>> = {
@@ -730,11 +727,14 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       return;
     }
 
-    data = performLocalArchiveSearch(query, safePage, safeRows, {
-      mediaType: mediaTypeParam,
-      yearFrom: yearFromParam,
-      yearTo: yearToParam
-    });
+    data = {
+      response: {
+        docs: [],
+        numFound: 0,
+        start: (safePage - 1) * safeRows
+      },
+      fallback: true
+    } satisfies ArchiveSearchResponse;
     usedFallback = true;
   }
 

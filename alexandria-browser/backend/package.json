@@ -8,7 +8,9 @@
     "build": "tsc",
     "start": "node dist/server.js"
   },
-  "dependencies": {},
+  "dependencies": {
+    "undici": "^6.19.8"
+  },
   "devDependencies": {
     "tsx": "^4.7.2",
     "typescript": "^5.4.0"
