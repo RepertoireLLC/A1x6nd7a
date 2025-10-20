@@ -87,6 +87,7 @@ function App() {
   const [totalResults, setTotalResults] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
   const [hasSearched, setHasSearched] = useState(() => Boolean(settings.lastQuery));
   const [resultsPerPage, setResultsPerPage] = useState(() => settings.resultsPerPage);
   const [mediaType, setMediaType] = useState(() => settings.mediaType);
@@ -150,6 +151,7 @@ function App() {
       const rows = options?.rowsOverride ?? resultsPerPage;
       setIsLoading(true);
       setError(null);
+      setFallbackNotice(null);
 
       const normalizedYearFrom = normalizeYear(yearFrom);
       const normalizedYearTo = normalizeYear(yearTo);
@@ -168,6 +170,12 @@ function App() {
           yearTo: normalizedYearTo
         });
 
+        if (payload.fallback) {
+          setFallbackNotice(
+            "Working offline — showing a limited built-in dataset while the Alexandria backend is unreachable."
+          );
+        }
+
         const docs = payload.response?.docs ?? [];
         const numFound = payload.response?.numFound ?? null;
 
@@ -178,8 +186,9 @@ function App() {
         setHasSearched(true);
         setStatuses(() => {
           const next: Record<string, LinkStatus> = {};
+          const defaultStatus: LinkStatus = payload.fallback ? "offline" : "checking";
           for (const doc of docs) {
-            next[doc.identifier] = "checking";
+            next[doc.identifier] = defaultStatus;
           }
           return next;
         });
@@ -217,7 +226,9 @@ function App() {
           resultsContainerRef.current.scrollTo({ top: 0, behavior: "smooth" });
         }
 
-        if (isLikelyUrl(searchQuery)) {
+        if (payload.fallback) {
+          setLiveStatus(null);
+        } else if (isLikelyUrl(searchQuery)) {
           setLiveStatus("checking");
           try {
             const status = await checkLinkStatus(searchQuery);
@@ -232,6 +243,7 @@ function App() {
       } catch (fetchError) {
         console.error(fetchError);
         setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
+        setFallbackNotice(null);
         setResults([]);
         setTotalResults(null);
         setTotalPages(null);
@@ -257,7 +269,7 @@ function App() {
   }, [performSearch, settings.lastQuery, settings.resultsPerPage]);
 
   useEffect(() => {
-    if (results.length === 0) {
+    if (results.length === 0 || fallbackNotice) {
       return;
     }
     let cancelled = false;
@@ -290,7 +302,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [results]);
+  }, [results, fallbackNotice]);
 
   const handleSubmit = async () => {
     const trimmed = query.trim();
@@ -628,6 +640,7 @@ function App() {
           onSaveSnapshot={handleSaveSnapshot}
           saveMeta={saveMeta}
           suggestionNode={suggestionNode}
+          notice={fallbackNotice}
         />
       </section>
 

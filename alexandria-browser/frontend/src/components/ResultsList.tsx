@@ -20,6 +20,7 @@ interface ResultsListProps {
   onSaveSnapshot: (identifier: string, url: string) => void;
   saveMeta: Record<string, { label: string; disabled: boolean; message: string | null; snapshotUrl?: string; tone?: "success" | "error" | "info" }>;
   suggestionNode: ReactNode;
+  notice?: string | null;
 }
 
 /**
@@ -41,7 +42,8 @@ export function ResultsList({
   bookmarkedIds,
   onSaveSnapshot,
   saveMeta,
-  suggestionNode
+  suggestionNode,
+  notice
 }: ResultsListProps) {
   if (isLoading) {
     return <div className="results-message">Searching the archives…</div>;
@@ -74,6 +76,11 @@ export function ResultsList({
   return (
     <>
       {suggestionNode}
+      {notice ? (
+        <div className="results-notice" role="status">
+          {notice}
+        </div>
+      ) : null}
       <div className="results-summary">
         Showing {startIndex} – {endIndex} of {totalResults ?? "?"} preserved records
       </div>

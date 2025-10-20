@@ -4,6 +4,7 @@ import type {
   SavePageResponse,
   SearchFilters
 } from "../types";
+import { performFallbackArchiveSearch } from "../utils/fallbackSearch";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
 
@@ -31,12 +32,18 @@ export async function searchArchive(
     url.searchParams.set("yearTo", filters.yearTo.trim());
   }
 
-  const response = await fetch(url.toString());
-  if (!response.ok) {
-    throw new Error(`Search failed with status ${response.status}`);
-  }
+  try {
+    const response = await fetch(url.toString());
+    if (!response.ok) {
+      console.warn(`Search request failed with status ${response.status}; using local fallback dataset.`);
+      return performFallbackArchiveSearch(query, page, rows, filters);
+    }
 
-  return (await response.json()) as ArchiveSearchResponse;
+    return (await response.json()) as ArchiveSearchResponse;
+  } catch (error) {
+    console.warn("Search request failed, using local fallback dataset.", error);
+    return performFallbackArchiveSearch(query, page, rows, filters);
+  }
 }
 
 /**

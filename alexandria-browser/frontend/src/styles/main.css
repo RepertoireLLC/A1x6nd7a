@@ -347,6 +347,15 @@ textarea {
   color: var(--harmonia-text);
 }
 
+.results-notice {
+  border-radius: var(--harmonia-radius-md);
+  padding: 0.9rem 1rem;
+  border: var(--harmonia-border-weight) solid color-mix(in srgb, var(--harmonia-accent) 22%, transparent);
+  background: color-mix(in srgb, var(--harmonia-accent) 12%, transparent);
+  color: var(--harmonia-text);
+  font-size: 0.95rem;
+}
+
 .results-summary {
   color: var(--harmonia-text-muted);
   font-size: 0.95rem;
