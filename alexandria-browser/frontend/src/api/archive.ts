@@ -33,10 +33,13 @@ const ARCHIVE_SEARCH_FIELDS = [
   "year",
   "date",
   "publicdate",
+  "score",
   "downloads",
   "originalurl",
   "original"
 ].join(",");
+
+const ARCHIVE_SEARCH_SORTS = ["score desc", "downloads desc", "publicdate desc"];
 
 const PUNCTUATION_PATTERN = /[^\p{L}\p{N}\s]+/gu;
 const LUCENE_SPECIAL_CHARS = /([+\-!(){}\[\]^"~*?:\\\/])/g;
@@ -127,6 +130,101 @@ function computeThumbnail(identifier: string, current?: string): string | undefi
     return undefined;
   }
   return `https://archive.org/services/img/${encodeURIComponent(identifier)}`;
+}
+
+function parseNumericValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const parsed = Number.parseFloat(trimmed);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function parseDateValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (value > 1000 && value < 10000) {
+      return Date.UTC(Math.trunc(value), 0, 1);
+    }
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const parsed = Date.parse(trimmed);
+    if (!Number.isNaN(parsed)) {
+      return parsed;
+    }
+
+    const yearMatch = trimmed.match(/(\d{4})/);
+    if (yearMatch) {
+      const year = Number.parseInt(yearMatch[1], 10);
+      if (Number.isFinite(year)) {
+        return Date.UTC(year, 0, 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+function getDocScore(doc: ArchiveSearchDoc): number {
+  const score = parseNumericValue(doc.score ?? null);
+  return score ?? Number.NEGATIVE_INFINITY;
+}
+
+function getDocDownloads(doc: ArchiveSearchDoc): number {
+  const downloads = parseNumericValue(doc.downloads ?? null);
+  return downloads ?? Number.NEGATIVE_INFINITY;
+}
+
+function getDocDateValue(doc: ArchiveSearchDoc): number {
+  const candidates: Array<unknown> = [doc.publicdate, doc.date, doc.year];
+  for (const candidate of candidates) {
+    const parsed = parseDateValue(candidate);
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+  return Number.NEGATIVE_INFINITY;
+}
+
+function sortDocsByRelevance(docs: ArchiveSearchDoc[]): ArchiveSearchDoc[] {
+  return docs
+    .map((doc, index) => ({
+      doc,
+      index,
+      score: getDocScore(doc),
+      downloads: getDocDownloads(doc),
+      date: getDocDateValue(doc)
+    }))
+    .sort((a, b) => {
+      if (a.score !== b.score) {
+        return b.score - a.score;
+      }
+      if (a.downloads !== b.downloads) {
+        return b.downloads - a.downloads;
+      }
+      if (a.date !== b.date) {
+        return b.date - a.date;
+      }
+      return a.index - b.index;
+    })
+    .map((entry) => entry.doc);
 }
 
 function gatherSearchableText(doc: ArchiveSearchDoc): string {
@@ -241,6 +339,7 @@ function finalizeArchivePayload(
 ): ArchiveSearchResponse {
   const docs = payload.response?.docs ?? [];
   const enrichedDocs = docs.map((doc) => enrichArchiveDoc({ ...doc }));
+  const sortedDocs = sortDocsByRelevance(enrichedDocs);
   const notice = options.notice ?? payload.search_notice ?? null;
   const transformations = options.transformations ?? payload.search_transformations ?? [];
   const connectionMode = options.connectionMode ?? payload.connection_mode ?? undefined;
@@ -249,9 +348,9 @@ function finalizeArchivePayload(
     ...payload,
     response: {
       ...payload.response,
-      docs: enrichedDocs
+      docs: sortedDocs
     },
-    results: buildResultSummaries(enrichedDocs),
+    results: buildResultSummaries(sortedDocs),
     sanitized_query: sanitizedQuery,
     ...(notice ? { search_notice: notice } : {}),
     ...(transformations.length > 0 ? { search_transformations: mergeTransformations([], transformations) } : {}),
@@ -481,6 +580,9 @@ function buildDirectArchiveSearchUrl(
   requestUrl.searchParams.set("page", String(page));
   requestUrl.searchParams.set("rows", String(rows));
   requestUrl.searchParams.set("fl", ARCHIVE_SEARCH_FIELDS);
+  for (const sort of ARCHIVE_SEARCH_SORTS) {
+    requestUrl.searchParams.append("sort[]", sort);
+  }
 
   return requestUrl;
 }

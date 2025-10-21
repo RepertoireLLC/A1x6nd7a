@@ -8,6 +8,7 @@ export interface ArchiveSearchDoc {
   title?: string;
   description?: string | string[];
   mediatype?: string;
+  score?: number | string | null;
   year?: string;
   date?: string;
   publicdate?: string;

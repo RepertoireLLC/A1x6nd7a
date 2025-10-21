@@ -34,6 +34,24 @@ const DEFAULT_USER_AGENT =
   getEnv("ARCHIVE_USER_AGENT") ??
   "Mozilla/5.0 (compatible; AlexandriaBrowser/1.0; +https://github.com/harmonia-labs/alexandria-browser)";
 
+const ARCHIVE_SEARCH_FIELDS = [
+  "identifier",
+  "title",
+  "description",
+  "creator",
+  "collection",
+  "mediatype",
+  "year",
+  "date",
+  "publicdate",
+  "score",
+  "downloads",
+  "originalurl",
+  "original"
+].join(",");
+
+const ARCHIVE_SEARCH_SORTS = ["score desc", "downloads desc", "publicdate desc"];
+
 const ALLOWED_MEDIA_TYPES = new Set([
   "texts",
   "audio",
@@ -335,6 +353,103 @@ function coerceNumber(value: unknown): number | null {
   }
 
   return null;
+}
+
+function coerceFloat(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const parsed = Number.parseFloat(trimmed);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function coerceDateValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (value > 1000 && value < 10000) {
+      return Date.UTC(Math.trunc(value), 0, 1);
+    }
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const parsed = Date.parse(trimmed);
+    if (!Number.isNaN(parsed)) {
+      return parsed;
+    }
+
+    const yearMatch = trimmed.match(/(\d{4})/);
+    if (yearMatch) {
+      const year = Number.parseInt(yearMatch[1], 10);
+      if (Number.isFinite(year)) {
+        return Date.UTC(year, 0, 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+function getRecordScore(record: Record<string, unknown>): number {
+  const score = coerceFloat(record["score"]);
+  return score ?? Number.NEGATIVE_INFINITY;
+}
+
+function getRecordDownloads(record: Record<string, unknown>): number {
+  const downloads = coerceFloat(record["downloads"]);
+  return downloads ?? Number.NEGATIVE_INFINITY;
+}
+
+function getRecordDateValue(record: Record<string, unknown>): number {
+  const candidates: Array<unknown> = [record["publicdate"], record["date"], record["year"]];
+  for (const candidate of candidates) {
+    const parsed = coerceDateValue(candidate);
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+  return Number.NEGATIVE_INFINITY;
+}
+
+function sortArchiveDocsByRelevance(
+  docs: Array<Record<string, unknown>>
+): Array<Record<string, unknown>> {
+  return docs
+    .map((doc, index) => ({
+      doc,
+      index,
+      score: getRecordScore(doc),
+      downloads: getRecordDownloads(doc),
+      date: getRecordDateValue(doc)
+    }))
+    .sort((a, b) => {
+      if (a.score !== b.score) {
+        return b.score - a.score;
+      }
+      if (a.downloads !== b.downloads) {
+        return b.downloads - a.downloads;
+      }
+      if (a.date !== b.date) {
+        return b.date - a.date;
+      }
+      return a.index - b.index;
+    })
+    .map((entry) => entry.doc);
 }
 
 function setCorsHeaders(res: ServerResponse): void {
@@ -904,23 +1019,10 @@ function buildArchiveSearchRequestUrl(
   requestUrl.searchParams.set("output", "json");
   requestUrl.searchParams.set("page", String(page));
   requestUrl.searchParams.set("rows", String(rows));
-  requestUrl.searchParams.set(
-    "fl",
-    [
-      "identifier",
-      "title",
-      "description",
-      "creator",
-      "collection",
-      "mediatype",
-      "year",
-      "date",
-      "publicdate",
-      "downloads",
-      "originalurl",
-      "original"
-    ].join(",")
-  );
+  requestUrl.searchParams.set("fl", ARCHIVE_SEARCH_FIELDS);
+  for (const sort of ARCHIVE_SEARCH_SORTS) {
+    requestUrl.searchParams.append("sort[]", sort);
+  }
 
   return requestUrl;
 }
@@ -1343,7 +1445,9 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     return doc;
   });
 
-  const summaryResults: ArchiveSearchResultSummary[] = normalizedDocs.map((doc) => {
+  const sortedDocs = sortArchiveDocsByRelevance(normalizedDocs);
+
+  const summaryResults: ArchiveSearchResultSummary[] = sortedDocs.map((doc) => {
     const record = doc && typeof doc === "object" ? (doc as Record<string, unknown>) : {};
     const identifier = coerceSingleString(record.identifier) ?? "";
     const title = coerceText(record.title) ?? identifier;
@@ -1384,12 +1488,12 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
   if (data.response) {
     data.response = {
       ...data.response,
-      docs: normalizedDocs
+      docs: sortedDocs
     };
   } else {
     data.response = {
-      docs: normalizedDocs,
-      numFound: normalizedDocs.length,
+      docs: sortedDocs,
+      numFound: sortedDocs.length,
       start: 0
     };
   }
