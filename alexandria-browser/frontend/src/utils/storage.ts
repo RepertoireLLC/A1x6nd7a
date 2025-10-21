@@ -1,18 +1,20 @@
 import type {
   BookmarkEntry,
   SearchHistoryEntry,
-  StoredSettings
+  StoredSettings,
+  NSFWFilterMode
 } from "../types";
 
 const SETTINGS_KEY = "alexandria-browser-settings";
 const HISTORY_KEY = "alexandria-browser-history";
 const HISTORY_BOOTSTRAP_KEY = "alexandria-browser-history-cleared";
 const BOOKMARKS_KEY = "alexandria-browser-bookmarks";
+const REPORT_BLACKLIST_KEY = "alexandria-browser-report-blacklist";
 
 // ADD: Default preference snapshot used when initializing or resetting stored settings.
 export const DEFAULT_SETTINGS: StoredSettings = {
   theme: "light",
-  filterNSFW: true,
+  nsfwFilterMode: "moderate",
   lastQuery: "",
   resultsPerPage: 20,
   mediaType: "all",
@@ -58,8 +60,32 @@ function writeJSON<T>(key: string, value: T) {
 /**
  * Retrieve stored application settings or default values.
  */
+type PersistedSettings = Partial<StoredSettings> & { filterNSFW?: boolean };
+
+function isValidMode(value: unknown): value is NSFWFilterMode {
+  return value === "safe" || value === "moderate" || value === "off" || value === "only";
+}
+
 export function loadSettings(): StoredSettings {
-  return readJSON(SETTINGS_KEY, DEFAULT_SETTINGS);
+  const persisted = readJSON<PersistedSettings>(SETTINGS_KEY, {} as PersistedSettings);
+
+  const resolvedMode: NSFWFilterMode = isValidMode(persisted.nsfwFilterMode)
+    ? persisted.nsfwFilterMode
+    : typeof persisted.filterNSFW === "boolean"
+    ? persisted.filterNSFW
+      ? "moderate"
+      : "off"
+    : DEFAULT_SETTINGS.nsfwFilterMode;
+
+  return {
+    theme: persisted.theme ?? DEFAULT_SETTINGS.theme,
+    nsfwFilterMode: resolvedMode,
+    lastQuery: persisted.lastQuery ?? DEFAULT_SETTINGS.lastQuery,
+    resultsPerPage: persisted.resultsPerPage ?? DEFAULT_SETTINGS.resultsPerPage,
+    mediaType: persisted.mediaType ?? DEFAULT_SETTINGS.mediaType,
+    yearFrom: persisted.yearFrom ?? DEFAULT_SETTINGS.yearFrom,
+    yearTo: persisted.yearTo ?? DEFAULT_SETTINGS.yearTo
+  };
 }
 
 /**
@@ -114,6 +140,14 @@ export function loadBookmarks(): BookmarkEntry[] {
  */
 export function saveBookmarks(bookmarks: BookmarkEntry[]) {
   writeJSON(BOOKMARKS_KEY, bookmarks);
+}
+
+export function loadBlacklist(): string[] {
+  return readJSON(REPORT_BLACKLIST_KEY, [] as string[]);
+}
+
+export function saveBlacklist(blacklist: string[]) {
+  writeJSON(REPORT_BLACKLIST_KEY, blacklist);
 }
 
 // ADD: Remove the persisted settings blob and return a fresh copy of default values.

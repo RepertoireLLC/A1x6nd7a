@@ -707,6 +707,143 @@ html[data-theme="light"] datalist option {
   transform: none;
 }
 
+.report-action {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.result-links .report-button,
+.image-result-actions .report-button {
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.05rem;
+}
+
+.report-button {
+  background: color-mix(in srgb, var(--harmonia-surface-alt) 65%, transparent);
+  border-color: color-mix(in srgb, var(--harmonia-border) 65%, transparent);
+}
+
+.report-button[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--harmonia-accent) 22%, transparent);
+  border-color: color-mix(in srgb, var(--harmonia-accent) 40%, transparent);
+}
+
+.report-menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  z-index: 40;
+  width: min(22rem, 80vw);
+  background: color-mix(in srgb, var(--harmonia-surface) 95%, transparent);
+  border: 1px solid color-mix(in srgb, var(--harmonia-border) 70%, transparent);
+  border-radius: var(--harmonia-radius-md);
+  padding: 1rem;
+  box-shadow: 0 22px 48px -28px color-mix(in srgb, var(--harmonia-glow-primary) 70%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.report-menu-title {
+  margin: 0;
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.report-menu-fieldset {
+  border: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.report-menu-fieldset legend {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--harmonia-text-muted);
+}
+
+.report-menu-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.report-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  color: color-mix(in srgb, var(--harmonia-text) 88%, transparent);
+}
+
+.report-option input {
+  accent-color: var(--harmonia-accent);
+}
+
+.report-message-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--harmonia-text-muted);
+}
+
+.report-message-label textarea {
+  width: 100%;
+  min-height: 4.5rem;
+  resize: vertical;
+  border-radius: var(--harmonia-radius-sm);
+  border: 1px solid color-mix(in srgb, var(--harmonia-border) 68%, transparent);
+  background: color-mix(in srgb, var(--harmonia-surface-muted) 80%, transparent);
+  color: var(--harmonia-text);
+  padding: 0.55rem 0.65rem;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+.report-menu-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.report-menu-actions button {
+  border-radius: var(--harmonia-radius-pill);
+  padding: 0.45rem 1.1rem;
+}
+
+.report-cancel {
+  background: transparent;
+  border: var(--harmonia-border-weight) solid color-mix(in srgb, var(--harmonia-border) 60%, transparent);
+  color: var(--harmonia-text);
+}
+
+.report-submit {
+  background: color-mix(in srgb, var(--harmonia-accent) 65%, transparent);
+  border: var(--harmonia-border-weight) solid color-mix(in srgb, var(--harmonia-accent) 75%, transparent);
+  color: var(--harmonia-on-accent, #0d0d0d);
+  font-weight: 600;
+}
+
+.report-submit:disabled {
+  opacity: 0.6;
+}
+
+.report-error {
+  margin: 0;
+  color: rgba(248, 113, 113, 0.9);
+  font-size: 0.85rem;
+}
+
 .details-button {
   background: color-mix(in srgb, var(--harmonia-accent) 22%, transparent);
   border-color: color-mix(in srgb, var(--harmonia-accent) 35%, transparent);

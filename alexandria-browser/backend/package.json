@@ -9,9 +9,12 @@
     "start": "node dist/server.js"
   },
   "dependencies": {
+    "nodemailer": "^6.9.12",
     "undici": "^7.16.0"
   },
   "devDependencies": {
+    "@types/node": "^20.11.30",
+    "@types/nodemailer": "^6.4.12",
     "tsx": "^4.7.2",
     "typescript": "^5.4.0"
   }

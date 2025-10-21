@@ -21,7 +21,8 @@ import {
   fetchArchiveMetadata,
   fetchCdxSnapshots,
   scrapeArchive,
-  getWaybackAvailability
+  getWaybackAvailability,
+  submitReport
 } from "./api/archive";
 import {
   loadBookmarks,
@@ -30,7 +31,9 @@ import {
   resetStoredSettings,
   saveBookmarks,
   saveHistory,
-  saveSettings
+  saveSettings,
+  loadBlacklist,
+  saveBlacklist
 } from "./utils/storage";
 import { isLikelyUrl, isYearValid, normalizeYear } from "./utils/validators";
 import type {
@@ -43,9 +46,11 @@ import type {
   SearchHistoryEntry,
   SpellcheckCorrection,
   StoredSettings,
+  NSFWFilterMode,
   WaybackAvailabilityResponse
 } from "./types";
 import { ItemDetailsPanel } from "./components/ItemDetailsPanel";
+import type { ReportSubmissionPayload } from "./reporting";
 
 const RESULTS_PER_PAGE_OPTIONS = [10, 20, 50];
 const MEDIA_TYPE_OPTIONS = [
@@ -74,6 +79,54 @@ const DEFAULT_SAVE_META: SaveMeta = {
   tone: "info"
 };
 
+function filterResultsByNSFWMode(
+  docs: ArchiveSearchDoc[],
+  mode: NSFWFilterMode
+): ArchiveSearchDoc[] {
+  if (mode === "safe") {
+    return docs.filter((doc) => doc.nsfw !== true);
+  }
+
+  if (mode === "only") {
+    return docs.filter((doc) => doc.nsfw === true);
+  }
+
+  return docs;
+}
+
+function deriveNSFWNotice(
+  rawDocs: ArchiveSearchDoc[],
+  filteredDocs: ArchiveSearchDoc[],
+  mode: NSFWFilterMode
+): string | null {
+  if (rawDocs.length === 0) {
+    return null;
+  }
+
+  const nsfwCount = rawDocs.reduce((total, doc) => (doc.nsfw === true ? total + 1 : total), 0);
+
+  if (mode === "safe") {
+    if (nsfwCount === 0) {
+      return null;
+    }
+    if (filteredDocs.length === 0) {
+      return "Safe Search removed all items on this page. Try a less restrictive filter to view them.";
+    }
+    return "Safe Search hid some sensitive items on this page.";
+  }
+
+  if (mode === "only") {
+    if (nsfwCount === 0) {
+      return "No NSFW results matched this page. Switch filters to see other content.";
+    }
+    if (filteredDocs.length === 0) {
+      return "This filter only shows NSFW results and none were available on this page.";
+    }
+  }
+
+  return null;
+}
+
 /**
  * Alexandria Browser root application component orchestrating layout and data fetching.
  */
@@ -86,11 +139,14 @@ function App() {
   const settings = initialSettings.current;
 
   const [theme, setTheme] = useState<"light" | "dark">(() => settings.theme);
-  const [filterNSFW, setFilterNSFW] = useState(() => settings.filterNSFW);
+  const [nsfwFilterMode, setNsfwFilterMode] = useState<NSFWFilterMode>(
+    () => settings.nsfwFilterMode
+  );
   const [query, setQuery] = useState(() => settings.lastQuery);
   const [activeQuery, setActiveQuery] = useState<string | null>(() =>
     settings.lastQuery ? settings.lastQuery : null
   );
+  const [rawResults, setRawResults] = useState<ArchiveSearchDoc[]>([]);
   const [results, setResults] = useState<ArchiveSearchDoc[]>([]);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState<number | null>(null);
@@ -109,8 +165,10 @@ function App() {
   const [suggestionCorrections, setSuggestionCorrections] = useState<SpellcheckCorrection[]>([]);
   const initialHistory = useRef<SearchHistoryEntry[]>(loadHistory());
   const initialBookmarks = useRef<BookmarkEntry[]>(loadBookmarks());
+  const initialBlacklist = useRef<string[]>(loadBlacklist());
   const [history, setHistory] = useState<SearchHistoryEntry[]>(() => initialHistory.current);
   const [bookmarks, setBookmarks] = useState<BookmarkEntry[]>(() => initialBookmarks.current);
+  const [blacklist, setBlacklist] = useState<string[]>(() => initialBlacklist.current);
   const [historyIndex, setHistoryIndex] = useState<number>(() => {
     if (!settings.lastQuery) {
       return -1;
@@ -140,6 +198,8 @@ function App() {
 
   const resultsContainerRef = useRef<HTMLDivElement | null>(null);
   const bootstrapped = useRef(false);
+  const blacklistRef = useRef<string[]>(initialBlacklist.current);
+  const nsfwModeRef = useRef<NSFWFilterMode>(settings.nsfwFilterMode);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -148,7 +208,7 @@ function App() {
   useEffect(() => {
     const settingsPayload: StoredSettings = {
       theme,
-      filterNSFW,
+      nsfwFilterMode,
       lastQuery: activeQuery ?? "",
       resultsPerPage,
       mediaType,
@@ -156,7 +216,7 @@ function App() {
       yearTo
     };
     saveSettings(settingsPayload);
-  }, [theme, filterNSFW, activeQuery, resultsPerPage, mediaType, yearFrom, yearTo]);
+  }, [theme, nsfwFilterMode, activeQuery, resultsPerPage, mediaType, yearFrom, yearTo]);
 
   useEffect(() => {
     saveHistory(history);
@@ -165,6 +225,57 @@ function App() {
   useEffect(() => {
     saveBookmarks(bookmarks);
   }, [bookmarks]);
+
+  useEffect(() => {
+    nsfwModeRef.current = nsfwFilterMode;
+    const filteredDocs = filterResultsByNSFWMode(rawResults, nsfwFilterMode);
+    setResults(filteredDocs);
+    setStatuses((previous) => {
+      const next: Record<string, LinkStatus> = {};
+      for (const doc of filteredDocs) {
+        next[doc.identifier] = previous[doc.identifier] ?? "checking";
+      }
+      return next;
+    });
+  }, [nsfwFilterMode, rawResults]);
+
+  useEffect(() => {
+    blacklistRef.current = blacklist;
+    saveBlacklist(blacklist);
+  }, [blacklist]);
+
+  useEffect(() => {
+    if (blacklist.length === 0) {
+      return;
+    }
+
+    const blacklistSet = new Set(blacklist);
+
+    setRawResults((current) => current.filter((doc) => !blacklistSet.has(doc.identifier)));
+    setResults((current) => current.filter((doc) => !blacklistSet.has(doc.identifier)));
+    setStatuses((previous) => {
+      const next = { ...previous };
+      let changed = false;
+      for (const identifier of blacklistSet) {
+        if (identifier in next) {
+          delete next[identifier];
+          changed = true;
+        }
+      }
+      return changed ? next : previous;
+    });
+    setSaveMeta((previous) => {
+      const next: typeof previous = { ...previous };
+      let changed = false;
+      for (const identifier of blacklistSet) {
+        if (identifier in next) {
+          delete next[identifier];
+          changed = true;
+        }
+      }
+      return changed ? next : previous;
+    });
+  }, [blacklist]);
 
   useEffect(() => {
     if (!selectedDoc) {
@@ -321,8 +432,17 @@ function App() {
 
         const docs = payload.response?.docs ?? [];
         const numFound = payload.response?.numFound ?? null;
+        const hiddenIdentifiers =
+          blacklistRef.current.length > 0 ? new Set(blacklistRef.current) : null;
+        const visibleDocs = hiddenIdentifiers
+          ? docs.filter((doc) => !hiddenIdentifiers.has(doc.identifier))
+          : docs;
 
-        setResults(docs);
+        setRawResults(visibleDocs);
+        const filterMode = nsfwModeRef.current;
+        const filteredDocs = filterResultsByNSFWMode(visibleDocs, filterMode);
+
+        setResults(filteredDocs);
         setTotalResults(numFound);
         setTotalPages(numFound !== null ? Math.max(1, Math.ceil(numFound / rows)) : null);
         setPage(pageNumber);
@@ -330,14 +450,14 @@ function App() {
         setStatuses(() => {
           const next: Record<string, LinkStatus> = {};
           const defaultStatus: LinkStatus = payload.fallback ? "offline" : "checking";
-          for (const doc of docs) {
+          for (const doc of filteredDocs) {
             next[doc.identifier] = defaultStatus;
           }
           return next;
         });
         setSaveMeta(() => {
           const next: Record<string, SaveMeta> = {};
-          for (const doc of docs) {
+          for (const doc of visibleDocs) {
             next[doc.identifier] = { ...DEFAULT_SAVE_META };
           }
           return next;
@@ -409,6 +529,7 @@ function App() {
         }
         setError(message);
         setFallbackNotice(null);
+        setRawResults([]);
         setResults([]);
         setTotalResults(null);
         setTotalPages(null);
@@ -606,6 +727,39 @@ function App() {
     }
   };
 
+  const handleReportSubmission = useCallback(
+    async (payload: ReportSubmissionPayload) => {
+      await submitReport(payload);
+
+      setBlacklist((previous) => {
+        if (previous.includes(payload.identifier)) {
+          return previous;
+        }
+        return [...previous, payload.identifier];
+      });
+
+      setRawResults((current) => current.filter((doc) => doc.identifier !== payload.identifier));
+      setResults((current) => current.filter((doc) => doc.identifier !== payload.identifier));
+      setStatuses((previous) => {
+        if (!(payload.identifier in previous)) {
+          return previous;
+        }
+        const next = { ...previous };
+        delete next[payload.identifier];
+        return next;
+      });
+      setSaveMeta((previous) => {
+        if (!(payload.identifier in previous)) {
+          return previous;
+        }
+        const next = { ...previous };
+        delete next[payload.identifier];
+        return next;
+      });
+    },
+    [submitReport]
+  );
+
   const handleSuggestionClick = (nextQuery: string) => {
     setQuery(nextQuery);
     setActiveQuery(nextQuery);
@@ -682,6 +836,7 @@ function App() {
   const goHome = () => {
     setQuery("");
     setActiveQuery(null);
+    setRawResults([]);
     setResults([]);
     setTotalPages(null);
     setTotalResults(null);
@@ -706,7 +861,7 @@ function App() {
     const defaults = resetStoredSettings();
     initialSettings.current = defaults;
     setTheme(defaults.theme);
-    setFilterNSFW(defaults.filterNSFW);
+    setNsfwFilterMode(defaults.nsfwFilterMode);
     setResultsPerPage(defaults.resultsPerPage);
     setMediaType(defaults.mediaType);
     setYearFrom(defaults.yearFrom);
@@ -715,6 +870,7 @@ function App() {
     setError(null);
     setIsLoading(false);
     setResults([]);
+    setRawResults([]);
     setStatuses({});
     setSaveMeta({});
     setTotalResults(null);
@@ -753,14 +909,33 @@ function App() {
   const settingsPanel = (
     <SettingsPanel
       theme={theme}
-      filterNSFW={filterNSFW}
+      nsfwFilterMode={nsfwFilterMode}
       onToggleTheme={() => setTheme((previous) => (previous === "light" ? "dark" : "light"))}
-      onToggleNSFW={setFilterNSFW}
+      onChangeNSFWMode={setNsfwFilterMode}
       onClearHistory={clearHistory}
       onClearBookmarks={clearBookmarks}
       onResetPreferences={resetPreferences}
     />
   );
+
+  const nsfwFilterNotice = useMemo(
+    () => deriveNSFWNotice(rawResults, results, nsfwFilterMode),
+    [rawResults, results, nsfwFilterMode]
+  );
+
+  const combinedNotice = useMemo(() => {
+    const messages: string[] = [];
+    if (fallbackNotice) {
+      messages.push(fallbackNotice);
+    }
+    if (nsfwFilterNotice) {
+      messages.push(nsfwFilterNotice);
+    }
+    if (messages.length === 0) {
+      return null;
+    }
+    return messages.join(" ");
+  }, [fallbackNotice, nsfwFilterNotice]);
 
   // FIX: Require a valid history pointer before enabling the Back button to avoid false positives after resets.
   const canGoBack = history.length > 0 && historyIndex >= 0 && historyIndex < history.length - 1;
@@ -857,7 +1032,7 @@ function App() {
         <ResultsList
           results={results}
           statuses={statuses}
-          filterNSFW={filterNSFW}
+          nsfwFilterMode={nsfwFilterMode}
           isLoading={isLoading}
           error={error}
           hasSearched={hasSearched}
@@ -871,8 +1046,9 @@ function App() {
           bookmarkedIds={bookmarkedIdentifiers}
           onSaveSnapshot={handleSaveSnapshot}
           saveMeta={saveMeta}
+          onReport={handleReportSubmission}
           suggestionNode={suggestionNode}
-          notice={fallbackNotice}
+          notice={combinedNotice}
           viewMode={mediaType === "image" ? "images" : "default"}
         />
       </section>

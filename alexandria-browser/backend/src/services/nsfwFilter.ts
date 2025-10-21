@@ -1,4 +1,6 @@
 export const NSFW_WORDS = [
+  "adult",
+  "afterdark",
   "porn",
   "porno",
   "nsfw",
@@ -8,7 +10,9 @@ export const NSFW_WORDS = [
   "nude",
   "naked",
   "camgirl",
+  "camgirls",
   "strip",
+  "stripper",
   "fetish",
   "milf",
   "escort",
@@ -17,7 +21,15 @@ export const NSFW_WORDS = [
   "anal",
   "erotic",
   "cum",
-  "orgy"
+  "orgy",
+  "explicit",
+  "hardcore",
+  "incest",
+  "lust",
+  "nudity",
+  "pegging",
+  "sensual",
+  "swinger"
 ];
 
 export function isNSFWContent(text: string = ""): boolean {

@@ -146,9 +146,11 @@ export interface WaybackAvailabilityResponse {
   [key: string]: unknown;
 }
 
+export type NSFWFilterMode = "safe" | "moderate" | "off" | "only";
+
 export interface StoredSettings {
   theme: "light" | "dark";
-  filterNSFW: boolean;
+  nsfwFilterMode: NSFWFilterMode;
   lastQuery: string;
   resultsPerPage: number;
   mediaType: string;

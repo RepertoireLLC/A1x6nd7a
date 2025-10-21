@@ -1,6 +1,7 @@
 import { useState } from "react";
 
-import type { ArchiveSearchDoc, LinkStatus } from "../types";
+import type { ArchiveSearchDoc, LinkStatus, NSFWFilterMode } from "../types";
+import { ReportAction, type ReportSubmitHandler } from "../reporting";
 import { getYearOrDate, mediaIcon } from "../utils/format";
 import {
   formatDisplayUrl,
@@ -23,12 +24,13 @@ interface SaveMetaEntry {
 interface ImageResultGridProps {
   results: ArchiveSearchDoc[];
   statuses: Record<string, LinkStatus>;
-  filterNSFW: boolean;
+  nsfwFilterMode: NSFWFilterMode;
   bookmarkedIds: Set<string>;
   onToggleBookmark: (identifier: string, doc: ArchiveSearchDoc) => void;
   onOpenDetails: (doc: ArchiveSearchDoc) => void;
   onSaveSnapshot: (identifier: string, url: string) => void;
   saveMeta: Record<string, SaveMetaEntry>;
+  onReport: ReportSubmitHandler;
 }
 
 const DEFAULT_SAVE_META: SaveMetaEntry = {
@@ -62,12 +64,13 @@ function getCreatorLabel(doc: ArchiveSearchDoc) {
 export function ImageResultGrid({
   results,
   statuses,
-  filterNSFW,
+  nsfwFilterMode,
   bookmarkedIds,
   onToggleBookmark,
   onOpenDetails,
   onSaveSnapshot,
-  saveMeta
+  saveMeta,
+  onReport
 }: ImageResultGridProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -80,7 +83,8 @@ export function ImageResultGrid({
         const previewSrc = getPreviewSource(doc);
         const isExpanded = expandedId === doc.identifier;
         const isNSFW = doc.nsfw === true;
-        const shouldBlur = filterNSFW && isNSFW;
+        const shouldBlur = nsfwFilterMode === "moderate" && isNSFW;
+        const showNSFWLabel = (nsfwFilterMode === "off" || nsfwFilterMode === "only") && isNSFW;
         const yearOrDate = getYearOrDate(doc);
         const creator = getCreatorLabel(doc);
         const displayUrl = formatDisplayUrl(originalUrl ?? archiveUrl);
@@ -127,7 +131,7 @@ export function ImageResultGrid({
                   <div className="image-result-meta">
                     <span>{yearOrDate}</span>
                     {creator ? <span>· {creator}</span> : null}
-                    {!filterNSFW && isNSFW ? <span className="nsfw-label">(NSFW)</span> : null}
+                    {showNSFWLabel ? <span className="nsfw-label">(NSFW)</span> : null}
                   </div>
                   <a
                     href={originalUrl ?? archiveUrl}
@@ -152,6 +156,12 @@ export function ImageResultGrid({
                     </a>
                   </div>
                   <div className="result-links image-result-actions">
+                    <ReportAction
+                      identifier={doc.identifier}
+                      archiveUrl={archiveUrl}
+                      title={doc.title || doc.identifier}
+                      onSubmit={onReport}
+                    />
                     <button
                       type="button"
                       className="bookmark-button"

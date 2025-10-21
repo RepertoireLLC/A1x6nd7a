@@ -1,15 +1,17 @@
-import type { ArchiveSearchDoc, LinkStatus } from "../types";
+import type { ArchiveSearchDoc, LinkStatus, NSFWFilterMode } from "../types";
 import { getDescription, getYearOrDate, mediaIcon } from "../utils/format";
 import { resolveDocLinks, STATUS_ARIA_LABELS, STATUS_LABELS } from "../utils/resultPresentation";
+import { ReportAction, type ReportSubmitHandler } from "../reporting";
 
 interface ResultCardProps {
   doc: ArchiveSearchDoc;
   status: LinkStatus;
-  filterNSFW: boolean;
+  nsfwFilterMode: NSFWFilterMode;
   isBookmarked: boolean;
   onToggleBookmark: (identifier: string, doc: ArchiveSearchDoc) => void;
   onSaveSnapshot: (identifier: string, url: string) => void;
   onOpenDetails: (doc: ArchiveSearchDoc) => void;
+  onReport: ReportSubmitHandler;
   saveLabel: string;
   saveDisabled: boolean;
   saveState: string | null;
@@ -23,11 +25,12 @@ interface ResultCardProps {
 export function ResultCard({
   doc,
   status,
-  filterNSFW,
+  nsfwFilterMode,
   isBookmarked,
   onToggleBookmark,
   onSaveSnapshot,
   onOpenDetails,
+  onReport,
   saveLabel,
   saveDisabled,
   saveState,
@@ -39,18 +42,20 @@ export function ResultCard({
   const yearOrDate = getYearOrDate(doc);
   const creator = Array.isArray(doc.creator) ? doc.creator.join(", ") : doc.creator ?? "";
   const isNSFW = doc.nsfw === true;
+  const shouldBlur = nsfwFilterMode === "moderate" && isNSFW;
+  const showNSFWLabel = (nsfwFilterMode === "off" || nsfwFilterMode === "only") && isNSFW;
 
   const cardClasses = ["result-card"];
   if (isNSFW) {
     cardClasses.push("result-card-nsfw");
   }
-  if (filterNSFW && isNSFW) {
+  if (shouldBlur) {
     cardClasses.push("result-card-nsfw-filtered");
   }
 
   return (
     <li className={cardClasses.join(" ")}>
-      <div className={`result-body${filterNSFW && isNSFW ? " result-body-blurred" : ""}`}>
+      <div className={`result-body${shouldBlur ? " result-body-blurred" : ""}`}>
         <div className="result-header">
           <div className="result-thumb-wrapper" aria-hidden="true">
             {doc.thumbnail ? (
@@ -66,7 +71,7 @@ export function ResultCard({
             <div className="result-meta">
               <span>{yearOrDate}</span>
               {creator ? <span>· {creator}</span> : null}
-              {!filterNSFW && isNSFW ? <span className="nsfw-label">(NSFW)</span> : null}
+              {showNSFWLabel ? <span className="nsfw-label">(NSFW)</span> : null}
             </div>
           </div>
         </div>
@@ -76,6 +81,12 @@ export function ResultCard({
             {STATUS_LABELS[status]}
           </span>
           <div className="result-links">
+            <ReportAction
+              identifier={doc.identifier}
+              archiveUrl={archiveUrl}
+              title={doc.title || doc.identifier}
+              onSubmit={onReport}
+            />
             {originalUrl ? (
               <a href={originalUrl} target="_blank" rel="noreferrer">
                 Visit original source

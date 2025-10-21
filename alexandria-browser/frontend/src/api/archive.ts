@@ -8,6 +8,7 @@ import type {
   SavePageResponse,
   SearchFilters
 } from "../types";
+import type { ReportSubmissionPayload, ReportResponse } from "../reporting";
 import { performFallbackArchiveSearch } from "../utils/fallbackSearch";
 
 const HTML_CONTENT_TYPE_PATTERN = /text\/html/i;
@@ -595,6 +596,34 @@ export async function requestSaveSnapshot(url: string): Promise<SavePageResponse
   }
 
   return (await response.json()) as SavePageResponse;
+}
+
+export async function submitReport(payload: ReportSubmissionPayload): Promise<ReportResponse> {
+  const response = await fetch(buildApiUrl("/api/report").toString(), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    throw await buildResponseError(response, `Report submission failed with status ${response.status}.`);
+  }
+
+  const data = (await response.json()) as ReportResponse;
+  if (data.success === false) {
+    const parts: string[] = [];
+    if (typeof data.error === "string" && data.error.trim()) {
+      parts.push(data.error.trim());
+    }
+    if (typeof data.details === "string" && data.details.trim()) {
+      parts.push(data.details.trim());
+    }
+    throw new Error(parts.join(" ") || "Report submission failed.");
+  }
+
+  return data;
 }
 
 export async function fetchArchiveMetadata(identifier: string): Promise<ArchiveMetadataResponse> {

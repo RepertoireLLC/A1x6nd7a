@@ -23,6 +23,7 @@ import { SAMPLE_CDX_SNAPSHOTS } from "./data/sampleCdxSnapshots";
 import { DEFAULT_SCRAPE_RESPONSE, SAMPLE_SCRAPE_RESULTS } from "./data/sampleScrapeResults";
 import { isNSFWContent } from "./services/nsfwFilter";
 import { getSpellCorrector, type SpellcheckResult } from "./services/spellCorrector";
+import { isValidReportReason, sendReportEmail, type ReportSubmission } from "./services/reporting";
 
 const ARCHIVE_SEARCH_ENDPOINT = "https://archive.org/advancedsearch.php";
 const WAYBACK_AVAILABILITY_ENDPOINT = "https://archive.org/wayback/available";
@@ -1139,6 +1140,7 @@ const routes: Record<string, Record<string, RouteHandler>> = {
     "/api/scrape": handleScrape
   },
   POST: {
+    "/api/report": handleReport,
     "/api/save": handleSave
   }
 };
@@ -1685,6 +1687,95 @@ async function handleStatus({ res, url }: HandlerContext): Promise<void> {
     console.error("Error evaluating link status", error);
     sendJson(res, 500, {
       error: "Unable to evaluate link status.",
+      details: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
+async function handleReport({ req, res }: HandlerContext): Promise<void> {
+  let payload: unknown;
+  try {
+    payload = await readJsonBody(req);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      sendJson(res, error.statusCode, { error: error.message });
+      return;
+    }
+
+    console.error("Error reading report request body", error);
+    sendJson(res, 400, { error: "Unable to read request body." });
+    return;
+  }
+
+  const data = (payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null) ?? {};
+
+  const identifierValue = data.identifier;
+  const identifier = typeof identifierValue === "string" ? identifierValue.trim() : "";
+  if (!identifier) {
+    sendJson(res, 400, { error: "Missing required field 'identifier' in request body." });
+    return;
+  }
+
+  const archiveUrlValue = data.archiveUrl;
+  const archiveUrlRaw = typeof archiveUrlValue === "string" ? archiveUrlValue.trim() : "";
+  if (!archiveUrlRaw) {
+    sendJson(res, 400, { error: "Missing required field 'archiveUrl' in request body." });
+    return;
+  }
+
+  let archiveUrl: string;
+  try {
+    const parsed = new URL(archiveUrlRaw);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("Report archive URL must use http or https.");
+    }
+    archiveUrl = parsed.toString();
+  } catch (error) {
+    console.warn("Invalid archive URL provided in report payload", error);
+    sendJson(res, 400, { error: "Invalid archive URL provided for report." });
+    return;
+  }
+
+  const reasonValue = data.reason;
+  const reasonRaw = typeof reasonValue === "string" ? reasonValue.trim() : "";
+  if (!reasonRaw) {
+    sendJson(res, 400, { error: "Missing required field 'reason' in request body." });
+    return;
+  }
+
+  if (!isValidReportReason(reasonRaw)) {
+    sendJson(res, 400, { error: "Invalid report reason provided." });
+    return;
+  }
+
+  const reason = reasonRaw as ReportSubmission["reason"];
+
+  const messageValue = data.message;
+  const messageRaw = typeof messageValue === "string" ? messageValue.trim() : "";
+  if (messageRaw.length > 2000) {
+    sendJson(res, 400, { error: "Optional message must be 2000 characters or fewer." });
+    return;
+  }
+
+  const titleValue = data.title;
+  const title = typeof titleValue === "string" ? titleValue.trim() : "";
+
+  const submission: ReportSubmission = {
+    identifier,
+    archiveUrl,
+    reason,
+    message: messageRaw ? messageRaw : undefined,
+    title: title ? title : undefined
+  };
+
+  try {
+    const result = await sendReportEmail(submission);
+    sendJson(res, 200, { success: true, messageId: result.messageId ?? null });
+  } catch (error) {
+    console.error("Failed to dispatch Alexandria Browser report email", error);
+    sendJson(res, 502, {
+      success: false,
+      error: "Unable to submit report at this time.",
       details: error instanceof Error ? error.message : String(error)
     });
   }
