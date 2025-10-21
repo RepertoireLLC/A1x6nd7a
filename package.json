@@ -10,7 +10,9 @@
     "dev": "npm run --workspaces --if-present --parallel dev",
     "build": "npm run --workspaces --if-present build",
     "start": "npm run --workspaces --if-present start",
-    "dev:alexandria": "npm-run-all --parallel dev --workspace alexandria-browser/backend dev --workspace alexandria-browser/frontend",
+    "dev:backend": "npm run dev --workspace alexandria-browser/backend",
+    "dev:frontend": "npm run dev --workspace alexandria-browser/frontend",
+    "dev:alexandria": "npm-run-all --parallel dev:backend dev:frontend",
     "build:alexandria": "npm run build --workspace alexandria-browser/backend && npm run build --workspace alexandria-browser/frontend"
   },
   "devDependencies": {

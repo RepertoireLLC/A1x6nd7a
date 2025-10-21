@@ -53,6 +53,17 @@ function createFriendlySearchError(error: unknown): Error {
     return new Error("Search request failed. Please try again later.");
   }
 
+  if (isApiErrorInfo(error)) {
+    const message = error.message?.trim();
+    if (error.type === "network") {
+      return new Error(message || "Unable to reach the Internet Archive. Please check your connection and try again.");
+    }
+    if (error.type === "invalid-response") {
+      return new Error(message || "Invalid response from Internet Archive. Please try again later.");
+    }
+    return new Error(message || "Search request failed. Please try again later.");
+  }
+
   if (error instanceof DirectArchiveSearchError) {
     const message = error.message ?? "";
     if (error.status && error.status >= 500) {
@@ -126,8 +137,140 @@ function resolveApiBaseUrl(): string {
 
 const API_BASE_URL = resolveApiBaseUrl();
 
+export interface ApiErrorInfo {
+  message: string;
+  status?: number;
+  details?: string;
+  type?: "network" | "invalid-response" | "server";
+}
+
+export type ApiResult<T> =
+  | { ok: true; data: T; status: number }
+  | { ok: false; error: ApiErrorInfo; status?: number };
+
 function buildApiUrl(path: string): URL {
   return new URL(path, `${API_BASE_URL}/`);
+}
+
+function createApiError(message: string, extras?: Partial<ApiErrorInfo>): ApiResult<never> {
+  return {
+    ok: false,
+    error: {
+      message,
+      ...extras,
+    },
+    status: extras?.status,
+  };
+}
+
+function previewBody(body: string): string {
+  return body.slice(0, HTML_PREVIEW_LIMIT).replace(/\s+/g, " ").trim();
+}
+
+function isApiErrorInfo(value: unknown): value is ApiErrorInfo {
+  return Boolean(value && typeof value === "object" && "message" in (value as Record<string, unknown>));
+}
+
+async function buildResponseErrorMessage(response: Response, fallbackMessage: string): Promise<string> {
+  const contentType = response.headers.get("content-type") ?? "";
+
+  if (contentType.includes("application/json")) {
+    try {
+      const payload = (await response.json()) as { error?: unknown; details?: unknown } | null;
+      const parts: string[] = [];
+      if (payload && typeof payload === "object") {
+        const errorText = payload.error;
+        const detailText = payload.details;
+        if (typeof errorText === "string" && errorText.trim()) {
+          parts.push(errorText.trim());
+        }
+        if (typeof detailText === "string" && detailText.trim()) {
+          parts.push(detailText.trim());
+        }
+      }
+
+      if (parts.length > 0) {
+        return `${fallbackMessage} ${parts.join(" ")}`.trim();
+      }
+    } catch (error) {
+      console.warn("Failed to parse error response payload", error);
+    }
+  }
+
+  try {
+    const text = (await response.text()).trim();
+    if (text) {
+      return `${fallbackMessage} ${text}`.trim();
+    }
+  } catch (error) {
+    console.warn("Failed to read error response body", error);
+  }
+
+  return fallbackMessage;
+}
+
+async function safeJsonFetch<T>(
+  input: string,
+  init: RequestInit | undefined,
+  fallbackMessage: string
+): Promise<ApiResult<T>> {
+  let response: Response;
+  try {
+    response = await fetch(input, init);
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+    return createApiError("Unable to reach the Alexandria service. Please check your connection and try again.", {
+      details,
+      type: "network",
+    });
+  }
+
+  const clone = response.clone();
+  let rawBody = "";
+  try {
+    rawBody = await response.text();
+  } catch (error) {
+    console.warn("Failed to read response body", error);
+  }
+
+  const trimmedBody = rawBody.trim();
+  const contentType = response.headers.get("content-type") ?? "";
+
+  if (!response.ok) {
+    const message = await buildResponseErrorMessage(clone, fallbackMessage);
+    return createApiError(message, {
+      status: response.status,
+      details: trimmedBody ? previewBody(trimmedBody) : undefined,
+      type: response.status >= 500 ? "server" : "invalid-response",
+    });
+  }
+
+  if (!trimmedBody) {
+    return createApiError("The Alexandria service returned an empty response.", {
+      status: response.status,
+      type: "invalid-response",
+    });
+  }
+
+  if (isLikelyHtmlResponse(trimmedBody, contentType)) {
+    return createApiError("Received invalid HTML response from the Alexandria service.", {
+      status: response.status,
+      details: previewBody(trimmedBody),
+      type: "invalid-response",
+    });
+  }
+
+  try {
+    const data = JSON.parse(trimmedBody) as T;
+    return { ok: true, data, status: response.status };
+  } catch (error) {
+    console.warn("Failed to parse response as JSON", error, { preview: previewBody(trimmedBody) });
+    return createApiError("Failed to parse response from the Alexandria service.", {
+      status: response.status,
+      details: previewBody(trimmedBody),
+      type: "invalid-response",
+    });
+  }
 }
 
 interface DirectArchiveSearchAttempt {
@@ -441,10 +584,12 @@ export async function searchArchive(
   page: number,
   rows: number,
   filters: SearchFilters
-): Promise<ArchiveSearchResponse> {
+): Promise<ApiResult<ArchiveSearchResponse>> {
   const sanitizedQuery = query.trim();
   if (!sanitizedQuery) {
-    throw new Error("Please enter a search query before searching the Internet Archive.");
+    return createApiError("Please enter a search query before searching the Internet Archive.", {
+      type: "invalid-response",
+    });
   }
 
   const url = buildApiUrl("/api/searchArchive");
@@ -464,77 +609,52 @@ export async function searchArchive(
 
   let lastError: unknown = null;
 
-  try {
-    const response = await fetch(url.toString(), {
-      headers: { Accept: "application/json" }
-    });
-    if (!response.ok) {
-      throw await buildResponseError(
-        response,
-        `Search request failed with status ${response.status}.`
-      );
-    }
+  const requestResult = await safeJsonFetch<ArchiveSearchResponse>(
+    url.toString(),
+    { headers: { Accept: "application/json" } },
+    "Search request failed."
+  );
 
-    const rawBody = await response.text();
-    const trimmedBody = rawBody.trim();
-    if (!trimmedBody) {
-      throw new Error("Search request returned an empty response body.");
+  if (requestResult.ok) {
+    const payload = requestResult.data;
+    if (!archiveApiSuccessLogged) {
+      console.info("Archive API fully connected. Live search 100% operational.");
+      archiveApiSuccessLogged = true;
     }
-
-    const contentType = response.headers.get("content-type") ?? "";
-    if (isLikelyHtmlResponse(trimmedBody, contentType)) {
-      const preview = trimmedBody.slice(0, HTML_PREVIEW_LIMIT).replace(/\s+/g, " ").trim();
-      console.warn("Received non-JSON response from Internet Archive search endpoint.", {
-        contentType,
-        preview
-      });
-      throw new Error("Invalid response from Internet Archive. Please try again later.");
+    if (payload.fallback) {
+      if (payload.fallback_message) {
+        console.warn("Archive search fell back to offline dataset:", payload.fallback_message);
+      } else {
+        console.warn("Archive search fell back to offline dataset.");
+      }
+      if (payload.fallback_reason) {
+        console.warn("Offline fallback reason:", payload.fallback_reason);
+      }
     }
-
-    try {
-      const payload = JSON.parse(trimmedBody) as ArchiveSearchResponse;
-      if (!archiveApiSuccessLogged) {
-        console.info("Archive API fully connected. Live search 100% operational.");
-        archiveApiSuccessLogged = true;
+    if (payload.search_strategy && payload.search_strategy !== "primary search with fuzzy expansion") {
+      const strategyDetails = payload.search_strategy_query?.trim();
+      console.info("Archive search completed using fallback strategy:", payload.search_strategy);
+      if (strategyDetails) {
+        console.info("Retry used simplified query:", strategyDetails);
       }
-      if (payload.fallback) {
-        if (payload.fallback_message) {
-          console.warn("Archive search fell back to offline dataset:", payload.fallback_message);
-        } else {
-          console.warn("Archive search fell back to offline dataset.");
-        }
-        if (payload.fallback_reason) {
-          console.warn("Offline fallback reason:", payload.fallback_reason);
-        }
-      }
-      if (payload.search_strategy && payload.search_strategy !== "primary search with fuzzy expansion") {
-        const strategyDetails = payload.search_strategy_query?.trim();
-        console.info("Archive search completed using fallback strategy:", payload.search_strategy);
-        if (strategyDetails) {
-          console.info("Retry used simplified query:", strategyDetails);
-        }
-      }
-      return payload;
-    } catch (parseError) {
-      const preview = trimmedBody.slice(0, HTML_PREVIEW_LIMIT).replace(/\s+/g, " ").trim();
-      console.warn("Failed to parse Internet Archive search response as JSON.", parseError, {
-        preview
-      });
-      throw new Error("Invalid response from Internet Archive. Please try again later.");
     }
-  } catch (error) {
-    lastError = error;
-    console.warn("Alexandria API search request failed. Attempting direct Internet Archive connection.", error);
+    return requestResult;
   }
+
+  lastError = requestResult.error;
+  console.warn(
+    "Alexandria API search request failed. Attempting direct Internet Archive connection.",
+    requestResult.error
+  );
 
   try {
     const directFilters: SearchFilters = {
       mediaType: filters.mediaType.trim(),
       yearFrom: filters.yearFrom.trim(),
-      yearTo: filters.yearTo.trim()
+      yearTo: filters.yearTo.trim(),
     };
     const { payload } = await executeDirectArchiveSearch(sanitizedQuery, page, rows, directFilters);
-    return payload;
+    return { ok: true, data: payload, status: 200 };
   } catch (directError) {
     lastError = directError;
     console.error("Direct Internet Archive search failed.", directError);
@@ -542,163 +662,136 @@ export async function searchArchive(
 
   if (OFFLINE_FALLBACK_ENABLED) {
     console.warn("Search request failed, using local fallback dataset.", lastError);
-    return performFallbackArchiveSearch(sanitizedQuery, page, rows, filters);
+    const fallbackPayload = performFallbackArchiveSearch(sanitizedQuery, page, rows, filters);
+    return { ok: true, data: fallbackPayload, status: 200 };
   }
 
-  throw createFriendlySearchError(lastError);
+  const friendlyError = createFriendlySearchError(lastError);
+  const errorDetails = isApiErrorInfo(lastError) ? lastError : undefined;
+  return createApiError(friendlyError.message, {
+    status: errorDetails?.status,
+    details: errorDetails?.details,
+    type: errorDetails?.type,
+  });
 }
 
 /**
  * Request link availability for the provided URL.
  */
-export async function checkLinkStatus(url: string): Promise<LinkStatus> {
+export async function checkLinkStatus(url: string): Promise<ApiResult<LinkStatus>> {
   const request = buildApiUrl("/api/status");
   request.searchParams.set("url", url);
 
-  const response = await fetch(request.toString());
-  if (!response.ok) {
-    throw new Error(`Status check failed with status ${response.status}`);
+  const result = await safeJsonFetch<{ status?: LinkStatus }>(
+    request.toString(),
+    undefined,
+    "Status check failed."
+  );
+
+  if (!result.ok) {
+    return result;
   }
 
-  const payload = (await response.json()) as { status?: LinkStatus };
-  return payload.status ?? "offline";
+  const status = result.data.status ?? "offline";
+  return { ok: true, data: status, status: result.status };
 }
 
 /**
  * Query the Wayback Machine availability endpoint.
  */
-export async function getWaybackAvailability(url: string) {
+export async function getWaybackAvailability(url: string): Promise<ApiResult<WaybackAvailabilityResponse>> {
   const request = buildApiUrl("/api/wayback");
   request.searchParams.set("url", url);
 
-  const response = await fetch(request.toString());
-  if (!response.ok) {
-    throw new Error(`Wayback availability failed with status ${response.status}`);
-  }
-
-  return response.json() as Promise<WaybackAvailabilityResponse>;
+  return safeJsonFetch<WaybackAvailabilityResponse>(
+    request.toString(),
+    undefined,
+    "Wayback availability request failed."
+  );
 }
 
 /**
  * Ask the backend to request a Save Page Now snapshot for the URL.
  */
-export async function requestSaveSnapshot(url: string): Promise<SavePageResponse> {
-  const response = await fetch(buildApiUrl("/api/save").toString(), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
+export async function requestSaveSnapshot(url: string): Promise<ApiResult<SavePageResponse>> {
+  return safeJsonFetch<SavePageResponse>(
+    buildApiUrl("/api/save").toString(),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ url }),
     },
-    body: JSON.stringify({ url })
-  });
-
-  if (!response.ok) {
-    throw new Error(`Save Page Now request failed with status ${response.status}`);
-  }
-
-  return (await response.json()) as SavePageResponse;
+    "Save Page Now request failed."
+  );
 }
 
-export async function submitReport(payload: ReportSubmissionPayload): Promise<ReportResponse> {
-  const response = await fetch(buildApiUrl("/api/report").toString(), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
+export async function submitReport(payload: ReportSubmissionPayload): Promise<ApiResult<ReportResponse>> {
+  const result = await safeJsonFetch<ReportResponse>(
+    buildApiUrl("/api/report").toString(),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
     },
-    body: JSON.stringify(payload)
-  });
+    "Report submission failed."
+  );
 
-  if (!response.ok) {
-    throw await buildResponseError(response, `Report submission failed with status ${response.status}.`);
+  if (!result.ok) {
+    return result;
   }
 
-  const data = (await response.json()) as ReportResponse;
-  if (data.success === false) {
+  if (result.data.success === false) {
     const parts: string[] = [];
-    if (typeof data.error === "string" && data.error.trim()) {
-      parts.push(data.error.trim());
+    if (typeof result.data.error === "string" && result.data.error.trim()) {
+      parts.push(result.data.error.trim());
     }
-    if (typeof data.details === "string" && data.details.trim()) {
-      parts.push(data.details.trim());
+    if (typeof result.data.details === "string" && result.data.details.trim()) {
+      parts.push(result.data.details.trim());
     }
-    throw new Error(parts.join(" ") || "Report submission failed.");
+    return createApiError(parts.join(" ") || "Report submission failed.", {
+      type: "invalid-response",
+      status: result.status,
+    });
   }
 
-  return data;
+  return result;
 }
 
-export async function fetchArchiveMetadata(identifier: string): Promise<ArchiveMetadataResponse> {
+export async function fetchArchiveMetadata(identifier: string): Promise<ApiResult<ArchiveMetadataResponse>> {
   const request = buildApiUrl("/api/metadata");
   request.searchParams.set("identifier", identifier);
 
-  const response = await fetch(request.toString());
-  if (!response.ok) {
-    throw new Error(`Metadata request failed with status ${response.status}`);
-  }
-
-  return (await response.json()) as ArchiveMetadataResponse;
+  return safeJsonFetch<ArchiveMetadataResponse>(
+    request.toString(),
+    undefined,
+    "Metadata request failed."
+  );
 }
 
-export async function fetchCdxSnapshots(targetUrl: string, limit = 25): Promise<CdxResponse> {
+export async function fetchCdxSnapshots(targetUrl: string, limit = 25): Promise<ApiResult<CdxResponse>> {
   const request = buildApiUrl("/api/cdx");
   request.searchParams.set("url", targetUrl);
   request.searchParams.set("limit", String(limit));
 
-  const response = await fetch(request.toString());
-  if (!response.ok) {
-    throw new Error(`CDX timeline request failed with status ${response.status}`);
-  }
-
-  return (await response.json()) as CdxResponse;
+  return safeJsonFetch<CdxResponse>(
+    request.toString(),
+    undefined,
+    "CDX timeline request failed."
+  );
 }
 
-export async function scrapeArchive(query: string, count = 5): Promise<ScrapeResponse> {
+export async function scrapeArchive(query: string, count = 5): Promise<ApiResult<ScrapeResponse>> {
   const request = buildApiUrl("/api/scrape");
   request.searchParams.set("query", query);
   request.searchParams.set("count", String(count));
 
-  const response = await fetch(request.toString());
-  if (!response.ok) {
-    throw new Error(`Scrape request failed with status ${response.status}`);
-  }
-
-  return (await response.json()) as ScrapeResponse;
-}
-
-async function buildResponseError(response: Response, fallbackMessage: string): Promise<Error> {
-  const contentType = response.headers.get("content-type") ?? "";
-  const responseClone = response.clone();
-
-  if (contentType.includes("application/json")) {
-    try {
-      const payload = (await responseClone.json()) as { error?: unknown; details?: unknown } | null;
-      const parts: string[] = [];
-      if (payload && typeof payload === "object") {
-        const errorText = payload.error;
-        const detailText = payload.details;
-        if (typeof errorText === "string" && errorText.trim()) {
-          parts.push(errorText.trim());
-        }
-        if (typeof detailText === "string" && detailText.trim()) {
-          parts.push(detailText.trim());
-        }
-      }
-
-      if (parts.length > 0) {
-        return new Error(`${fallbackMessage} ${parts.join(" ")}`.trim());
-      }
-    } catch (error) {
-      console.warn("Failed to parse error response payload", error);
-    }
-  }
-
-  try {
-    const text = (await response.text()).trim();
-    if (text) {
-      return new Error(`${fallbackMessage} ${text}`.trim());
-    }
-  } catch (error) {
-    console.warn("Failed to read error response body", error);
-  }
-
-  return new Error(fallbackMessage);
+  return safeJsonFetch<ScrapeResponse>(
+    request.toString(),
+    undefined,
+    "Archive highlights request failed."
+  );
 }

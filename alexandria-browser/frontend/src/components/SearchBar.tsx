@@ -6,6 +6,7 @@ interface SearchBarProps {
   onChange: (next: string) => void;
   onSubmit: () => void;
   onSelectSuggestion: (suggestion: string) => void;
+  isLoading?: boolean;
 }
 
 /**
@@ -16,7 +17,8 @@ export function SearchBar({
   suggestions,
   onChange,
   onSubmit,
-  onSelectSuggestion
+  onSelectSuggestion,
+  isLoading = false
 }: SearchBarProps) {
   const suggestionSet = useMemo(() => Array.from(new Set(suggestions)), [suggestions]);
 
@@ -45,8 +47,19 @@ export function SearchBar({
           placeholder="Seek the Alexandria archives or paste a URL"
           aria-label="Search the web and archives"
         />
-        <button type="button" className="search-button harmonia-glow-button" onClick={handleSubmit}>
-          Initiate Search
+        <button
+          type="button"
+          className="search-button harmonia-glow-button"
+          onClick={handleSubmit}
+          disabled={isLoading}
+        >
+          {isLoading ? (
+            <span className="search-button-loading" aria-live="polite">
+              <span className="button-spinner" aria-hidden="true" /> Searching…
+            </span>
+          ) : (
+            "Initiate Search"
+          )}
         </button>
       </div>
 

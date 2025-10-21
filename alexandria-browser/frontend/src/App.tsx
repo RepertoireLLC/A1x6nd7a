@@ -223,21 +223,16 @@ function App() {
     let cancelled = false;
 
     setMetadataState((previous) => ({ ...previous, loading: true, error: null }));
-    void fetchArchiveMetadata(selectedDoc.identifier)
-      .then((payload) => {
-        if (!cancelled) {
-          setMetadataState({ data: payload, loading: false, error: null });
-        }
-      })
-      .catch((metadataError) => {
-        if (!cancelled) {
-          setMetadataState({
-            data: null,
-            loading: false,
-            error: metadataError instanceof Error ? metadataError.message : String(metadataError)
-          });
-        }
-      });
+    void fetchArchiveMetadata(selectedDoc.identifier).then((result) => {
+      if (cancelled) {
+        return;
+      }
+      if (result.ok) {
+        setMetadataState({ data: result.data, loading: false, error: null });
+      } else {
+        setMetadataState({ data: null, loading: false, error: result.error.message });
+      }
+    });
 
     const archiveUrl =
       selectedDoc.archive_url ??
@@ -245,21 +240,16 @@ function App() {
       `https://archive.org/details/${encodeURIComponent(selectedDoc.identifier)}`;
 
     setTimelineState((previous) => ({ ...previous, loading: true, error: null }));
-    void fetchCdxSnapshots(archiveUrl, 80)
-      .then((payload) => {
-        if (!cancelled) {
-          setTimelineState({ data: payload, loading: false, error: null });
-        }
-      })
-      .catch((timelineError) => {
-        if (!cancelled) {
-          setTimelineState({
-            data: null,
-            loading: false,
-            error: timelineError instanceof Error ? timelineError.message : String(timelineError)
-          });
-        }
-      });
+    void fetchCdxSnapshots(archiveUrl, 80).then((result) => {
+      if (cancelled) {
+        return;
+      }
+      if (result.ok) {
+        setTimelineState({ data: result.data, loading: false, error: null });
+      } else {
+        setTimelineState({ data: null, loading: false, error: result.error.message });
+      }
+    });
 
     const collections = Array.isArray(selectedDoc.collection)
       ? selectedDoc.collection
@@ -275,21 +265,21 @@ function App() {
 
     setRelatedError(null);
     setRelatedFallback(false);
-    void scrapeArchive(query, 6)
-      .then((payload) => {
-        if (!cancelled) {
-          const filtered = payload.items.filter((item) => item.identifier !== selectedDoc.identifier);
-          setRelatedItems(filtered);
-          setRelatedFallback(Boolean(payload.fallback));
-        }
-      })
-      .catch((relatedErr) => {
-        if (!cancelled) {
-          setRelatedItems([]);
-          setRelatedFallback(false);
-          setRelatedError(relatedErr instanceof Error ? relatedErr.message : String(relatedErr));
-        }
-      });
+    void scrapeArchive(query, 6).then((result) => {
+      if (cancelled) {
+        return;
+      }
+      if (result.ok) {
+        const filtered = result.data.items.filter((item) => item.identifier !== selectedDoc.identifier);
+        setRelatedItems(filtered);
+        setRelatedFallback(Boolean(result.data.fallback));
+        setRelatedError(null);
+      } else {
+        setRelatedItems([]);
+        setRelatedFallback(false);
+        setRelatedError(result.error.message);
+      }
+    });
 
     return () => {
       cancelled = true;
@@ -333,11 +323,29 @@ function App() {
           throw new Error("The start year cannot be later than the end year.");
         }
 
-        const payload = await searchArchive(safeQuery, pageNumber, rows, {
+        const result = await searchArchive(safeQuery, pageNumber, rows, {
           mediaType,
           yearFrom: normalizedYearFrom,
           yearTo: normalizedYearTo
         });
+
+        if (!result.ok) {
+          console.warn("Archive search failed", result.error);
+          const message = result.error.message?.trim() || "Search request failed. Please try again later.";
+          setError(message);
+          setFallbackNotice(null);
+          setResults([]);
+          setTotalResults(null);
+          setTotalPages(null);
+          setStatuses({});
+          setSaveMeta({});
+          setSuggestedQuery(null);
+          setSuggestionCorrections([]);
+          setLiveStatus(null);
+          return;
+        }
+
+        const payload = result.data;
 
         if (payload.fallback) {
           const fallbackReason = payload.fallback_reason?.trim() ?? "";
@@ -426,18 +434,30 @@ function App() {
           setLiveStatus("checking");
           setWaybackDetails(null);
           setWaybackError(null);
-          try {
-            const [status, availability] = await Promise.all([
-              checkLinkStatus(safeQuery),
-              getWaybackAvailability(safeQuery)
-            ]);
-            setLiveStatus(status);
-            setWaybackDetails(availability);
-          } catch (statusError) {
-            console.warn("Failed to check live status", statusError);
+          const [statusResult, availabilityResult] = await Promise.all([
+            checkLinkStatus(safeQuery),
+            getWaybackAvailability(safeQuery)
+          ]);
+
+          let combinedError: string | null = null;
+
+          if (statusResult.ok) {
+            setLiveStatus(statusResult.data);
+          } else {
+            console.warn("Failed to check live status", statusResult.error);
             setLiveStatus("offline");
-            setWaybackError(statusError instanceof Error ? statusError.message : String(statusError));
+            combinedError = statusResult.error.message;
           }
+
+          if (availabilityResult.ok) {
+            setWaybackDetails(availabilityResult.data);
+          } else {
+            console.warn("Failed to load Wayback availability", availabilityResult.error);
+            setWaybackDetails(null);
+            combinedError = combinedError ?? availabilityResult.error.message;
+          }
+
+          setWaybackError(combinedError);
         } else {
           setLiveStatus(null);
           setWaybackDetails(null);
@@ -495,13 +515,12 @@ function App() {
             doc.archive_url ??
             doc.links?.archive ??
             `https://archive.org/details/${encodeURIComponent(doc.identifier)}`;
-          try {
-            const status = await checkLinkStatus(targetUrl);
-            return [doc.identifier, status] as const;
-          } catch (errorStatus) {
-            console.warn("Status check failed", errorStatus);
-            return [doc.identifier, "offline"] as const;
+          const statusResult = await checkLinkStatus(targetUrl);
+          if (statusResult.ok) {
+            return [doc.identifier, statusResult.data] as const;
           }
+          console.warn("Status check failed", statusResult.error);
+          return [doc.identifier, "offline"] as const;
         })
       );
       if (!cancelled) {
@@ -627,37 +646,42 @@ function App() {
         tone: "info"
       }
     }));
-    try {
-      const response = await requestSaveSnapshot(archiveUrl);
-      setSaveMeta((previous) => ({
-        ...previous,
-        [identifier]: {
-          label: "Save to Archive",
-          disabled: false,
-          message: response.success
-            ? response.message ?? "Snapshot request accepted."
-            : response.error ?? "Save Page Now reported an error.",
-          snapshotUrl: response.snapshotUrl,
-          tone: response.success ? "success" : "error"
-        }
-      }));
-    } catch (saveError) {
-      console.error("Save Page Now failed", saveError);
+    const result = await requestSaveSnapshot(archiveUrl);
+    if (!result.ok) {
+      console.warn("Save Page Now failed", result.error);
       setSaveMeta((previous) => ({
         ...previous,
         [identifier]: {
           label: "Try again",
           disabled: false,
-          message: "Unable to contact Save Page Now.",
+          message: result.error.message || "Unable to contact Save Page Now.",
           tone: "error"
         }
       }));
+      return;
     }
+
+    const response = result.data;
+    setSaveMeta((previous) => ({
+      ...previous,
+      [identifier]: {
+        label: "Save to Archive",
+        disabled: false,
+        message: response.success
+          ? response.message ?? "Snapshot request accepted."
+          : response.error ?? "Save Page Now reported an error.",
+        snapshotUrl: response.snapshotUrl,
+        tone: response.success ? "success" : "error"
+      }
+    }));
   };
 
   const handleReportSubmission = useCallback(
     async (payload: ReportSubmissionPayload) => {
-      await submitReport(payload);
+      const result = await submitReport(payload);
+      if (!result.ok) {
+        throw new Error(result.error.message || "Report submission failed.");
+      }
 
       setBlacklist((previous) => {
         if (previous.includes(payload.identifier)) {
@@ -871,6 +895,7 @@ function App() {
           onChange={setQuery}
           onSubmit={handleSubmit}
           onSelectSuggestion={handleSuggestionClick}
+          isLoading={isLoading}
         />
       </BrowserNav>
 
