@@ -873,6 +873,7 @@ function App() {
           saveMeta={saveMeta}
           suggestionNode={suggestionNode}
           notice={fallbackNotice}
+          viewMode={mediaType === "image" ? "images" : "default"}
         />
       </section>
 
