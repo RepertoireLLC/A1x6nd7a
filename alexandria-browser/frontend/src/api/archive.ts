@@ -19,7 +19,7 @@ const HTML_CONTENT_TYPE_PATTERN = /text\/html/i;
 const HTML_DOCTYPE_PATTERN = /^\s*<!DOCTYPE\s+html/i;
 const HTML_TAG_PATTERN = /^\s*<html/i;
 const HTML_PREVIEW_LIMIT = 200;
-const NETWORK_ERROR_MESSAGE_PATTERN = /(failed to fetch|fetch failed|network\s?error|network request failed|load failed|connection refused|dns lookup failed)/i;
+const NETWORK_ERROR_MESSAGE_PATTERN = /(failed to fetch|fetch failed|network\s?error|network request failed|load failed|connection refused|dns lookup failed|Proxy response \(\d+\) !== 200 when HTTP Tunneling)/i;
 
 const ARCHIVE_SEARCH_ENDPOINT = "https://archive.org/advancedsearch.php";
 const ARCHIVE_PRIMARY_STRATEGY = "primary search with fuzzy expansion";
@@ -101,6 +101,34 @@ function mergeTransformations(current: string[], next: string[]): string[] {
     }
   }
   return Array.from(seen);
+}
+
+function collectStringValues(value: unknown): string[] {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return [String(value)];
+  }
+
+  if (Array.isArray(value)) {
+    const results: string[] = [];
+    for (const entry of value) {
+      if (typeof entry === "string") {
+        const trimmed = entry.trim();
+        if (trimmed) {
+          results.push(trimmed);
+        }
+      } else if (typeof entry === "number" && Number.isFinite(entry)) {
+        results.push(String(entry));
+      }
+    }
+    return results;
+  }
+
+  return [];
 }
 
 function computeArchiveLinks(identifier: string, existing?: ArchiveDocLinks): ArchiveDocLinks {
@@ -203,16 +231,198 @@ function getDocDateValue(doc: ArchiveSearchDoc): number {
   return Number.NEGATIVE_INFINITY;
 }
 
-function sortDocsByRelevance(docs: ArchiveSearchDoc[]): ArchiveSearchDoc[] {
+const SCORING_PUNCTUATION_PATTERN = /[^\p{L}\p{N}]+/gu;
+
+function normalizeMatchText(value: string): string {
+  return value.normalize("NFKC").toLowerCase();
+}
+
+function gatherNormalizedStrings(value: unknown): string[] {
+  return collectStringValues(value)
+    .map((entry) => normalizeMatchText(entry))
+    .filter((entry) => entry.length > 0);
+}
+
+function joinNormalizedStrings(value: unknown): string {
+  return gatherNormalizedStrings(value).join(" ");
+}
+
+function buildRelevanceContext(query: string): { normalizedQuery: string; tokens: string[] } {
+  const normalizedQuery = normalizeMatchText(query).trim();
+  const base = normalizedQuery.replace(SCORING_PUNCTUATION_PATTERN, " ");
+  const tokens = base
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+  const uniqueTokens = Array.from(new Set(tokens));
+  return { normalizedQuery, tokens: uniqueTokens };
+}
+
+function computeDocTextSignals(
+  doc: ArchiveSearchDoc,
+  context: { normalizedQuery: string; tokens: string[] }
+): {
+  matchScore: number;
+  coverage: number;
+  exactTitle: boolean;
+  exactIdentifier: boolean;
+  titleStartsWith: boolean;
+  identifierStartsWith: boolean;
+} {
+  const record = doc as Record<string, unknown>;
+  const titleText = joinNormalizedStrings(record["title"]);
+  const identifierText = joinNormalizedStrings(record["identifier"]);
+  const descriptionText = joinNormalizedStrings(record["description"]);
+  const creatorText = joinNormalizedStrings(record["creator"]);
+  const collectionText = joinNormalizedStrings(record["collection"]);
+  const subjectText = joinNormalizedStrings(record["subject"]);
+  const tagsText = joinNormalizedStrings(record["tags"]);
+  const topicText = joinNormalizedStrings(record["topic"]);
+  const keywordsText = joinNormalizedStrings(record["keywords"]);
+
+  const combinedText = [
+    titleText,
+    descriptionText,
+    creatorText,
+    collectionText,
+    subjectText,
+    tagsText,
+    topicText,
+    keywordsText
+  ]
+    .filter((value) => value.length > 0)
+    .join(" ");
+
+  const normalizedQuery = context.normalizedQuery;
+  let matchScore = 0;
+  const matchedTokens = new Set<string>();
+
+  const hasNormalizedQuery = normalizedQuery.length > 0;
+  const exactTitle = hasNormalizedQuery && titleText === normalizedQuery;
+  const exactIdentifier = hasNormalizedQuery && identifierText === normalizedQuery;
+  const titleStartsWith = hasNormalizedQuery && titleText.startsWith(normalizedQuery);
+  const identifierStartsWith = hasNormalizedQuery && identifierText.startsWith(normalizedQuery);
+
+  if (exactTitle) {
+    matchScore += 200;
+  } else if (titleStartsWith) {
+    matchScore += 90;
+  } else if (hasNormalizedQuery && titleText.includes(normalizedQuery)) {
+    matchScore += 60;
+  }
+
+  if (exactIdentifier) {
+    matchScore += 160;
+  } else if (identifierStartsWith) {
+    matchScore += 70;
+  } else if (hasNormalizedQuery && identifierText.includes(normalizedQuery)) {
+    matchScore += 45;
+  }
+
+  if (hasNormalizedQuery && descriptionText.includes(normalizedQuery)) {
+    matchScore += 35;
+  }
+
+  if (hasNormalizedQuery && creatorText.includes(normalizedQuery)) {
+    matchScore += 25;
+  }
+
+  const evaluateToken = (token: string): void => {
+    if (!token) {
+      return;
+    }
+
+    if (titleText.includes(token)) {
+      matchScore += 16;
+      matchedTokens.add(token);
+      return;
+    }
+
+    if (identifierText.includes(token)) {
+      matchScore += 14;
+      matchedTokens.add(token);
+      return;
+    }
+
+    if (creatorText.includes(token)) {
+      matchScore += 12;
+      matchedTokens.add(token);
+      return;
+    }
+
+    if (collectionText.includes(token)) {
+      matchScore += 10;
+      matchedTokens.add(token);
+      return;
+    }
+
+    if (combinedText.includes(token)) {
+      matchScore += 6;
+      matchedTokens.add(token);
+    }
+  };
+
+  for (const token of context.tokens) {
+    evaluateToken(token);
+  }
+
+  const coverage = matchedTokens.size;
+  if (coverage > 0) {
+    matchScore += coverage * 4;
+  }
+  if (coverage === context.tokens.length && coverage > 0) {
+    matchScore += 8;
+  }
+
+  return {
+    matchScore,
+    coverage,
+    exactTitle,
+    exactIdentifier,
+    titleStartsWith,
+    identifierStartsWith
+  };
+}
+
+function sortDocsByRelevance(docs: ArchiveSearchDoc[], query: string): ArchiveSearchDoc[] {
+  const context = buildRelevanceContext(query);
+
   return docs
-    .map((doc, index) => ({
-      doc,
-      index,
-      score: getDocScore(doc),
-      downloads: getDocDownloads(doc),
-      date: getDocDateValue(doc)
-    }))
+    .map((doc, index) => {
+      const textSignals = computeDocTextSignals(doc, context);
+      return {
+        doc,
+        index,
+        score: getDocScore(doc),
+        downloads: getDocDownloads(doc),
+        date: getDocDateValue(doc),
+        matchScore: textSignals.matchScore,
+        coverage: textSignals.coverage,
+        exactTitle: textSignals.exactTitle,
+        exactIdentifier: textSignals.exactIdentifier,
+        titleStartsWith: textSignals.titleStartsWith,
+        identifierStartsWith: textSignals.identifierStartsWith
+      };
+    })
     .sort((a, b) => {
+      if (a.exactTitle !== b.exactTitle) {
+        return Number(b.exactTitle) - Number(a.exactTitle);
+      }
+      if (a.exactIdentifier !== b.exactIdentifier) {
+        return Number(b.exactIdentifier) - Number(a.exactIdentifier);
+      }
+      if (a.titleStartsWith !== b.titleStartsWith) {
+        return Number(b.titleStartsWith) - Number(a.titleStartsWith);
+      }
+      if (a.identifierStartsWith !== b.identifierStartsWith) {
+        return Number(b.identifierStartsWith) - Number(a.identifierStartsWith);
+      }
+      if (a.matchScore !== b.matchScore) {
+        return b.matchScore - a.matchScore;
+      }
+      if (a.coverage !== b.coverage) {
+        return b.coverage - a.coverage;
+      }
       if (a.score !== b.score) {
         return b.score - a.score;
       }
@@ -339,7 +549,7 @@ function finalizeArchivePayload(
 ): ArchiveSearchResponse {
   const docs = payload.response?.docs ?? [];
   const enrichedDocs = docs.map((doc) => enrichArchiveDoc({ ...doc }));
-  const sortedDocs = sortDocsByRelevance(enrichedDocs);
+  const sortedDocs = sortDocsByRelevance(enrichedDocs, sanitizedQuery);
   const notice = options.notice ?? payload.search_notice ?? null;
   const transformations = options.transformations ?? payload.search_transformations ?? [];
   const connectionMode = options.connectionMode ?? payload.connection_mode ?? undefined;

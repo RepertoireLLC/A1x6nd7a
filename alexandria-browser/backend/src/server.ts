@@ -15,7 +15,7 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
-import { ProxyAgent, setGlobalDispatcher } from "undici";
+import { Agent, ProxyAgent, setGlobalDispatcher } from "undici";
 
 import { SAMPLE_ARCHIVE_DOCS, type SampleArchiveDoc } from "./data/sampleArchiveDocs";
 import { SAMPLE_METADATA } from "./data/sampleMetadata";
@@ -68,6 +68,8 @@ const ALLOWED_MEDIA_TYPES = new Set([
 const YEAR_PATTERN = /^\d{4}$/;
 
 type LinkStatus = "online" | "archived-only" | "offline";
+
+type FetchRequestInit = RequestInit & { dispatcher?: unknown };
 
 type ArchiveSearchResultSummary = {
   identifier: string;
@@ -426,18 +428,201 @@ function getRecordDateValue(record: Record<string, unknown>): number {
   return Number.NEGATIVE_INFINITY;
 }
 
+const SCORING_PUNCTUATION_PATTERN = /[^\p{L}\p{N}]+/gu;
+
+function normalizeMatchText(value: string): string {
+  return value.normalize("NFKC").toLowerCase();
+}
+
+function gatherNormalizedStrings(value: unknown): string[] {
+  return collectStringValues(value)
+    .map((entry) => normalizeMatchText(entry))
+    .filter((entry) => entry.length > 0);
+}
+
+function joinNormalizedStrings(value: unknown): string {
+  return gatherNormalizedStrings(value).join(" ");
+}
+
+function buildRelevanceContext(query: string): { normalizedQuery: string; tokens: string[] } {
+  const normalizedQuery = normalizeMatchText(query).trim();
+  const base = normalizedQuery.replace(SCORING_PUNCTUATION_PATTERN, " ");
+  const tokens = base
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+  const uniqueTokens = Array.from(new Set(tokens));
+  return { normalizedQuery, tokens: uniqueTokens };
+}
+
+function computeDocTextSignals(
+  record: Record<string, unknown>,
+  context: { normalizedQuery: string; tokens: string[] }
+): {
+  matchScore: number;
+  coverage: number;
+  exactTitle: boolean;
+  exactIdentifier: boolean;
+  titleStartsWith: boolean;
+  identifierStartsWith: boolean;
+} {
+  const titleText = joinNormalizedStrings(record["title"]);
+  const identifierText = joinNormalizedStrings(record["identifier"]);
+  const descriptionText = joinNormalizedStrings(record["description"]);
+  const creatorText = joinNormalizedStrings(record["creator"]);
+  const collectionText = joinNormalizedStrings(record["collection"]);
+  const subjectText = joinNormalizedStrings(record["subject"]);
+  const tagsText = joinNormalizedStrings(record["tags"]);
+  const topicText = joinNormalizedStrings(record["topic"]);
+  const keywordsText = joinNormalizedStrings(record["keywords"]);
+
+  const combinedText = [
+    titleText,
+    descriptionText,
+    creatorText,
+    collectionText,
+    subjectText,
+    tagsText,
+    topicText,
+    keywordsText
+  ]
+    .filter((value) => value.length > 0)
+    .join(" ");
+
+  const normalizedQuery = context.normalizedQuery;
+  let matchScore = 0;
+  const matchedTokens = new Set<string>();
+
+  const hasNormalizedQuery = normalizedQuery.length > 0;
+  const exactTitle = hasNormalizedQuery && titleText === normalizedQuery;
+  const exactIdentifier = hasNormalizedQuery && identifierText === normalizedQuery;
+  const titleStartsWith = hasNormalizedQuery && titleText.startsWith(normalizedQuery);
+  const identifierStartsWith = hasNormalizedQuery && identifierText.startsWith(normalizedQuery);
+
+  if (exactTitle) {
+    matchScore += 200;
+  } else if (titleStartsWith) {
+    matchScore += 90;
+  } else if (hasNormalizedQuery && titleText.includes(normalizedQuery)) {
+    matchScore += 60;
+  }
+
+  if (exactIdentifier) {
+    matchScore += 160;
+  } else if (identifierStartsWith) {
+    matchScore += 70;
+  } else if (hasNormalizedQuery && identifierText.includes(normalizedQuery)) {
+    matchScore += 45;
+  }
+
+  if (hasNormalizedQuery && descriptionText.includes(normalizedQuery)) {
+    matchScore += 35;
+  }
+
+  if (hasNormalizedQuery && creatorText.includes(normalizedQuery)) {
+    matchScore += 25;
+  }
+
+  const evaluateToken = (token: string): void => {
+    if (!token) {
+      return;
+    }
+
+    if (titleText.includes(token)) {
+      matchScore += 16;
+      matchedTokens.add(token);
+      return;
+    }
+
+    if (identifierText.includes(token)) {
+      matchScore += 14;
+      matchedTokens.add(token);
+      return;
+    }
+
+    if (creatorText.includes(token)) {
+      matchScore += 12;
+      matchedTokens.add(token);
+      return;
+    }
+
+    if (collectionText.includes(token)) {
+      matchScore += 10;
+      matchedTokens.add(token);
+      return;
+    }
+
+    if (combinedText.includes(token)) {
+      matchScore += 6;
+      matchedTokens.add(token);
+    }
+  };
+
+  for (const token of context.tokens) {
+    evaluateToken(token);
+  }
+
+  const coverage = matchedTokens.size;
+  if (coverage > 0) {
+    matchScore += coverage * 4;
+  }
+  if (coverage === context.tokens.length && coverage > 0) {
+    matchScore += 8;
+  }
+
+  return {
+    matchScore,
+    coverage,
+    exactTitle,
+    exactIdentifier,
+    titleStartsWith,
+    identifierStartsWith
+  };
+}
+
 function sortArchiveDocsByRelevance(
-  docs: Array<Record<string, unknown>>
+  docs: Array<Record<string, unknown>>,
+  query: string
 ): Array<Record<string, unknown>> {
+  const context = buildRelevanceContext(query);
+
   return docs
-    .map((doc, index) => ({
-      doc,
-      index,
-      score: getRecordScore(doc),
-      downloads: getRecordDownloads(doc),
-      date: getRecordDateValue(doc)
-    }))
+    .map((doc, index) => {
+      const record = doc ?? {};
+      const textSignals = computeDocTextSignals(record, context);
+      return {
+        doc,
+        index,
+        score: getRecordScore(record),
+        downloads: getRecordDownloads(record),
+        date: getRecordDateValue(record),
+        matchScore: textSignals.matchScore,
+        coverage: textSignals.coverage,
+        exactTitle: textSignals.exactTitle,
+        exactIdentifier: textSignals.exactIdentifier,
+        titleStartsWith: textSignals.titleStartsWith,
+        identifierStartsWith: textSignals.identifierStartsWith
+      };
+    })
     .sort((a, b) => {
+      if (a.exactTitle !== b.exactTitle) {
+        return Number(b.exactTitle) - Number(a.exactTitle);
+      }
+      if (a.exactIdentifier !== b.exactIdentifier) {
+        return Number(b.exactIdentifier) - Number(a.exactIdentifier);
+      }
+      if (a.titleStartsWith !== b.titleStartsWith) {
+        return Number(b.titleStartsWith) - Number(a.titleStartsWith);
+      }
+      if (a.identifierStartsWith !== b.identifierStartsWith) {
+        return Number(b.identifierStartsWith) - Number(a.identifierStartsWith);
+      }
+      if (a.matchScore !== b.matchScore) {
+        return b.matchScore - a.matchScore;
+      }
+      if (a.coverage !== b.coverage) {
+        return b.coverage - a.coverage;
+      }
       if (a.score !== b.score) {
         return b.score - a.score;
       }
@@ -503,6 +688,59 @@ function maskProxyForLog(raw: string): string {
   } catch {
     return raw;
   }
+}
+
+const PROXY_TUNNEL_ERROR_PATTERN = /Proxy response \(\d+\) !== 200 when HTTP Tunneling/i;
+
+let directArchiveAgent: Agent | null = null;
+
+function getDirectArchiveAgent(): Agent {
+  if (!directArchiveAgent) {
+    directArchiveAgent = new Agent({
+      connect: {
+        timeout: 30_000
+      }
+    });
+  }
+  return directArchiveAgent;
+}
+
+function isProxyTunnelError(error: unknown): boolean {
+  if (!error) {
+    return false;
+  }
+
+  const visited = new Set<unknown>();
+  const queue: unknown[] = [error];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || typeof current !== "object") {
+      continue;
+    }
+
+    if (visited.has(current)) {
+      continue;
+    }
+    visited.add(current);
+
+    const record = current as { code?: unknown; message?: unknown; cause?: unknown };
+    const code = record.code;
+    if (typeof code === "string" && code === "UND_ERR_ABORTED") {
+      return true;
+    }
+
+    const message = record.message;
+    if (typeof message === "string" && PROXY_TUNNEL_ERROR_PATTERN.test(message)) {
+      return true;
+    }
+
+    if ("cause" in record && record.cause && !visited.has(record.cause)) {
+      queue.push(record.cause);
+    }
+  }
+
+  return false;
 }
 
 if (proxyUrl) {
@@ -599,15 +837,20 @@ const NETWORK_ERROR_CODES = new Set([
   "ECONNRESET",
   "ETIMEDOUT",
   "EHOSTUNREACH",
-  "ENETUNREACH"
+  "ENETUNREACH",
+  "UND_ERR_ABORTED"
 ]);
 
 const NETWORK_ERROR_MESSAGE_PATTERN =
-  /(ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|NetworkError)/i;
+  /(ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|NetworkError|Proxy response \(\d+\) !== 200 when HTTP Tunneling)/i;
 
 function isNetworkError(error: unknown): boolean {
   if (!error) {
     return false;
+  }
+
+  if (isProxyTunnelError(error)) {
+    return true;
   }
 
   if (error instanceof TypeError && error.message === "fetch failed") {
@@ -719,9 +962,9 @@ function describeArchiveFallback(
 }
 
 function applyDefaultHeaders(
-  init: RequestInit | undefined,
+  init: FetchRequestInit | undefined,
   additionalHeaders: Record<string, string> = {}
-): RequestInit {
+): FetchRequestInit {
   const headers = new Headers(init?.headers);
   headers.set("User-Agent", DEFAULT_USER_AGENT);
   for (const [key, value] of Object.entries(additionalHeaders)) {
@@ -1077,10 +1320,13 @@ function buildArchiveSearchAttempts(
   });
 }
 
-async function fetchArchiveSearchAttempt(attempt: ArchiveSearchAttempt): Promise<ArchiveSearchResponse> {
+async function executeArchiveSearchFetch(
+  attempt: ArchiveSearchAttempt,
+  init?: FetchRequestInit
+): Promise<ArchiveSearchResponse> {
   const response = await fetch(
     attempt.url,
-    applyDefaultHeaders(undefined, { Accept: "application/json" })
+    applyDefaultHeaders(init, { Accept: "application/json" })
   );
 
   const contentType = response.headers.get("content-type") ?? "";
@@ -1103,6 +1349,7 @@ async function fetchArchiveSearchAttempt(attempt: ArchiveSearchAttempt): Promise
   if (!trimmedBody) {
     throw new ArchiveSearchResponseError("Archive API returned an empty response body.", {
       retryable: true,
+      contentType,
       kind: "empty-body"
     });
   }
@@ -1118,7 +1365,9 @@ async function fetchArchiveSearchAttempt(attempt: ArchiveSearchAttempt): Promise
   }
 
   try {
-    return JSON.parse(trimmedBody) as ArchiveSearchResponse;
+    const data = JSON.parse(trimmedBody) as ArchiveSearchResponse;
+    logArchiveConnectivitySuccess();
+    return data;
   } catch (error) {
     const preview = buildPreviewSnippet(trimmedBody);
     throw new ArchiveSearchResponseError("Archive API returned malformed JSON.", {
@@ -1127,6 +1376,20 @@ async function fetchArchiveSearchAttempt(attempt: ArchiveSearchAttempt): Promise
       contentType,
       kind: "malformed-json"
     });
+  }
+}
+
+async function fetchArchiveSearchAttempt(attempt: ArchiveSearchAttempt): Promise<ArchiveSearchResponse> {
+  try {
+    return await executeArchiveSearchFetch(attempt);
+  } catch (error) {
+    if (isProxyTunnelError(error)) {
+      console.warn("Archive proxy rejected search request. Retrying without proxy.", {
+        query: attempt.query
+      });
+      return await executeArchiveSearchFetch(attempt, { dispatcher: getDirectArchiveAgent() });
+    }
+    throw error;
   }
 }
 
@@ -1445,7 +1708,8 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     return doc;
   });
 
-  const sortedDocs = sortArchiveDocsByRelevance(normalizedDocs);
+  const scoringQuery = query ?? "";
+  const sortedDocs = sortArchiveDocsByRelevance(normalizedDocs, scoringQuery);
 
   const summaryResults: ArchiveSearchResultSummary[] = sortedDocs.map((doc) => {
     const record = doc && typeof doc === "object" ? (doc as Record<string, unknown>) : {};
