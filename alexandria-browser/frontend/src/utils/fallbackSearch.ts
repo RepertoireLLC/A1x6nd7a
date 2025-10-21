@@ -1,5 +1,11 @@
 import { SAMPLE_ARCHIVE_DOCS } from "../data/sampleArchiveDocs";
 import type { ArchiveDocLinks, ArchiveSearchDoc, ArchiveSearchResponse, SearchFilters } from "../types";
+import {
+  buildRelevanceContext,
+  computeDocTextSignals,
+  gatherSearchableText,
+  sortDocsByRelevance
+} from "./relevance";
 
 function extractYearValue(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -28,30 +34,6 @@ function resolveDocumentYear(doc: ArchiveSearchDoc): number | null {
     }
   }
   return null;
-}
-
-function gatherSearchableText(doc: ArchiveSearchDoc): string {
-  const values: string[] = [];
-
-  const append = (input: unknown) => {
-    if (typeof input === "string") {
-      values.push(input);
-    } else if (Array.isArray(input)) {
-      for (const entry of input) {
-        if (typeof entry === "string") {
-          values.push(entry);
-        }
-      }
-    }
-  };
-
-  append(doc.title);
-  append(doc.description);
-  append(doc.identifier);
-  append(doc.creator);
-  append(doc.collection);
-
-  return values.join(" ");
 }
 
 function computeArchiveLinks(identifier: string, existing?: ArchiveDocLinks): ArchiveDocLinks {
@@ -101,23 +83,28 @@ export function performFallbackArchiveSearch(
   rows: number,
   filters: SearchFilters
 ): ArchiveSearchResponse {
-  const tokens = query
-    .toLowerCase()
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0);
+  const context = buildRelevanceContext(query);
+  const tokens = context.tokens;
 
-  const requestedMediaType = filters.mediaType?.toLowerCase() ?? "";
+  const requestedMediaTypeRaw = filters.mediaType?.toLowerCase().trim() ?? "";
+  const requestedMediaType = requestedMediaTypeRaw && requestedMediaTypeRaw !== "all" ? requestedMediaTypeRaw : null;
   const requestedYearFrom = filters.yearFrom ? Number.parseInt(filters.yearFrom, 10) : null;
   const requestedYearTo = filters.yearTo ? Number.parseInt(filters.yearTo, 10) : null;
+  const candidateEntries = SAMPLE_ARCHIVE_DOCS.map((doc) => {
+    const enriched = enrichDoc({ ...doc });
+    const signals = computeDocTextSignals(enriched, context);
+    const year = resolveDocumentYear(doc);
+    const haystack = gatherSearchableText(enriched);
+    return { doc: enriched, signals, year, haystack };
+  });
 
-  const matches = SAMPLE_ARCHIVE_DOCS.filter((doc) => {
-    if (requestedMediaType && doc.mediatype?.toLowerCase() !== requestedMediaType) {
+  const filtered = candidateEntries.filter((entry) => {
+    if (requestedMediaType && (entry.doc.mediatype?.toLowerCase() ?? "") !== requestedMediaType) {
       return false;
     }
 
     if (requestedYearFrom !== null || requestedYearTo !== null) {
-      const year = resolveDocumentYear(doc);
+      const year = entry.year;
       if (requestedYearFrom !== null && (year === null || year < requestedYearFrom)) {
         return false;
       }
@@ -130,23 +117,44 @@ export function performFallbackArchiveSearch(
       return true;
     }
 
-    const haystack = gatherSearchableText(doc).toLowerCase();
-    return tokens.every((token) => haystack.includes(token));
+    if (entry.signals.coverage > 0) {
+      return true;
+    }
+
+    // As a final fallback, attempt a substring match against the combined text to surface close results.
+    return entry.haystack.includes(context.normalizedQuery);
   });
 
   const safePage = Number.isFinite(page) && page > 0 ? page : 1;
   const safeRows = Number.isFinite(rows) && rows > 0 ? rows : 20;
   const startIndex = (safePage - 1) * safeRows;
 
-  const docs = matches.slice(startIndex, startIndex + safeRows).map((doc) => enrichDoc({ ...doc }));
+  const orderedDocs = sortDocsByRelevance(
+    filtered.map((entry) => entry.doc),
+    query
+  );
+
+  const docs = orderedDocs.slice(startIndex, startIndex + safeRows);
+
+  const hasTokens = tokens.length > 0;
+  const hasPartialMatches = hasTokens && filtered.some((entry) => entry.signals.coverage > 0 && entry.signals.coverage < tokens.length);
+  const transformations = ["offline-dataset"];
+  if (hasPartialMatches) {
+    transformations.push("partial-token-match");
+  }
 
   return {
     response: {
       docs,
-      numFound: matches.length,
+      numFound: filtered.length,
       start: startIndex
     },
     fallback: true,
-    spellcheck: null
+    spellcheck: null,
+    search_strategy: "offline relevance fallback",
+    ...(hasPartialMatches
+      ? { search_notice: "No exact results. Showing closest matches:" }
+      : {}),
+    ...(transformations.length > 0 ? { search_transformations: transformations } : {})
   };
 }

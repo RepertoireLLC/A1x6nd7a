@@ -50,7 +50,7 @@ const ARCHIVE_SEARCH_FIELDS = [
   "original"
 ].join(",");
 
-const ARCHIVE_SEARCH_SORTS = ["score desc", "downloads desc", "publicdate desc"];
+const ARCHIVE_SEARCH_SORTS = ["downloads desc", "publicdate desc"];
 
 const ALLOWED_MEDIA_TYPES = new Set([
   "texts",
@@ -774,7 +774,8 @@ type ArchiveSearchErrorKind =
   | "http-status"
   | "empty-body"
   | "html-response"
-  | "malformed-json";
+  | "malformed-json"
+  | "api-error";
 
 class ArchiveSearchResponseError extends Error {
   public readonly retryable: boolean;
@@ -1365,7 +1366,15 @@ async function executeArchiveSearchFetch(
   }
 
   try {
-    const data = JSON.parse(trimmedBody) as ArchiveSearchResponse;
+    const data = JSON.parse(trimmedBody) as ArchiveSearchResponse & { error?: unknown };
+    if (data && typeof data === "object" && typeof data.error === "string" && data.error.trim()) {
+      throw new ArchiveSearchResponseError(`Archive API returned an error payload: ${data.error.trim()}`, {
+        retryable: true,
+        preview: data.error.trim(),
+        contentType,
+        kind: "api-error"
+      });
+    }
     logArchiveConnectivitySuccess();
     return data;
   } catch (error) {
