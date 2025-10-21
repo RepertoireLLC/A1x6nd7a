@@ -342,29 +342,54 @@ function App() {
           );
         }
 
-        const noticeText = payload.search_notice?.trim() ?? null;
+        const docs = payload.response?.docs ?? [];
+        const normalizedMediaType = mediaType.trim().toLowerCase();
+        const filteredDocs =
+          normalizedMediaType && normalizedMediaType !== "all"
+            ? docs.filter((doc) => (doc.mediatype ?? "").toString().toLowerCase() === normalizedMediaType)
+            : docs;
+        const filteredOutCount = docs.length - filteredDocs.length;
+
+        const rawNumFound = payload.response?.numFound;
+        const hasNumericTotal = typeof rawNumFound === "number" && Number.isFinite(rawNumFound);
+        const totalMatches = hasNumericTotal ? (rawNumFound as number) : filteredDocs.length;
+
+        const baseNotice = payload.search_notice?.trim() ?? null;
+        let noticeText = baseNotice;
+        if (normalizedMediaType && normalizedMediaType !== "all" && filteredOutCount > 0) {
+          const mediaLabel =
+            MEDIA_TYPE_OPTIONS.find((option) => option.value === normalizedMediaType)?.label ??
+            normalizedMediaType;
+          const loweredLabel = mediaLabel.toLowerCase();
+          const removalMessage =
+            filteredOutCount === 1
+              ? `Removed 1 result that was not categorized as ${loweredLabel}.`
+              : `Removed ${filteredOutCount} results that were not categorized as ${loweredLabel}.`;
+          noticeText = noticeText ? `${noticeText} ${removalMessage}` : removalMessage;
+        }
         setSearchNotice(noticeText);
 
-        const docs = payload.response?.docs ?? [];
-        const numFound = payload.response?.numFound ?? null;
+        const safeRows = rows > 0 ? rows : 20;
 
-        setResults(docs);
-        setTotalResults(numFound);
-        setTotalPages(numFound !== null ? Math.max(1, Math.ceil(numFound / rows)) : null);
+        setResults(filteredDocs);
+        setTotalResults(totalMatches);
+        setTotalPages(
+          hasNumericTotal ? Math.max(1, Math.ceil((totalMatches || 1) / safeRows)) : null
+        );
         setPage(pageNumber);
         setHasSearched(true);
         setStatuses(() => {
           const next: Record<string, LinkStatus> = {};
           const defaultStatus: LinkStatus =
             payload.fallback || nextConnectionMode !== "backend" ? "offline" : "checking";
-          for (const doc of docs) {
+          for (const doc of filteredDocs) {
             next[doc.identifier] = defaultStatus;
           }
           return next;
         });
         setSaveMeta(() => {
           const next: Record<string, SaveMeta> = {};
-          for (const doc of docs) {
+          for (const doc of filteredDocs) {
             next[doc.identifier] = { ...DEFAULT_SAVE_META };
           }
           return next;
@@ -696,6 +721,31 @@ function App() {
     setHistoryIndex(-1);
   };
 
+  const deleteHistoryEntry = useCallback((entry: SearchHistoryEntry) => {
+    setHistory((previous) => {
+      const index = previous.findIndex(
+        (item) => item.timestamp === entry.timestamp && item.query === entry.query
+      );
+      if (index === -1) {
+        return previous;
+      }
+      const next = [...previous.slice(0, index), ...previous.slice(index + 1)];
+      setHistoryIndex((currentIndex) => {
+        if (currentIndex < 0) {
+          return next.length > 0 ? currentIndex : -1;
+        }
+        if (index < currentIndex) {
+          return currentIndex - 1;
+        }
+        if (index === currentIndex) {
+          return next.length > 0 ? Math.min(currentIndex, next.length - 1) : -1;
+        }
+        return currentIndex;
+      });
+      return next;
+    });
+  }, []);
+
   const clearBookmarks = () => {
     setBookmarks([]);
   };
@@ -887,6 +937,7 @@ function App() {
           setSidebarOpen(false);
           handleSuggestionClick(value);
         }}
+        onDeleteHistoryItem={deleteHistoryEntry}
         onRemoveBookmark={removeBookmark}
         settingsPanel={settingsPanel}
       />

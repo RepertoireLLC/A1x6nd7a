@@ -1003,6 +1003,27 @@ textarea {
   box-shadow: 0 12px 28px -22px var(--harmonia-glow-primary);
 }
 
+.history-list-item {
+  align-items: stretch;
+}
+
+.history-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  flex: 1;
+}
+
+.history-remove-button {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.45);
+  color: rgba(248, 113, 113, 0.95);
+  padding: 0.4rem 0.75rem;
+  align-self: flex-start;
+  white-space: nowrap;
+  font-size: 0.85rem;
+}
+
 .sidebar-item-meta {
   font-size: 0.75rem;
   color: var(--harmonia-text-muted);
