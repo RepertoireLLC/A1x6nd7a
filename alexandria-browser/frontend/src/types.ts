@@ -148,6 +148,7 @@ export interface SiteImageEntry {
   archived_url: string;
   image_url: string;
   thumbnail_url: string;
+  nsfw?: boolean;
 }
 
 export interface SiteImageResponse {

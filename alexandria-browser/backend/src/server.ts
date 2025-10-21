@@ -168,6 +168,7 @@ type SiteImageEntry = {
   archived_url: string;
   image_url: string;
   thumbnail_url: string;
+  nsfw?: boolean;
 };
 
 type SiteImageResponse = {

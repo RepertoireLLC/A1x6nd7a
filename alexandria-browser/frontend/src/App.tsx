@@ -63,6 +63,11 @@ const MEDIA_TYPE_OPTIONS = [
   { value: "data", label: "Data" }
 ] as const;
 
+const RESULTS_TAB_ID = "search-results-tab";
+const RESULTS_PANEL_ID = "search-results-panel";
+const IMAGES_TAB_ID = "site-images-tab";
+const IMAGES_PANEL_ID = "site-images-panel";
+
 interface SaveMeta {
   label: string;
   disabled: boolean;
@@ -177,6 +182,7 @@ function App() {
   const [siteImagesFallback, setSiteImagesFallback] = useState(false);
   const [siteImagesTotal, setSiteImagesTotal] = useState<number | undefined>(undefined);
   const [siteImagesSite, setSiteImagesSite] = useState<string>("");
+  const [activeResultsTab, setActiveResultsTab] = useState<"results" | "images">("results");
 
   const resultsContainerRef = useRef<HTMLDivElement | null>(null);
   const siteImagesRequestId = useRef(0);
@@ -381,8 +387,12 @@ function App() {
 
       const urlQuery = isLikelyUrl(safeQuery);
       if (urlQuery) {
-        const shouldRefreshImages = pageNumber === 1 || safeQuery !== siteImagesQuery;
+        const isNewSiteQuery = safeQuery !== siteImagesQuery;
+        const shouldRefreshImages = pageNumber === 1 || isNewSiteQuery;
         setSiteImagesQuery(safeQuery);
+        if (isNewSiteQuery) {
+          setActiveResultsTab("images");
+        }
         if (shouldRefreshImages) {
           siteImagesRequestId.current += 1;
           setSiteImagesError(null);
@@ -396,6 +406,7 @@ function App() {
           void loadSiteImages(safeQuery, 1, false);
         }
       } else {
+        setActiveResultsTab("results");
         siteImagesRequestId.current += 1;
         setSiteImagesQuery(null);
         setSiteImages([]);
@@ -835,6 +846,7 @@ function App() {
   const goHome = () => {
     setQuery("");
     setActiveQuery(null);
+    setActiveResultsTab("results");
     setResults([]);
     setTotalPages(null);
     setTotalResults(null);
@@ -916,6 +928,7 @@ function App() {
     const trimmedQuery = defaults.lastQuery.trim();
     setQuery(trimmedQuery);
     setActiveQuery(null);
+    setActiveResultsTab("results");
     setHasSearched(false);
     setHistoryIndex(-1);
     siteImagesRequestId.current += 1;
@@ -1057,41 +1070,85 @@ function App() {
 
       <section className="results-container" aria-live="polite" ref={resultsContainerRef}>
         {siteImagesQuery ? (
-          <SiteImageGallery
-            items={siteImages}
-            query={siteImagesQuery}
-            site={siteImagesSite}
-            scope={siteImagesScope}
-            page={siteImagesPage}
-            total={siteImagesTotal}
-            isLoading={siteImagesLoading}
-            error={siteImagesError}
-            hasMore={siteImagesHasMore}
-            fallback={siteImagesFallback}
-            onLoadMore={handleLoadMoreSiteImages}
-            onRefresh={handleRefreshSiteImages}
-          />
+          <div className="results-tabs" role="tablist" aria-label="Search result views">
+            <button
+              type="button"
+              id={RESULTS_TAB_ID}
+              role="tab"
+              aria-selected={activeResultsTab === "results"}
+              aria-controls={RESULTS_PANEL_ID}
+              className={`results-tab${activeResultsTab === "results" ? " results-tab--active" : ""}`}
+              onClick={() => setActiveResultsTab("results")}
+              tabIndex={activeResultsTab === "results" ? 0 : -1}
+            >
+              Results
+            </button>
+            <button
+              type="button"
+              id={IMAGES_TAB_ID}
+              role="tab"
+              aria-selected={activeResultsTab === "images"}
+              aria-controls={IMAGES_PANEL_ID}
+              className={`results-tab${activeResultsTab === "images" ? " results-tab--active" : ""}`}
+              onClick={() => setActiveResultsTab("images")}
+              tabIndex={activeResultsTab === "images" ? 0 : -1}
+            >
+              Archived images
+            </button>
+          </div>
         ) : null}
-        <SearchResults
-          results={results}
-          statuses={statuses}
-          isLoading={isLoading}
-          error={error}
-          hasSearched={hasSearched}
-          page={page}
-          totalPages={totalPages}
-          totalResults={totalResults}
-          resultsPerPage={resultsPerPage}
-          onPageChange={handlePageChange}
-          onToggleBookmark={toggleBookmark}
-          onOpenDetails={openDetails}
-          bookmarkedIds={bookmarkedIdentifiers}
-          onSaveSnapshot={handleSaveSnapshot}
-          saveMeta={saveMeta}
-          suggestionNode={suggestionNode}
-          fallbackNotice={fallbackNotice}
-          searchNotice={searchNotice}
-        />
+        <div
+          className="results-pane"
+          id={RESULTS_PANEL_ID}
+          role={siteImagesQuery ? "tabpanel" : undefined}
+          aria-labelledby={siteImagesQuery ? RESULTS_TAB_ID : undefined}
+          hidden={siteImagesQuery ? activeResultsTab !== "results" : false}
+        >
+          <SearchResults
+            results={results}
+            statuses={statuses}
+            isLoading={isLoading}
+            error={error}
+            hasSearched={hasSearched}
+            page={page}
+            totalPages={totalPages}
+            totalResults={totalResults}
+            resultsPerPage={resultsPerPage}
+            onPageChange={handlePageChange}
+            onToggleBookmark={toggleBookmark}
+            onOpenDetails={openDetails}
+            bookmarkedIds={bookmarkedIdentifiers}
+            onSaveSnapshot={handleSaveSnapshot}
+            saveMeta={saveMeta}
+            suggestionNode={suggestionNode}
+            fallbackNotice={fallbackNotice}
+            searchNotice={searchNotice}
+          />
+        </div>
+        {siteImagesQuery ? (
+          <div
+            className="results-pane"
+            id={IMAGES_PANEL_ID}
+            role="tabpanel"
+            aria-labelledby={IMAGES_TAB_ID}
+            hidden={activeResultsTab !== "images"}
+          >
+            <SiteImageGallery
+              items={siteImages}
+              query={siteImagesQuery}
+              site={siteImagesSite}
+              scope={siteImagesScope}
+              page={siteImagesPage}
+              total={siteImagesTotal}
+              isLoading={siteImagesLoading}
+              error={siteImagesError}
+              hasMore={siteImagesHasMore}
+              fallback={siteImagesFallback}
+              onLoadMore={handleLoadMoreSiteImages}
+              onRefresh={handleRefreshSiteImages}
+            />
+          </div>
+        ) : null}
       </section>
 
       <Sidebar
