@@ -412,6 +412,315 @@ html[data-theme="light"] datalist option {
   gap: 1.25rem;
 }
 
+.image-results-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 1rem;
+}
+
+.image-result-card {
+  position: relative;
+  border-radius: var(--harmonia-radius-md);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--harmonia-surface-muted) 60%, transparent);
+  min-height: 0;
+}
+
+.image-result-card.image-result-nsfw::after {
+  content: "NSFW";
+  position: absolute;
+  top: 0.65rem;
+  right: 0.65rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--harmonia-radius-pill);
+  background: rgba(236, 72, 153, 0.25);
+  border: 1px solid rgba(236, 72, 153, 0.45);
+  color: rgba(255, 255, 255, 0.85);
+  z-index: 2;
+}
+
+.image-result-preview {
+  border: none;
+  padding: 0;
+  margin: 0;
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: color-mix(in srgb, var(--harmonia-surface) 75%, transparent);
+  cursor: pointer;
+  position: relative;
+}
+
+.image-result-preview:focus-visible {
+  outline: 2px solid var(--harmonia-accent);
+  outline-offset: 2px;
+}
+
+.image-result-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.3s ease;
+}
+
+.image-result-card:hover .image-result-preview img {
+  transform: scale(1.02);
+}
+
+.image-result-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2rem;
+}
+
+.image-result-card.image-result-blurred .image-result-preview img {
+  filter: blur(12px);
+  transform: scale(1.05);
+}
+
+.image-result-details {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, rgba(10, 12, 28, 0.88) 85%, transparent);
+  color: var(--harmonia-text);
+  display: flex;
+  flex-direction: column;
+  padding: 0.75rem 0.85rem 0.95rem;
+  gap: 0.5rem;
+}
+
+.image-result-close {
+  align-self: flex-end;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 1.35rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.image-result-details-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  overflow: auto;
+  padding-right: 0.2rem;
+}
+
+.image-result-title {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.image-result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  color: color-mix(in srgb, var(--harmonia-text) 75%, transparent);
+  font-size: 0.85rem;
+}
+
+.image-result-url {
+  color: var(--harmonia-accent);
+  font-size: 0.85rem;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-result-links,
+.image-result-actions {
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.image-result-actions {
+  margin-top: 0.25rem;
+}
+
+.video-results-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1.1rem;
+}
+
+.video-result-card {
+  position: relative;
+  border-radius: var(--harmonia-radius-md);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--harmonia-surface-muted) 60%, transparent);
+  min-height: 0;
+}
+
+.video-result-card.video-result-nsfw::after {
+  content: "NSFW";
+  position: absolute;
+  top: 0.65rem;
+  right: 0.65rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--harmonia-radius-pill);
+  background: rgba(236, 72, 153, 0.25);
+  border: 1px solid rgba(236, 72, 153, 0.45);
+  color: rgba(255, 255, 255, 0.85);
+  z-index: 2;
+}
+
+.video-result-preview {
+  border: none;
+  padding: 0;
+  margin: 0;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: color-mix(in srgb, var(--harmonia-surface) 75%, transparent);
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+}
+
+.video-result-preview::after {
+  content: "▶";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 2.8rem;
+  height: 2.8rem;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(15, 18, 35, 0.55);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 1.4rem;
+  pointer-events: none;
+  transition: transform 0.3s ease, background 0.3s ease, color 0.3s ease;
+}
+
+.video-result-preview:focus-visible {
+  outline: 2px solid var(--harmonia-accent);
+  outline-offset: 2px;
+}
+
+.video-result-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.3s ease;
+}
+
+.video-result-card:hover .video-result-preview img {
+  transform: scale(1.04);
+}
+
+.video-result-card:hover .video-result-preview::after,
+.video-result-preview:focus-visible::after {
+  background: rgba(15, 18, 35, 0.68);
+  color: rgba(255, 255, 255, 1);
+  transform: translate(-50%, -50%) scale(1.05);
+}
+
+.video-result-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2rem;
+}
+
+.video-result-card.video-result-blurred .video-result-preview img {
+  filter: blur(12px);
+  transform: scale(1.06);
+}
+
+.video-result-details {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, rgba(9, 12, 28, 0.9) 85%, transparent);
+  color: var(--harmonia-text);
+  display: flex;
+  flex-direction: column;
+  padding: 0.85rem 0.95rem 1.1rem;
+  gap: 0.5rem;
+}
+
+.video-result-close {
+  align-self: flex-end;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 1.35rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.video-result-details-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  overflow: auto;
+  padding-right: 0.2rem;
+}
+
+.video-result-title {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.video-result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  color: color-mix(in srgb, var(--harmonia-text) 75%, transparent);
+  font-size: 0.85rem;
+}
+
+.video-result-url {
+  color: var(--harmonia-accent);
+  font-size: 0.85rem;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.video-result-description {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  max-height: 6.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.video-result-links,
+.video-result-actions {
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.video-result-actions {
+  margin-top: 0.25rem;
+}
+
 .result-card {
   background: linear-gradient(145deg, color-mix(in srgb, var(--harmonia-surface-muted) 85%, transparent),
       color-mix(in srgb, var(--harmonia-surface-alt) 60%, transparent));

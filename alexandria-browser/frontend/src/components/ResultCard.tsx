@@ -1,5 +1,6 @@
 import type { ArchiveSearchDoc, LinkStatus } from "../types";
 import { getDescription, getYearOrDate, mediaIcon } from "../utils/format";
+import { resolveDocLinks, STATUS_ARIA_LABELS, STATUS_LABELS } from "../utils/resultPresentation";
 
 interface ResultCardProps {
   doc: ArchiveSearchDoc;
@@ -15,20 +16,6 @@ interface ResultCardProps {
   saveTone?: "success" | "error" | "info";
   snapshotUrl?: string;
 }
-
-const STATUS_LABELS: Record<LinkStatus, string> = {
-  online: "🟢 Online",
-  "archived-only": "🟡 Archived only",
-  offline: "🔴 Offline",
-  checking: "Checking availability…"
-};
-
-const STATUS_ARIA_LABELS: Record<LinkStatus, string> = {
-  online: "Online",
-  "archived-only": "Archived only",
-  offline: "Offline",
-  checking: "Checking availability"
-};
 
 /**
  * ResultCard renders a single archive search hit with metadata and actions.
@@ -47,11 +34,7 @@ export function ResultCard({
   saveTone,
   snapshotUrl
 }: ResultCardProps) {
-  const fallbackArchiveUrl = `https://archive.org/details/${encodeURIComponent(doc.identifier)}`;
-  const archiveUrl = doc.archive_url ?? doc.links?.archive ?? fallbackArchiveUrl;
-  const waybackUrl = doc.wayback_url ?? doc.links?.wayback ?? `https://web.archive.org/web/*/${archiveUrl}`;
-  const rawOriginal = doc.original_url ?? doc.links?.original ?? null;
-  const originalUrl = rawOriginal && rawOriginal !== archiveUrl ? rawOriginal : null;
+  const { archiveUrl, waybackUrl, originalUrl } = resolveDocLinks(doc);
   const description = getDescription(doc.description);
   const yearOrDate = getYearOrDate(doc);
   const creator = Array.isArray(doc.creator) ? doc.creator.join(", ") : doc.creator ?? "";

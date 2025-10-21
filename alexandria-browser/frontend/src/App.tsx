@@ -873,6 +873,13 @@ function App() {
           saveMeta={saveMeta}
           suggestionNode={suggestionNode}
           notice={fallbackNotice}
+          viewMode={
+            mediaType === "image"
+              ? "images"
+              : mediaType === "movies"
+              ? "videos"
+              : "default"
+          }
         />
       </section>
 
