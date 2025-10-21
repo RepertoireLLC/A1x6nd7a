@@ -8,6 +8,7 @@ const SETTINGS_KEY = "alexandria-browser-settings";
 const HISTORY_KEY = "alexandria-browser-history";
 const HISTORY_BOOTSTRAP_KEY = "alexandria-browser-history-cleared";
 const BOOKMARKS_KEY = "alexandria-browser-bookmarks";
+const REPORT_BLACKLIST_KEY = "alexandria-browser-report-blacklist";
 
 // ADD: Default preference snapshot used when initializing or resetting stored settings.
 export const DEFAULT_SETTINGS: StoredSettings = {
@@ -114,6 +115,14 @@ export function loadBookmarks(): BookmarkEntry[] {
  */
 export function saveBookmarks(bookmarks: BookmarkEntry[]) {
   writeJSON(BOOKMARKS_KEY, bookmarks);
+}
+
+export function loadBlacklist(): string[] {
+  return readJSON(REPORT_BLACKLIST_KEY, [] as string[]);
+}
+
+export function saveBlacklist(blacklist: string[]) {
+  writeJSON(REPORT_BLACKLIST_KEY, blacklist);
 }
 
 // ADD: Remove the persisted settings blob and return a fresh copy of default values.

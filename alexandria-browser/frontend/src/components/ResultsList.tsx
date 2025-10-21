@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { ArchiveSearchDoc, LinkStatus } from "../types";
+import type { ReportSubmitHandler } from "../reporting";
 import { ResultCard } from "./ResultCard";
 import { PaginationControls } from "./PaginationControls";
 import { ImageResultGrid } from "./ImageResultGrid";
@@ -21,6 +22,7 @@ interface ResultsListProps {
   bookmarkedIds: Set<string>;
   onSaveSnapshot: (identifier: string, url: string) => void;
   saveMeta: Record<string, { label: string; disabled: boolean; message: string | null; snapshotUrl?: string; tone?: "success" | "error" | "info" }>;
+  onReport: ReportSubmitHandler;
   suggestionNode: ReactNode;
   notice?: string | null;
   viewMode?: "default" | "images";
@@ -46,6 +48,7 @@ export function ResultsList({
   bookmarkedIds,
   onSaveSnapshot,
   saveMeta,
+  onReport,
   suggestionNode,
   notice,
   viewMode = "default"
@@ -99,6 +102,7 @@ export function ResultsList({
           onOpenDetails={onOpenDetails}
           onSaveSnapshot={onSaveSnapshot}
           saveMeta={saveMeta}
+          onReport={onReport}
         />
       ) : (
         <ol className="results-list">
@@ -120,6 +124,7 @@ export function ResultsList({
                 onToggleBookmark={onToggleBookmark}
                 onSaveSnapshot={onSaveSnapshot}
                 onOpenDetails={onOpenDetails}
+                onReport={onReport}
                 saveLabel={meta.label}
                 saveDisabled={meta.disabled}
                 saveState={meta.message}

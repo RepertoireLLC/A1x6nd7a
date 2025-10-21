@@ -1,6 +1,7 @@
 import type { ArchiveSearchDoc, LinkStatus } from "../types";
 import { getDescription, getYearOrDate, mediaIcon } from "../utils/format";
 import { resolveDocLinks, STATUS_ARIA_LABELS, STATUS_LABELS } from "../utils/resultPresentation";
+import { ReportAction, type ReportSubmitHandler } from "../reporting";
 
 interface ResultCardProps {
   doc: ArchiveSearchDoc;
@@ -10,6 +11,7 @@ interface ResultCardProps {
   onToggleBookmark: (identifier: string, doc: ArchiveSearchDoc) => void;
   onSaveSnapshot: (identifier: string, url: string) => void;
   onOpenDetails: (doc: ArchiveSearchDoc) => void;
+  onReport: ReportSubmitHandler;
   saveLabel: string;
   saveDisabled: boolean;
   saveState: string | null;
@@ -28,6 +30,7 @@ export function ResultCard({
   onToggleBookmark,
   onSaveSnapshot,
   onOpenDetails,
+  onReport,
   saveLabel,
   saveDisabled,
   saveState,
@@ -76,6 +79,12 @@ export function ResultCard({
             {STATUS_LABELS[status]}
           </span>
           <div className="result-links">
+            <ReportAction
+              identifier={doc.identifier}
+              archiveUrl={archiveUrl}
+              title={doc.title || doc.identifier}
+              onSubmit={onReport}
+            />
             {originalUrl ? (
               <a href={originalUrl} target="_blank" rel="noreferrer">
                 Visit original source
