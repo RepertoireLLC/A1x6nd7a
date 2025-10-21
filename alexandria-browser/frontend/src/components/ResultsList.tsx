@@ -4,6 +4,8 @@ import type { ReportSubmitHandler } from "../reporting";
 import { ResultCard } from "./ResultCard";
 import { PaginationControls } from "./PaginationControls";
 import { ImageResultGrid } from "./ImageResultGrid";
+import { LoadingIndicator } from "./LoadingIndicator";
+import { StatusBanner } from "./StatusBanner";
 
 interface ResultsListProps {
   results: ArchiveSearchDoc[];
@@ -54,26 +56,22 @@ export function ResultsList({
   viewMode = "default"
 }: ResultsListProps) {
   if (isLoading) {
-    return <div className="results-message">Searching the archives…</div>;
+    return <LoadingIndicator label="Searching the archives…" />;
   }
 
   if (error) {
-    return (
-      <div className="results-error" role="alert">
-        Unable to reach the archives: {error}
-      </div>
-    );
+    return <StatusBanner tone="error" message={`Unable to reach the archives. ${error}`} />;
   }
 
   if (!hasSearched) {
-    return <div className="results-message">Results will appear here once you begin searching.</div>;
+    return <StatusBanner tone="info" message="Results will appear here once you begin searching." />;
   }
 
   if (results.length === 0) {
     return (
       <>
         {suggestionNode}
-        <div className="results-message">No archive results found. Try refining your query.</div>
+        <StatusBanner tone="warning" message="No archive results found. Try refining your query." />
       </>
     );
   }
@@ -84,11 +82,7 @@ export function ResultsList({
   return (
     <>
       {suggestionNode}
-      {notice ? (
-        <div className="results-notice" role="status">
-          {notice}
-        </div>
-      ) : null}
+      {notice ? <StatusBanner tone="warning" message={notice} /> : null}
       <div className="results-summary">
         Showing {startIndex} – {endIndex} of {totalResults ?? "?"} preserved records
       </div>

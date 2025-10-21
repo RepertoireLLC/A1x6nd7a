@@ -6,6 +6,8 @@ import type {
 } from "../types";
 import { getDescription, getYearOrDate, mediaIcon } from "../utils/format";
 import { SnapshotTimeline } from "./SnapshotTimeline";
+import { LoadingIndicator } from "./LoadingIndicator";
+import { StatusBanner } from "./StatusBanner";
 
 interface ItemDetailsPanelProps {
   doc: ArchiveSearchDoc;
@@ -127,11 +129,9 @@ export function ItemDetailsPanel({
 
       <section className="item-details-section">
         <h3>Metadata</h3>
-        {metadataLoading ? <p>Loading metadata…</p> : null}
+        {metadataLoading ? <LoadingIndicator label="Loading metadata…" inline /> : null}
         {metadataError ? (
-          <p className="item-details-error" role="alert">
-            Unable to load metadata: {metadataError}
-          </p>
+          <StatusBanner tone="error" message={`Unable to load metadata: ${metadataError}`} />
         ) : null}
         {!metadataLoading && !metadataError ? renderMetadataRows(metadata?.metadata) : null}
         {metadata?.files ? (
@@ -141,7 +141,7 @@ export function ItemDetailsPanel({
           </div>
         ) : null}
         {metadata?.fallback ? (
-          <p className="item-details-fallback">Showing cached metadata while offline.</p>
+          <StatusBanner tone="warning" message="Showing cached metadata while offline." />
         ) : null}
       </section>
 
@@ -157,11 +157,11 @@ export function ItemDetailsPanel({
 
       <section className="item-details-section">
         <h3>Related Highlights</h3>
-        {relatedFallback ? <p className="item-details-fallback">Showing cached highlights while offline.</p> : null}
+        {relatedFallback ? (
+          <StatusBanner tone="info" message="Showing cached highlights while offline." />
+        ) : null}
         {relatedError ? (
-          <p className="item-details-error" role="alert">
-            Unable to load related items: {relatedError}
-          </p>
+          <StatusBanner tone="error" message={`Unable to load related items: ${relatedError}`} />
         ) : null}
         {relatedItems.length === 0 ? (
           <p>No related items found.</p>
