@@ -1,4 +1,4 @@
-import type { ArchiveSearchDoc, LinkStatus } from "../types";
+import type { ArchiveSearchDoc, LinkStatus, NSFWFilterMode } from "../types";
 import { getDescription, getYearOrDate, mediaIcon } from "../utils/format";
 import { resolveDocLinks, STATUS_ARIA_LABELS, STATUS_LABELS } from "../utils/resultPresentation";
 import { ReportAction, type ReportSubmitHandler } from "../reporting";
@@ -6,7 +6,7 @@ import { ReportAction, type ReportSubmitHandler } from "../reporting";
 interface ResultCardProps {
   doc: ArchiveSearchDoc;
   status: LinkStatus;
-  filterNSFW: boolean;
+  nsfwMode: NSFWFilterMode;
   isBookmarked: boolean;
   onToggleBookmark: (identifier: string, doc: ArchiveSearchDoc) => void;
   onSaveSnapshot: (identifier: string, url: string) => void;
@@ -25,7 +25,7 @@ interface ResultCardProps {
 export function ResultCard({
   doc,
   status,
-  filterNSFW,
+  nsfwMode,
   isBookmarked,
   onToggleBookmark,
   onSaveSnapshot,
@@ -41,19 +41,28 @@ export function ResultCard({
   const description = getDescription(doc.description);
   const yearOrDate = getYearOrDate(doc);
   const creator = Array.isArray(doc.creator) ? doc.creator.join(", ") : doc.creator ?? "";
-  const isNSFW = doc.nsfw === true;
+  const severity = doc.nsfwLevel ?? doc.nsfw_level ?? null;
+  const isNSFW = doc.nsfw === true || severity === "mild" || severity === "explicit";
 
   const cardClasses = ["result-card"];
   if (isNSFW) {
     cardClasses.push("result-card-nsfw");
   }
-  if (filterNSFW && isNSFW) {
+  if (nsfwMode === "safe" && isNSFW) {
     cardClasses.push("result-card-nsfw-filtered");
   }
 
+  const shouldBlur = nsfwMode === "safe" && isNSFW;
+  const nsfwBadge = isNSFW ? (severity === "explicit" ? "EXPLICIT" : severity === "mild" ? "SENSITIVE" : "NSFW") : undefined;
+  const nsfwLabelText = severity === "explicit" ? "(Explicit NSFW)" : "(Sensitive)";
+
   return (
-    <li className={cardClasses.join(" ")}>
-      <div className={`result-body${filterNSFW && isNSFW ? " result-body-blurred" : ""}`}>
+    <li
+      className={cardClasses.join(" ")}
+      data-nsfw-label={nsfwBadge}
+      data-nsfw-severity={severity ?? undefined}
+    >
+      <div className={`result-body${shouldBlur ? " result-body-blurred" : ""}`}>
         <div className="result-header">
           <div className="result-thumb-wrapper" aria-hidden="true">
             {doc.thumbnail ? (
@@ -69,7 +78,7 @@ export function ResultCard({
             <div className="result-meta">
               <span>{yearOrDate}</span>
               {creator ? <span>· {creator}</span> : null}
-              {!filterNSFW && isNSFW ? <span className="nsfw-label">(NSFW)</span> : null}
+              {isNSFW ? <span className="nsfw-label">{nsfwLabelText}</span> : null}
             </div>
           </div>
         </div>

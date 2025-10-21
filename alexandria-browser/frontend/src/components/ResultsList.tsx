@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { ArchiveSearchDoc, LinkStatus } from "../types";
+import type { ArchiveSearchDoc, LinkStatus, NSFWFilterMode } from "../types";
 import type { ReportSubmitHandler } from "../reporting";
 import { ResultCard } from "./ResultCard";
 import { PaginationControls } from "./PaginationControls";
@@ -10,7 +10,7 @@ import { StatusBanner } from "./StatusBanner";
 interface ResultsListProps {
   results: ArchiveSearchDoc[];
   statuses: Record<string, LinkStatus>;
-  filterNSFW: boolean;
+  nsfwMode: NSFWFilterMode;
   isLoading: boolean;
   error: string | null;
   hasSearched: boolean;
@@ -28,6 +28,7 @@ interface ResultsListProps {
   suggestionNode: ReactNode;
   notice?: string | null;
   viewMode?: "default" | "images";
+  hiddenCount?: number;
 }
 
 /**
@@ -36,7 +37,7 @@ interface ResultsListProps {
 export function ResultsList({
   results,
   statuses,
-  filterNSFW,
+  nsfwMode,
   isLoading,
   error,
   hasSearched,
@@ -53,7 +54,8 @@ export function ResultsList({
   onReport,
   suggestionNode,
   notice,
-  viewMode = "default"
+  viewMode = "default",
+  hiddenCount = 0
 }: ResultsListProps) {
   if (isLoading) {
     return <LoadingIndicator label="Searching the archives…" />;
@@ -86,11 +88,18 @@ export function ResultsList({
       <div className="results-summary">
         Showing {startIndex} – {endIndex} of {totalResults ?? "?"} preserved records
       </div>
+      {hiddenCount > 0 ? (
+        <div className="results-filter-note">
+          {hiddenCount === 1
+            ? "1 result hidden by the current NSFW mode."
+            : `${hiddenCount} results hidden by the current NSFW mode.`}
+        </div>
+      ) : null}
       {viewMode === "images" ? (
         <ImageResultGrid
           results={results}
           statuses={statuses}
-          filterNSFW={filterNSFW}
+          nsfwMode={nsfwMode}
           bookmarkedIds={bookmarkedIds}
           onToggleBookmark={onToggleBookmark}
           onOpenDetails={onOpenDetails}
@@ -113,7 +122,7 @@ export function ResultsList({
                 key={doc.identifier}
                 doc={doc}
                 status={status}
-                filterNSFW={filterNSFW}
+                nsfwMode={nsfwMode}
                 isBookmarked={bookmarkedIds.has(doc.identifier)}
                 onToggleBookmark={onToggleBookmark}
                 onSaveSnapshot={onSaveSnapshot}

@@ -3,7 +3,7 @@ import { createSearchBar } from './src/components/SearchBar.js';
 import { createResultCard } from './src/components/ResultCard.js';
 import { createPaginationControls } from './src/components/PaginationControls.js';
 import { createSettingsModal } from './src/components/SettingsModal.js';
-import { applyNSFWFilter, getKeywords } from './src/utils/nsfwFilter.js';
+import { applyNSFWFilter, getKeywords, NSFW_MODES } from './src/utils/nsfwFilter.js';
 import { loadSettings, saveSettings, resetSettings } from './src/utils/settingsStorage.js';
 
 const storedSettings = loadSettings();
@@ -18,7 +18,8 @@ const state = {
   loading: false,
   error: null,
   suggestion: null,
-  nsfwFiltering: storedSettings.nsfwFiltering,
+  nsfwMode: storedSettings.nsfwMode ?? (storedSettings.nsfwFiltering ? NSFW_MODES.SAFE : NSFW_MODES.OFF),
+  nsfwAcknowledged: Boolean(storedSettings.nsfwAcknowledged),
   keywords: []
 };
 
@@ -66,7 +67,9 @@ app.appendChild(paginationContainer);
 
 function persistSettings() {
   saveSettings({
-    nsfwFiltering: state.nsfwFiltering,
+    nsfwMode: state.nsfwMode,
+    nsfwFiltering: state.nsfwMode !== NSFW_MODES.OFF,
+    nsfwAcknowledged: state.nsfwAcknowledged,
     pageSize: state.pageSize
   });
 }
@@ -128,7 +131,7 @@ function renderResults() {
   }
 
   state.results.forEach((result) => {
-    const card = createResultCard(result, { nsfwFiltering: state.nsfwFiltering });
+    const card = createResultCard(result, { nsfwMode: state.nsfwMode });
     resultsContainer.appendChild(card);
   });
 }
@@ -157,7 +160,7 @@ async function runSearch(showLoader = true) {
     state.total = total;
     state.suggestion = suggestion;
     state.rawResults = results;
-    const processed = await applyNSFWFilter(results, state.nsfwFiltering);
+    const processed = await applyNSFWFilter(results, state.nsfwMode);
     state.results = processed;
   } catch (error) {
     console.error(error);
@@ -178,23 +181,57 @@ function renderKeywordsInModal(keywords) {
 }
 
 const settingsModal = createSettingsModal({
-  initialNSFWEnabled: state.nsfwFiltering,
+  initialNSFWMode: state.nsfwMode,
   initialPageSize: state.pageSize,
   pageSizeOptions: PAGE_SIZE_OPTIONS,
   keywords: state.keywords,
-  onToggleNSFW: async (enabled) => {
-    state.nsfwFiltering = enabled;
+  onChangeNSFWMode: async (mode) => {
+    const requested = typeof mode === 'string' ? mode.toLowerCase() : NSFW_MODES.SAFE;
+    const validModes = new Set(Object.values(NSFW_MODES));
+    const nextMode = validModes.has(requested) ? requested : NSFW_MODES.SAFE;
+
+    if (nextMode === state.nsfwMode) {
+      return;
+    }
+
+    if (nextMode !== NSFW_MODES.SAFE) {
+      const confirmed =
+        typeof window !== 'undefined'
+          ? window.confirm(
+              'This setting may display adult or explicit material. Please confirm you are 18 years or older before proceeding.'
+            )
+          : false;
+
+      if (!confirmed) {
+        state.nsfwMode = NSFW_MODES.SAFE;
+        state.nsfwAcknowledged = false;
+        persistSettings();
+        settingsModal.setNSFWMode(state.nsfwMode);
+        const safeResults = state.rawResults.length
+          ? state.rawResults
+          : state.results.map(({ nsfw, nsfwLevel, nsfwMatches, ...rest }) => rest);
+        state.results = await applyNSFWFilter(safeResults, state.nsfwMode);
+        renderResults();
+        return;
+      }
+
+      state.nsfwAcknowledged = true;
+    }
+
+    state.nsfwMode = nextMode;
     persistSettings();
-    const baseResults = state.rawResults.length ? state.rawResults : state.results.map(({ nsfw, ...rest }) => rest);
-    state.results = await applyNSFWFilter(baseResults, enabled);
+    settingsModal.setNSFWMode(state.nsfwMode);
+    const baseResults = state.rawResults.length
+      ? state.rawResults
+      : state.results.map(({ nsfw, nsfwLevel, nsfwMatches, ...rest }) => rest);
+    state.results = await applyNSFWFilter(baseResults, state.nsfwMode);
     renderResults();
   },
   onKeywordsChange: async (updated) => {
     state.keywords = updated;
-    if (state.nsfwFiltering) {
-      state.results = await applyNSFWFilter(state.rawResults, true);
-      renderResults();
-    }
+    const baseResults = state.rawResults.length ? state.rawResults : state.results;
+    state.results = await applyNSFWFilter(baseResults, state.nsfwMode);
+    renderResults();
   },
   onChangePageSize: async (size) => {
     const parsed = Number(size);
@@ -212,11 +249,12 @@ const settingsModal = createSettingsModal({
   },
   onResetSettings: async () => {
     const defaults = resetSettings();
-    state.nsfwFiltering = defaults.nsfwFiltering;
+    state.nsfwMode = defaults.nsfwMode ?? (defaults.nsfwFiltering ? NSFW_MODES.SAFE : NSFW_MODES.OFF);
+    state.nsfwAcknowledged = Boolean(defaults.nsfwAcknowledged);
     state.pageSize = defaults.pageSize;
     state.page = 1;
     persistSettings();
-    settingsModal.setNSFWEnabled(state.nsfwFiltering);
+    settingsModal.setNSFWMode(state.nsfwMode);
     settingsModal.setPageSize(state.pageSize);
 
     if (state.query) {
@@ -224,8 +262,8 @@ const settingsModal = createSettingsModal({
     } else if (state.results.length > 0 || state.rawResults.length > 0) {
       const baseResults = state.rawResults.length
         ? state.rawResults
-        : state.results.map(({ nsfw, ...rest }) => rest);
-      state.results = await applyNSFWFilter(baseResults, state.nsfwFiltering);
+        : state.results.map(({ nsfw, nsfwLevel, nsfwMatches, ...rest }) => rest);
+      state.results = await applyNSFWFilter(baseResults, state.nsfwMode);
       renderResults();
       renderPagination();
     } else {

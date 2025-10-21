@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import type { ArchiveSearchDoc, LinkStatus } from "../types";
+import type { ArchiveSearchDoc, LinkStatus, NSFWFilterMode } from "../types";
 import { ReportAction, type ReportSubmitHandler } from "../reporting";
 import { getYearOrDate, mediaIcon } from "../utils/format";
 import {
@@ -24,7 +24,7 @@ interface SaveMetaEntry {
 interface ImageResultGridProps {
   results: ArchiveSearchDoc[];
   statuses: Record<string, LinkStatus>;
-  filterNSFW: boolean;
+  nsfwMode: NSFWFilterMode;
   bookmarkedIds: Set<string>;
   onToggleBookmark: (identifier: string, doc: ArchiveSearchDoc) => void;
   onOpenDetails: (doc: ArchiveSearchDoc) => void;
@@ -64,7 +64,7 @@ function getCreatorLabel(doc: ArchiveSearchDoc) {
 export function ImageResultGrid({
   results,
   statuses,
-  filterNSFW,
+  nsfwMode,
   bookmarkedIds,
   onToggleBookmark,
   onOpenDetails,
@@ -82,8 +82,11 @@ export function ImageResultGrid({
         const { archiveUrl, waybackUrl, originalUrl } = resolveDocLinks(doc);
         const previewSrc = getPreviewSource(doc);
         const isExpanded = expandedId === doc.identifier;
-        const isNSFW = doc.nsfw === true;
-        const shouldBlur = filterNSFW && isNSFW;
+        const severity = doc.nsfwLevel ?? doc.nsfw_level ?? null;
+        const isNSFW = doc.nsfw === true || severity === "mild" || severity === "explicit";
+        const shouldBlur = nsfwMode === "safe" && isNSFW;
+        const nsfwBadge = isNSFW ? (severity === "explicit" ? "EXPLICIT" : severity === "mild" ? "SENSITIVE" : "NSFW") : undefined;
+        const nsfwLabelText = severity === "explicit" ? "(Explicit NSFW)" : "(Sensitive)";
         const yearOrDate = getYearOrDate(doc);
         const creator = getCreatorLabel(doc);
         const displayUrl = formatDisplayUrl(originalUrl ?? archiveUrl);
@@ -101,6 +104,8 @@ export function ImageResultGrid({
           <li
             key={doc.identifier}
             className={`image-result-card${isNSFW ? " image-result-nsfw" : ""}${shouldBlur ? " image-result-blurred" : ""}`}
+            data-nsfw-label={nsfwBadge}
+            data-nsfw-severity={severity ?? undefined}
           >
             <button
               type="button"
@@ -130,7 +135,7 @@ export function ImageResultGrid({
                   <div className="image-result-meta">
                     <span>{yearOrDate}</span>
                     {creator ? <span>· {creator}</span> : null}
-                    {!filterNSFW && isNSFW ? <span className="nsfw-label">(NSFW)</span> : null}
+                    {isNSFW ? <span className="nsfw-label">{nsfwLabelText}</span> : null}
                   </div>
                   <a
                     href={originalUrl ?? archiveUrl}

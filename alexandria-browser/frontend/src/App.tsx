@@ -46,10 +46,19 @@ import type {
   SearchHistoryEntry,
   SpellcheckCorrection,
   StoredSettings,
+  NSFWFilterMode,
   WaybackAvailabilityResponse
 } from "./types";
 import { ItemDetailsPanel } from "./components/ItemDetailsPanel";
 import type { ReportSubmissionPayload } from "./reporting";
+import {
+  annotateDocs,
+  annotateScrapeItems,
+  applyNSFWModeToDocs,
+  applyNSFWModeToScrape,
+  countHiddenByMode,
+  shouldIncludeDoc
+} from "./utils/nsfw";
 
 const RESULTS_PER_PAGE_OPTIONS = [10, 20, 50];
 const MEDIA_TYPE_OPTIONS = [
@@ -90,7 +99,8 @@ function App() {
   const settings = initialSettings.current;
 
   const [theme, setTheme] = useState<"light" | "dark">(() => settings.theme);
-  const [filterNSFW, setFilterNSFW] = useState(() => settings.filterNSFW);
+  const [nsfwMode, setNsfwMode] = useState<NSFWFilterMode>(() => settings.nsfwMode ?? (settings.filterNSFW ? "safe" : "off"));
+  const [nsfwAcknowledged, setNsfwAcknowledged] = useState<boolean>(() => Boolean(settings.nsfwAcknowledged));
   const [query, setQuery] = useState(() => settings.lastQuery);
   const [activeQuery, setActiveQuery] = useState<string | null>(() =>
     settings.lastQuery ? settings.lastQuery : null
@@ -155,7 +165,9 @@ function App() {
   useEffect(() => {
     const settingsPayload: StoredSettings = {
       theme,
-      filterNSFW,
+      filterNSFW: nsfwMode !== "off",
+      nsfwMode,
+      nsfwAcknowledged,
       lastQuery: activeQuery ?? "",
       resultsPerPage,
       mediaType,
@@ -163,7 +175,7 @@ function App() {
       yearTo
     };
     saveSettings(settingsPayload);
-  }, [theme, filterNSFW, activeQuery, resultsPerPage, mediaType, yearFrom, yearTo]);
+  }, [theme, nsfwMode, nsfwAcknowledged, activeQuery, resultsPerPage, mediaType, yearFrom, yearTo]);
 
   useEffect(() => {
     saveHistory(history);
@@ -271,7 +283,7 @@ function App() {
       }
       if (result.ok) {
         const filtered = result.data.items.filter((item) => item.identifier !== selectedDoc.identifier);
-        setRelatedItems(filtered);
+        setRelatedItems(annotateScrapeItems(filtered));
         setRelatedFallback(Boolean(result.data.fallback));
         setRelatedError(null);
       } else {
@@ -291,6 +303,13 @@ function App() {
     const bookmarkTitles = bookmarks.map((bookmark) => bookmark.title || bookmark.identifier);
     return [...historyQueries, ...bookmarkTitles];
   }, [history, bookmarks]);
+
+  const filteredResults = useMemo(() => applyNSFWModeToDocs(results, nsfwMode), [results, nsfwMode]);
+  const hiddenResultCount = useMemo(() => countHiddenByMode(results, nsfwMode), [results, nsfwMode]);
+  const filteredRelatedItems = useMemo(
+    () => applyNSFWModeToScrape(relatedItems, nsfwMode),
+    [relatedItems, nsfwMode]
+  );
 
   const performSearch = useCallback(
     async (searchQuery: string, pageNumber: number, options?: { recordHistory?: boolean; rowsOverride?: number }) => {
@@ -379,7 +398,8 @@ function App() {
           ? docs.filter((doc) => !hiddenIdentifiers.has(doc.identifier))
           : docs;
 
-        setResults(visibleDocs);
+        const annotatedDocs = annotateDocs(visibleDocs);
+        setResults(annotatedDocs);
         setTotalResults(numFound);
         setTotalPages(numFound !== null ? Math.max(1, Math.ceil(numFound / rows)) : null);
         setPage(pageNumber);
@@ -387,14 +407,14 @@ function App() {
         setStatuses(() => {
           const next: Record<string, LinkStatus> = {};
           const defaultStatus: LinkStatus = payload.fallback ? "offline" : "checking";
-          for (const doc of visibleDocs) {
+          for (const doc of annotatedDocs) {
             next[doc.identifier] = defaultStatus;
           }
           return next;
         });
         setSaveMeta(() => {
           const next: Record<string, SaveMeta> = {};
-          for (const doc of visibleDocs) {
+          for (const doc of annotatedDocs) {
             next[doc.identifier] = { ...DEFAULT_SAVE_META };
           }
           return next;
@@ -503,14 +523,14 @@ function App() {
   }, [performSearch, settings.lastQuery, settings.resultsPerPage]);
 
   useEffect(() => {
-    if (results.length === 0 || fallbackNotice) {
+    if (filteredResults.length === 0 || fallbackNotice) {
       return;
     }
     let cancelled = false;
 
     const loadStatuses = async () => {
       const pairs = await Promise.all(
-        results.map(async (doc) => {
+        filteredResults.map(async (doc) => {
           const targetUrl =
             doc.archive_url ??
             doc.links?.archive ??
@@ -538,7 +558,13 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [results, fallbackNotice]);
+  }, [filteredResults, fallbackNotice]);
+
+  useEffect(() => {
+    if (selectedDoc && !shouldIncludeDoc(selectedDoc, nsfwMode)) {
+      setSelectedDoc(null);
+    }
+  }, [selectedDoc, nsfwMode]);
 
   const handleSubmit = async () => {
     const trimmed = query.trim();
@@ -811,7 +837,8 @@ function App() {
     const defaults = resetStoredSettings();
     initialSettings.current = defaults;
     setTheme(defaults.theme);
-    setFilterNSFW(defaults.filterNSFW);
+    setNsfwMode(defaults.nsfwMode ?? (defaults.filterNSFW ? "safe" : "off"));
+    setNsfwAcknowledged(Boolean(defaults.nsfwAcknowledged));
     setResultsPerPage(defaults.resultsPerPage);
     setMediaType(defaults.mediaType);
     setYearFrom(defaults.yearFrom);
@@ -834,6 +861,35 @@ function App() {
     setHasSearched(false);
     setHistoryIndex(-1);
   };
+
+  const handleChangeNSFWMode = useCallback(
+    (mode: NSFWFilterMode) => {
+      if (mode === nsfwMode) {
+        return;
+      }
+
+      if (mode === "safe") {
+        setNsfwMode("safe");
+        return;
+      }
+
+      const confirmed =
+        typeof window !== "undefined"
+          ? window.confirm(
+              "This setting may display adult or explicit material. Please confirm you are 18 years or older before proceeding."
+            )
+          : false;
+
+      if (confirmed) {
+        setNsfwAcknowledged(true);
+        setNsfwMode(mode);
+      } else {
+        setNsfwAcknowledged(false);
+        setNsfwMode("safe");
+      }
+    },
+    [nsfwMode]
+  );
 
   const suggestionNode = suggestedQuery ? (
     <div className="spellcheck-suggestion" role="note">
@@ -858,9 +914,9 @@ function App() {
   const settingsPanel = (
     <SettingsPanel
       theme={theme}
-      filterNSFW={filterNSFW}
+      nsfwMode={nsfwMode}
       onToggleTheme={() => setTheme((previous) => (previous === "light" ? "dark" : "light"))}
-      onToggleNSFW={setFilterNSFW}
+      onChangeNSFWMode={handleChangeNSFWMode}
       onClearHistory={clearHistory}
       onClearBookmarks={clearBookmarks}
       onResetPreferences={resetPreferences}
@@ -961,9 +1017,9 @@ function App() {
 
       <section className="results-container" aria-live="polite" ref={resultsContainerRef}>
         <ResultsList
-          results={results}
+          results={filteredResults}
           statuses={statuses}
-          filterNSFW={filterNSFW}
+          nsfwMode={nsfwMode}
           isLoading={isLoading}
           error={error}
           hasSearched={hasSearched}
@@ -981,6 +1037,7 @@ function App() {
           suggestionNode={suggestionNode}
           notice={fallbackNotice}
           viewMode={mediaType === "image" ? "images" : "default"}
+          hiddenCount={hiddenResultCount}
         />
       </section>
 
@@ -1009,7 +1066,7 @@ function App() {
           timeline={timelineState.data}
           timelineLoading={timelineState.loading}
           timelineError={timelineState.error}
-          relatedItems={relatedItems}
+          relatedItems={filteredRelatedItems}
           relatedFallback={relatedFallback}
           relatedError={relatedError}
           onClose={closeDetails}
