@@ -21,7 +21,8 @@ import {
   fetchArchiveMetadata,
   fetchCdxSnapshots,
   scrapeArchive,
-  getWaybackAvailability
+  getWaybackAvailability,
+  submitReport
 } from "./api/archive";
 import {
   loadBookmarks,
@@ -30,7 +31,9 @@ import {
   resetStoredSettings,
   saveBookmarks,
   saveHistory,
-  saveSettings
+  saveSettings,
+  loadBlacklist,
+  saveBlacklist
 } from "./utils/storage";
 import { isLikelyUrl, isYearValid, normalizeYear } from "./utils/validators";
 import type {
@@ -46,6 +49,7 @@ import type {
   WaybackAvailabilityResponse
 } from "./types";
 import { ItemDetailsPanel } from "./components/ItemDetailsPanel";
+import type { ReportSubmissionPayload } from "./reporting";
 
 const RESULTS_PER_PAGE_OPTIONS = [10, 20, 50];
 const MEDIA_TYPE_OPTIONS = [
@@ -109,8 +113,10 @@ function App() {
   const [suggestionCorrections, setSuggestionCorrections] = useState<SpellcheckCorrection[]>([]);
   const initialHistory = useRef<SearchHistoryEntry[]>(loadHistory());
   const initialBookmarks = useRef<BookmarkEntry[]>(loadBookmarks());
+  const initialBlacklist = useRef<string[]>(loadBlacklist());
   const [history, setHistory] = useState<SearchHistoryEntry[]>(() => initialHistory.current);
   const [bookmarks, setBookmarks] = useState<BookmarkEntry[]>(() => initialBookmarks.current);
+  const [blacklist, setBlacklist] = useState<string[]>(() => initialBlacklist.current);
   const [historyIndex, setHistoryIndex] = useState<number>(() => {
     if (!settings.lastQuery) {
       return -1;
@@ -140,6 +146,7 @@ function App() {
 
   const resultsContainerRef = useRef<HTMLDivElement | null>(null);
   const bootstrapped = useRef(false);
+  const blacklistRef = useRef<string[]>(initialBlacklist.current);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -165,6 +172,43 @@ function App() {
   useEffect(() => {
     saveBookmarks(bookmarks);
   }, [bookmarks]);
+
+  useEffect(() => {
+    blacklistRef.current = blacklist;
+    saveBlacklist(blacklist);
+  }, [blacklist]);
+
+  useEffect(() => {
+    if (blacklist.length === 0) {
+      return;
+    }
+
+    const blacklistSet = new Set(blacklist);
+
+    setResults((current) => current.filter((doc) => !blacklistSet.has(doc.identifier)));
+    setStatuses((previous) => {
+      const next = { ...previous };
+      let changed = false;
+      for (const identifier of blacklistSet) {
+        if (identifier in next) {
+          delete next[identifier];
+          changed = true;
+        }
+      }
+      return changed ? next : previous;
+    });
+    setSaveMeta((previous) => {
+      const next: typeof previous = { ...previous };
+      let changed = false;
+      for (const identifier of blacklistSet) {
+        if (identifier in next) {
+          delete next[identifier];
+          changed = true;
+        }
+      }
+      return changed ? next : previous;
+    });
+  }, [blacklist]);
 
   useEffect(() => {
     if (!selectedDoc) {
@@ -321,8 +365,13 @@ function App() {
 
         const docs = payload.response?.docs ?? [];
         const numFound = payload.response?.numFound ?? null;
+        const hiddenIdentifiers =
+          blacklistRef.current.length > 0 ? new Set(blacklistRef.current) : null;
+        const visibleDocs = hiddenIdentifiers
+          ? docs.filter((doc) => !hiddenIdentifiers.has(doc.identifier))
+          : docs;
 
-        setResults(docs);
+        setResults(visibleDocs);
         setTotalResults(numFound);
         setTotalPages(numFound !== null ? Math.max(1, Math.ceil(numFound / rows)) : null);
         setPage(pageNumber);
@@ -330,14 +379,14 @@ function App() {
         setStatuses(() => {
           const next: Record<string, LinkStatus> = {};
           const defaultStatus: LinkStatus = payload.fallback ? "offline" : "checking";
-          for (const doc of docs) {
+          for (const doc of visibleDocs) {
             next[doc.identifier] = defaultStatus;
           }
           return next;
         });
         setSaveMeta(() => {
           const next: Record<string, SaveMeta> = {};
-          for (const doc of docs) {
+          for (const doc of visibleDocs) {
             next[doc.identifier] = { ...DEFAULT_SAVE_META };
           }
           return next;
@@ -606,6 +655,38 @@ function App() {
     }
   };
 
+  const handleReportSubmission = useCallback(
+    async (payload: ReportSubmissionPayload) => {
+      await submitReport(payload);
+
+      setBlacklist((previous) => {
+        if (previous.includes(payload.identifier)) {
+          return previous;
+        }
+        return [...previous, payload.identifier];
+      });
+
+      setResults((current) => current.filter((doc) => doc.identifier !== payload.identifier));
+      setStatuses((previous) => {
+        if (!(payload.identifier in previous)) {
+          return previous;
+        }
+        const next = { ...previous };
+        delete next[payload.identifier];
+        return next;
+      });
+      setSaveMeta((previous) => {
+        if (!(payload.identifier in previous)) {
+          return previous;
+        }
+        const next = { ...previous };
+        delete next[payload.identifier];
+        return next;
+      });
+    },
+    [submitReport]
+  );
+
   const handleSuggestionClick = (nextQuery: string) => {
     setQuery(nextQuery);
     setActiveQuery(nextQuery);
@@ -871,6 +952,7 @@ function App() {
           bookmarkedIds={bookmarkedIdentifiers}
           onSaveSnapshot={handleSaveSnapshot}
           saveMeta={saveMeta}
+          onReport={handleReportSubmission}
           suggestionNode={suggestionNode}
           notice={fallbackNotice}
           viewMode={mediaType === "image" ? "images" : "default"}

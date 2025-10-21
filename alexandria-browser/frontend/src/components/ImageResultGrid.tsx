@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import type { ArchiveSearchDoc, LinkStatus } from "../types";
+import { ReportAction, type ReportSubmitHandler } from "../reporting";
 import { getYearOrDate, mediaIcon } from "../utils/format";
 import {
   formatDisplayUrl,
@@ -29,6 +30,7 @@ interface ImageResultGridProps {
   onOpenDetails: (doc: ArchiveSearchDoc) => void;
   onSaveSnapshot: (identifier: string, url: string) => void;
   saveMeta: Record<string, SaveMetaEntry>;
+  onReport: ReportSubmitHandler;
 }
 
 const DEFAULT_SAVE_META: SaveMetaEntry = {
@@ -67,7 +69,8 @@ export function ImageResultGrid({
   onToggleBookmark,
   onOpenDetails,
   onSaveSnapshot,
-  saveMeta
+  saveMeta,
+  onReport
 }: ImageResultGridProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -152,6 +155,12 @@ export function ImageResultGrid({
                     </a>
                   </div>
                   <div className="result-links image-result-actions">
+                    <ReportAction
+                      identifier={doc.identifier}
+                      archiveUrl={archiveUrl}
+                      title={doc.title || doc.identifier}
+                      onSubmit={onReport}
+                    />
                     <button
                       type="button"
                       className="bookmark-button"
