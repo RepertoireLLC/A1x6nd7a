@@ -9,7 +9,8 @@ import type {
   SearchFilters,
   ArchiveDocLinks,
   ArchiveSearchDoc,
-  ArchiveSearchResultSummary
+  ArchiveSearchResultSummary,
+  SiteImageResponse
 } from "../types";
 import { performFallbackArchiveSearch } from "../utils/fallbackSearch";
 import { getDescription, getYearOrDate } from "../utils/format";
@@ -949,6 +950,62 @@ export async function scrapeArchive(query: string, count = 5): Promise<ScrapeRes
   }
 
   return (await response.json()) as ScrapeResponse;
+}
+
+export async function fetchSiteImages(
+  targetUrl: string,
+  page = 1,
+  pageSize = 40
+): Promise<SiteImageResponse> {
+  const request = buildApiUrl("/api/site-images");
+  request.searchParams.set("url", targetUrl);
+  request.searchParams.set("page", String(page));
+  request.searchParams.set("pageSize", String(pageSize));
+
+  const response = await fetch(request.toString());
+  if (!response.ok) {
+    throw await buildResponseError(response, "Unable to load archived images.");
+  }
+
+  const rawPayload = (await response.json()) as Partial<SiteImageResponse>;
+  const items = Array.isArray(rawPayload.items) ? rawPayload.items : [];
+  const resolvedPage =
+    typeof rawPayload.page === "number" && Number.isFinite(rawPayload.page) && rawPayload.page > 0
+      ? rawPayload.page
+      : page;
+  const resolvedPageSize =
+    typeof rawPayload.pageSize === "number" && Number.isFinite(rawPayload.pageSize) && rawPayload.pageSize > 0
+      ? rawPayload.pageSize
+      : pageSize;
+  const resolvedScope = rawPayload.scope === "path" ? "path" : "host";
+  const resolvedQuery =
+    typeof rawPayload.query === "string" && rawPayload.query.trim() ? rawPayload.query.trim() : targetUrl;
+  const fallback = Boolean(rawPayload.fallback);
+  const total =
+    typeof rawPayload.total === "number" && Number.isFinite(rawPayload.total) ? rawPayload.total : undefined;
+  const hasMore = Boolean(rawPayload.hasMore);
+  const site =
+    typeof rawPayload.site === "string" && rawPayload.site.trim()
+      ? rawPayload.site.trim()
+      : (() => {
+          try {
+            return new URL(targetUrl).hostname;
+          } catch {
+            return targetUrl;
+          }
+        })();
+
+  return {
+    items,
+    page: resolvedPage,
+    pageSize: resolvedPageSize,
+    hasMore,
+    query: resolvedQuery,
+    scope: resolvedScope,
+    total,
+    site,
+    fallback
+  };
 }
 
 async function buildResponseError(response: Response, fallbackMessage: string): Promise<Error> {

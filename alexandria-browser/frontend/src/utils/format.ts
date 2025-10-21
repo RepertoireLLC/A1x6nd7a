@@ -52,3 +52,47 @@ export function mediaIcon(mediatype?: string) {
       return "🗂️";
   }
 }
+
+export function formatWaybackTimestamp(timestamp: string): string {
+  const digits = timestamp.replace(/[^\d]/g, "");
+  if (digits.length >= 14) {
+    const year = digits.slice(0, 4);
+    const month = digits.slice(4, 6);
+    const day = digits.slice(6, 8);
+    const hour = digits.slice(8, 10);
+    const minute = digits.slice(10, 12);
+    const second = digits.slice(12, 14);
+    return `${year}-${month}-${day} ${hour}:${minute}:${second} UTC`;
+  }
+
+  if (digits.length >= 8) {
+    const year = digits.slice(0, 4);
+    const month = digits.slice(4, 6);
+    const day = digits.slice(6, 8);
+    return `${year}-${month}-${day}`;
+  }
+
+  return timestamp;
+}
+
+export function formatFileSize(bytes?: number | null): string | null {
+  if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes <= 0) {
+    return null;
+  }
+
+  const absolute = Math.abs(bytes);
+  if (absolute < 1024) {
+    return `${absolute} B`;
+  }
+
+  const units = ["KB", "MB", "GB", "TB"] as const;
+  let value = absolute / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  const rounded = value >= 10 ? value.toFixed(0) : value.toFixed(1);
+  return `${rounded} ${units[unitIndex]}`;
+}

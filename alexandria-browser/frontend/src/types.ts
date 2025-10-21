@@ -139,6 +139,29 @@ export interface ScrapeResponse {
   query: string;
 }
 
+export interface SiteImageEntry {
+  timestamp: string;
+  original: string;
+  mime: string;
+  status: string;
+  length?: number;
+  archived_url: string;
+  image_url: string;
+  thumbnail_url: string;
+}
+
+export interface SiteImageResponse {
+  items: SiteImageEntry[];
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+  query: string;
+  scope: "host" | "path";
+  total?: number;
+  site: string;
+  fallback?: boolean;
+}
+
 export interface WaybackAvailabilitySnapshot {
   available?: boolean;
   url?: string;

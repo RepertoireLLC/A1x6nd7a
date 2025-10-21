@@ -21,7 +21,8 @@ import {
   fetchArchiveMetadata,
   fetchCdxSnapshots,
   scrapeArchive,
-  getWaybackAvailability
+  getWaybackAvailability,
+  fetchSiteImages
 } from "./api/archive";
 import {
   loadBookmarks,
@@ -43,10 +44,12 @@ import type {
   SearchHistoryEntry,
   SpellcheckCorrection,
   StoredSettings,
-  WaybackAvailabilityResponse
+  WaybackAvailabilityResponse,
+  SiteImageEntry
 } from "./types";
 import { ItemDetailsPanel } from "./components/ItemDetailsPanel";
 import { SettingsProvider } from "./context/SettingsContext";
+import { SiteImageGallery } from "./components/SiteImageGallery";
 
 const RESULTS_PER_PAGE_OPTIONS = [10, 20, 50];
 const MEDIA_TYPE_OPTIONS = [
@@ -80,6 +83,23 @@ function normalizeSearchInput(input: string): string {
     .normalize("NFKC")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function mergeSiteImageEntries(previous: SiteImageEntry[], incoming: SiteImageEntry[]): SiteImageEntry[] {
+  if (previous.length === 0) {
+    return incoming;
+  }
+
+  const seen = new Set(previous.map((entry) => `${entry.timestamp}|${entry.original}`));
+  const merged = [...previous];
+  for (const entry of incoming) {
+    const key = `${entry.timestamp}|${entry.original}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      merged.push(entry);
+    }
+  }
+  return merged;
 }
 
 /**
@@ -147,8 +167,19 @@ function App() {
   const [relatedError, setRelatedError] = useState<string | null>(null);
   const [waybackDetails, setWaybackDetails] = useState<WaybackAvailabilityResponse | null>(null);
   const [waybackError, setWaybackError] = useState<string | null>(null);
+  const [siteImages, setSiteImages] = useState<SiteImageEntry[]>([]);
+  const [siteImagesQuery, setSiteImagesQuery] = useState<string | null>(null);
+  const [siteImagesPage, setSiteImagesPage] = useState(1);
+  const [siteImagesHasMore, setSiteImagesHasMore] = useState(false);
+  const [siteImagesLoading, setSiteImagesLoading] = useState(false);
+  const [siteImagesError, setSiteImagesError] = useState<string | null>(null);
+  const [siteImagesScope, setSiteImagesScope] = useState<"host" | "path">("host");
+  const [siteImagesFallback, setSiteImagesFallback] = useState(false);
+  const [siteImagesTotal, setSiteImagesTotal] = useState<number | undefined>(undefined);
+  const [siteImagesSite, setSiteImagesSite] = useState<string>("");
 
   const resultsContainerRef = useRef<HTMLDivElement | null>(null);
+  const siteImagesRequestId = useRef(0);
   const bootstrapped = useRef(false);
 
   useEffect(() => {
@@ -268,6 +299,61 @@ function App() {
     return [...historyQueries, ...bookmarkTitles];
   }, [history, bookmarks]);
 
+  const loadSiteImages = useCallback(
+    async (targetUrl: string, pageToLoad: number, append: boolean) => {
+      const requestId = siteImagesRequestId.current + 1;
+      siteImagesRequestId.current = requestId;
+      setSiteImagesLoading(true);
+      if (!append) {
+        setSiteImagesError(null);
+        setSiteImagesHasMore(false);
+        setSiteImagesFallback(false);
+        setSiteImagesTotal(undefined);
+        if (pageToLoad === 1) {
+          setSiteImagesPage(1);
+        }
+      }
+
+      try {
+        const payload = await fetchSiteImages(targetUrl, pageToLoad);
+        if (siteImagesRequestId.current !== requestId) {
+          return;
+        }
+
+        setSiteImagesError(null);
+        setSiteImagesScope(payload.scope);
+        setSiteImagesSite(payload.site);
+        setSiteImagesFallback(Boolean(payload.fallback));
+        setSiteImagesTotal(payload.total);
+        setSiteImagesPage(payload.page);
+        setSiteImagesHasMore(Boolean(payload.hasMore));
+        const nextItems = Array.isArray(payload.items) ? payload.items : [];
+        setSiteImages((previous) =>
+          append ? mergeSiteImageEntries(previous, nextItems) : nextItems
+        );
+      } catch (error) {
+        if (siteImagesRequestId.current !== requestId) {
+          return;
+        }
+
+        const message = error instanceof Error ? error.message : String(error);
+        setSiteImagesError(message);
+        if (!append) {
+          setSiteImages([]);
+          setSiteImagesHasMore(false);
+          setSiteImagesFallback(false);
+          setSiteImagesSite("");
+          setSiteImagesTotal(undefined);
+        }
+      } finally {
+        if (siteImagesRequestId.current === requestId) {
+          setSiteImagesLoading(false);
+        }
+      }
+    },
+    []
+  );
+
   const performSearch = useCallback(
     async (searchQuery: string, pageNumber: number, options?: { recordHistory?: boolean; rowsOverride?: number }) => {
       const rows = options?.rowsOverride ?? resultsPerPage;
@@ -292,6 +378,35 @@ function App() {
 
       const normalizedYearFrom = normalizeYear(yearFrom);
       const normalizedYearTo = normalizeYear(yearTo);
+
+      const urlQuery = isLikelyUrl(safeQuery);
+      if (urlQuery) {
+        const shouldRefreshImages = pageNumber === 1 || safeQuery !== siteImagesQuery;
+        setSiteImagesQuery(safeQuery);
+        if (shouldRefreshImages) {
+          siteImagesRequestId.current += 1;
+          setSiteImagesError(null);
+          setSiteImages([]);
+          setSiteImagesHasMore(false);
+          setSiteImagesFallback(false);
+          setSiteImagesTotal(undefined);
+          setSiteImagesSite("");
+          setSiteImagesPage(1);
+          setSiteImagesLoading(true);
+          void loadSiteImages(safeQuery, 1, false);
+        }
+      } else {
+        siteImagesRequestId.current += 1;
+        setSiteImagesQuery(null);
+        setSiteImages([]);
+        setSiteImagesHasMore(false);
+        setSiteImagesError(null);
+        setSiteImagesFallback(false);
+        setSiteImagesTotal(undefined);
+        setSiteImagesSite("");
+        setSiteImagesPage(1);
+        setSiteImagesLoading(false);
+      }
 
       try {
         if (!isYearValid(yearFrom) || !isYearValid(yearTo)) {
@@ -475,7 +590,7 @@ function App() {
         setIsLoading(false);
       }
     },
-    [resultsPerPage, mediaType, yearFrom, yearTo]
+    [resultsPerPage, mediaType, yearFrom, yearTo, loadSiteImages, siteImagesQuery]
   );
 
   useEffect(() => {
@@ -486,6 +601,21 @@ function App() {
     setActiveQuery(settings.lastQuery);
     void performSearch(settings.lastQuery, 1, { recordHistory: false, rowsOverride: settings.resultsPerPage });
   }, [performSearch, settings.lastQuery, settings.resultsPerPage]);
+
+  const handleLoadMoreSiteImages = useCallback(() => {
+    if (!siteImagesQuery || siteImagesLoading || !siteImagesHasMore) {
+      return;
+    }
+    void loadSiteImages(siteImagesQuery, siteImagesPage + 1, true);
+  }, [siteImagesQuery, siteImagesLoading, siteImagesHasMore, siteImagesPage, loadSiteImages]);
+
+  const handleRefreshSiteImages = useCallback(() => {
+    if (!siteImagesQuery) {
+      return;
+    }
+    siteImagesRequestId.current += 1;
+    void loadSiteImages(siteImagesQuery, 1, false);
+  }, [siteImagesQuery, loadSiteImages]);
 
   useEffect(() => {
     if (results.length === 0 || fallbackNotice || connectionMode !== "backend") {
@@ -714,6 +844,17 @@ function App() {
     setLiveStatus(null);
     setSelectedDoc(null);
     setSearchNotice(null);
+    siteImagesRequestId.current += 1;
+    setSiteImagesQuery(null);
+    setSiteImages([]);
+    setSiteImagesError(null);
+    setSiteImagesHasMore(false);
+    setSiteImagesLoading(false);
+    setSiteImagesFallback(false);
+    setSiteImagesTotal(undefined);
+    setSiteImagesSite("");
+    setSiteImagesScope("host");
+    setSiteImagesPage(1);
   };
 
   const clearHistory = () => {
@@ -777,6 +918,17 @@ function App() {
     setActiveQuery(null);
     setHasSearched(false);
     setHistoryIndex(-1);
+    siteImagesRequestId.current += 1;
+    setSiteImagesQuery(null);
+    setSiteImages([]);
+    setSiteImagesError(null);
+    setSiteImagesHasMore(false);
+    setSiteImagesLoading(false);
+    setSiteImagesFallback(false);
+    setSiteImagesTotal(undefined);
+    setSiteImagesSite("");
+    setSiteImagesScope("host");
+    setSiteImagesPage(1);
   };
 
   const suggestionNode = suggestedQuery ? (
@@ -904,6 +1056,22 @@ function App() {
       ) : null}
 
       <section className="results-container" aria-live="polite" ref={resultsContainerRef}>
+        {siteImagesQuery ? (
+          <SiteImageGallery
+            items={siteImages}
+            query={siteImagesQuery}
+            site={siteImagesSite}
+            scope={siteImagesScope}
+            page={siteImagesPage}
+            total={siteImagesTotal}
+            isLoading={siteImagesLoading}
+            error={siteImagesError}
+            hasMore={siteImagesHasMore}
+            fallback={siteImagesFallback}
+            onLoadMore={handleLoadMoreSiteImages}
+            onRefresh={handleRefreshSiteImages}
+          />
+        ) : null}
         <SearchResults
           results={results}
           statuses={statuses}

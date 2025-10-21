@@ -20,6 +20,7 @@ import { Agent, ProxyAgent, setGlobalDispatcher } from "undici";
 import { SAMPLE_ARCHIVE_DOCS, type SampleArchiveDoc } from "./data/sampleArchiveDocs";
 import { SAMPLE_METADATA } from "./data/sampleMetadata";
 import { SAMPLE_CDX_SNAPSHOTS } from "./data/sampleCdxSnapshots";
+import { getSampleSiteImages, type SampleSiteImageEntry } from "./data/sampleSiteImages";
 import { DEFAULT_SCRAPE_RESPONSE, SAMPLE_SCRAPE_RESULTS } from "./data/sampleScrapeResults";
 import { isNSFWContent } from "./services/nsfwFilter";
 import { getSpellCorrector, type SpellcheckResult } from "./services/spellCorrector";
@@ -156,6 +157,29 @@ type ScrapeResponse = {
   total: number;
   fallback?: boolean;
   query: string;
+};
+
+type SiteImageEntry = {
+  timestamp: string;
+  original: string;
+  mime: string;
+  status: string;
+  length?: number;
+  archived_url: string;
+  image_url: string;
+  thumbnail_url: string;
+};
+
+type SiteImageResponse = {
+  items: SiteImageEntry[];
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+  query: string;
+  scope: "host" | "path";
+  total?: number;
+  site: string;
+  fallback?: boolean;
 };
 
 type HandlerContext = {
@@ -1510,6 +1534,7 @@ const routes: Record<string, Record<string, RouteHandler>> = {
     "/api/status": handleStatus,
     "/api/metadata": handleMetadata,
     "/api/cdx": handleCdx,
+    "/api/site-images": handleSiteImages,
     "/api/scrape": handleScrape
   },
   POST: {
@@ -1868,6 +1893,98 @@ async function handleMetadata({ res, url }: HandlerContext): Promise<void> {
   sendJson(res, 200, fallback);
 }
 
+function buildSiteImageQueryTarget(parsed: URL): { query: string; scope: "host" | "path" } {
+  const protocol = parsed.protocol && /^https?:$/i.test(parsed.protocol) ? parsed.protocol : "https:";
+  const authority = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
+  const base = `${protocol}//${authority}`;
+  const normalizedPath = parsed.pathname ? parsed.pathname.replace(/\/+/g, "/") : "/";
+
+  if (!normalizedPath || normalizedPath === "/") {
+    return { query: `${base}/*`, scope: "host" };
+  }
+
+  const trimmed = normalizedPath.endsWith("/") ? normalizedPath : `${normalizedPath}/`;
+  return { query: `${base}${trimmed}*`, scope: "path" };
+}
+
+function parseSiteImageLength(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.trunc(value);
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return undefined;
+}
+
+function buildWaybackAssetUrl(timestamp: string, original: string, mode: "raw" | "image" = "raw"): string {
+  const safeTimestamp = timestamp.trim();
+  const safeOriginal = encodeURI(original.trim());
+  const base = `https://web.archive.org/web/${safeTimestamp}`;
+  if (!safeOriginal) {
+    return base;
+  }
+
+  return mode === "image" ? `${base}im_/${safeOriginal}` : `${base}/${safeOriginal}`;
+}
+
+function mapToSiteImageEntry(fields: {
+  timestamp?: unknown;
+  original?: unknown;
+  mime?: unknown;
+  status?: unknown;
+  length?: unknown;
+}): SiteImageEntry | null {
+  const timestamp = typeof fields.timestamp === "string" ? fields.timestamp.trim() : "";
+  const original = typeof fields.original === "string" ? fields.original.trim() : "";
+  if (!timestamp || !original) {
+    return null;
+  }
+
+  const mime = typeof fields.mime === "string" ? fields.mime : "";
+  const statusValue = fields.status;
+  const status =
+    typeof statusValue === "string"
+      ? statusValue
+      : typeof statusValue === "number"
+      ? String(statusValue)
+      : "";
+  const length = parseSiteImageLength(fields.length);
+
+  const archivedUrl = buildWaybackAssetUrl(timestamp, original, "raw");
+  const imageUrl = buildWaybackAssetUrl(timestamp, original, "image");
+
+  return {
+    timestamp,
+    original,
+    mime,
+    status,
+    ...(typeof length === "number" ? { length } : {}),
+    archived_url: archivedUrl,
+    image_url: imageUrl,
+    thumbnail_url: imageUrl
+  };
+}
+
+function mapSampleSiteImages(entries: SampleSiteImageEntry[]): SiteImageEntry[] {
+  return entries
+    .map((entry) =>
+      mapToSiteImageEntry({
+        timestamp: entry.timestamp,
+        original: entry.original,
+        mime: entry.mime,
+        status: entry.status,
+        length: entry.length
+      })
+    )
+    .filter((entry): entry is SiteImageEntry => Boolean(entry));
+}
+
 async function handleCdx({ res, url }: HandlerContext): Promise<void> {
   const targetUrl = url.searchParams.get("url")?.trim();
   if (!targetUrl) {
@@ -1955,6 +2072,131 @@ async function handleCdx({ res, url }: HandlerContext): Promise<void> {
   }
 
   sendJson(res, 200, fallback);
+}
+
+async function handleSiteImages({ res, url }: HandlerContext): Promise<void> {
+  const targetValue = url.searchParams.get("url")?.trim();
+  if (!targetValue) {
+    sendJson(res, 400, { error: "Missing required query parameter 'url'." });
+    return;
+  }
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(targetValue);
+  } catch {
+    sendJson(res, 400, { error: "The provided value for 'url' must be a valid http(s) URL." });
+    return;
+  }
+
+  if (!/^https?:$/i.test(parsedUrl.protocol)) {
+    sendJson(res, 400, { error: "The provided value for 'url' must start with http:// or https://" });
+    return;
+  }
+
+  const pageParam = url.searchParams.get("page") ?? "1";
+  const pageSizeParam = url.searchParams.get("pageSize") ?? url.searchParams.get("limit") ?? "40";
+  const pageValue = Number.parseInt(pageParam, 10);
+  const pageSizeValue = Number.parseInt(pageSizeParam, 10);
+  const safePage = Number.isFinite(pageValue) && pageValue > 0 ? pageValue : 1;
+  const safePageSize = Number.isFinite(pageSizeValue) && pageSizeValue > 0 ? Math.min(pageSizeValue, 200) : 40;
+  const offset = (safePage - 1) * safePageSize;
+
+  const { query, scope } = buildSiteImageQueryTarget(parsedUrl);
+
+  const requestUrl = new URL(CDX_SEARCH_ENDPOINT);
+  requestUrl.searchParams.set("url", query);
+  requestUrl.searchParams.set("output", "json");
+  requestUrl.searchParams.set("limit", String(safePageSize));
+  requestUrl.searchParams.set("offset", String(offset));
+  requestUrl.searchParams.set("fl", "timestamp,original,mimetype,statuscode,length");
+  requestUrl.searchParams.append("filter", "statuscode:200");
+  requestUrl.searchParams.append("filter", "mimetype:image");
+  requestUrl.searchParams.set("collapse", "digest");
+
+  let siteImagesError: unknown;
+
+  try {
+    const response = await fetch(requestUrl, applyDefaultHeaders(undefined, { Accept: "application/json" }));
+    if (!response.ok) {
+      throw new Error(`CDX image API responded with status ${response.status}`);
+    }
+
+    const raw = (await response.json()) as unknown;
+    const rows = Array.isArray(raw) ? raw : [];
+    const items: SiteImageEntry[] = [];
+
+    for (const row of rows) {
+      if (!Array.isArray(row)) {
+        continue;
+      }
+
+      if (row.length >= 2 && row[0] === "timestamp") {
+        continue;
+      }
+
+      const [timestamp, original, mime, status, length] = row as [unknown, unknown, unknown, unknown, unknown];
+      const entry = mapToSiteImageEntry({ timestamp, original, mime, status, length });
+      if (entry) {
+        items.push(entry);
+      }
+    }
+
+    const payload: SiteImageResponse = {
+      items,
+      page: safePage,
+      pageSize: safePageSize,
+      hasMore: items.length === safePageSize,
+      query,
+      scope,
+      site: parsedUrl.hostname
+    };
+
+    sendJson(res, 200, payload);
+    return;
+  } catch (error) {
+    siteImagesError = error;
+    console.warn("Site image lookup via CDX failed", error);
+  }
+
+  if (!shouldUseOfflineFallback(siteImagesError)) {
+    sendJson(res, 502, {
+      error: "Unable to retrieve archived images for the requested URL.",
+      details:
+        siteImagesError instanceof Error
+          ? siteImagesError.message
+          : siteImagesError
+          ? String(siteImagesError)
+          : "The Internet Archive image index is unavailable."
+    });
+    return;
+  }
+
+  const sampleEntries = getSampleSiteImages(parsedUrl.hostname);
+  if (!sampleEntries || sampleEntries.length === 0) {
+    sendJson(res, 502, {
+      error: "Unable to retrieve archived images for the requested URL.",
+      details: "The Internet Archive image index is unavailable and no offline cache exists for this site."
+    });
+    return;
+  }
+
+  const startIndex = Math.max(0, offset);
+  const fallbackSlice = sampleEntries.slice(startIndex, startIndex + safePageSize);
+  const mapped = mapSampleSiteImages(fallbackSlice);
+  const payload: SiteImageResponse = {
+    items: mapped,
+    page: safePage,
+    pageSize: safePageSize,
+    hasMore: startIndex + safePageSize < sampleEntries.length,
+    total: sampleEntries.length,
+    query,
+    scope,
+    site: parsedUrl.hostname,
+    fallback: true
+  };
+
+  sendJson(res, 200, payload);
 }
 
 async function handleScrape({ res, url }: HandlerContext): Promise<void> {
