@@ -33,7 +33,7 @@ import {
   saveHistory,
   saveSettings
 } from "./utils/storage";
-import { isLikelyUrl, isYearValid, normalizeYear } from "./utils/validators";
+import { isYearValid, normalizeYear, normalizeUrlInput } from "./utils/validators";
 import type {
   ArchiveMetadataResponse,
   ArchiveSearchDoc,
@@ -385,11 +385,11 @@ function App() {
       const normalizedYearFrom = normalizeYear(yearFrom);
       const normalizedYearTo = normalizeYear(yearTo);
 
-      const urlQuery = isLikelyUrl(safeQuery);
-      if (urlQuery) {
-        const isNewSiteQuery = safeQuery !== siteImagesQuery;
+      const normalizedUrl = normalizeUrlInput(safeQuery);
+      if (normalizedUrl) {
+        const isNewSiteQuery = normalizedUrl !== siteImagesQuery;
         const shouldRefreshImages = pageNumber === 1 || isNewSiteQuery;
-        setSiteImagesQuery(safeQuery);
+        setSiteImagesQuery(normalizedUrl);
         if (isNewSiteQuery) {
           setActiveResultsTab("images");
         }
@@ -403,7 +403,7 @@ function App() {
           setSiteImagesSite("");
           setSiteImagesPage(1);
           setSiteImagesLoading(true);
-          void loadSiteImages(safeQuery, 1, false);
+          void loadSiteImages(normalizedUrl, 1, false);
         }
       } else {
         setActiveResultsTab("results");
@@ -551,14 +551,14 @@ function App() {
           setLiveStatus(null);
           setWaybackDetails(null);
           setWaybackError(null);
-        } else if (isLikelyUrl(safeQuery)) {
+        } else if (normalizedUrl) {
           setLiveStatus("checking");
           setWaybackDetails(null);
           setWaybackError(null);
           try {
             const [status, availability] = await Promise.all([
-              checkLinkStatus(safeQuery),
-              getWaybackAvailability(safeQuery)
+              checkLinkStatus(normalizedUrl),
+              getWaybackAvailability(normalizedUrl)
             ]);
             setLiveStatus(status);
             setWaybackDetails(availability);
