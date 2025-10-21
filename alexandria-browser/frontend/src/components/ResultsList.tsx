@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { ArchiveSearchDoc, LinkStatus } from "../types";
 import { ResultCard } from "./ResultCard";
 import { PaginationControls } from "./PaginationControls";
+import { ImageResultGrid } from "./ImageResultGrid";
 
 interface ResultsListProps {
   results: ArchiveSearchDoc[];
@@ -22,6 +23,7 @@ interface ResultsListProps {
   saveMeta: Record<string, { label: string; disabled: boolean; message: string | null; snapshotUrl?: string; tone?: "success" | "error" | "info" }>;
   suggestionNode: ReactNode;
   notice?: string | null;
+  viewMode?: "default" | "images";
 }
 
 /**
@@ -45,7 +47,8 @@ export function ResultsList({
   onSaveSnapshot,
   saveMeta,
   suggestionNode,
-  notice
+  notice,
+  viewMode = "default"
 }: ResultsListProps) {
   if (isLoading) {
     return <div className="results-message">Searching the archives…</div>;
@@ -86,34 +89,47 @@ export function ResultsList({
       <div className="results-summary">
         Showing {startIndex} – {endIndex} of {totalResults ?? "?"} preserved records
       </div>
-      <ol className="results-list">
-        {results.map((doc) => {
-          const status = statuses[doc.identifier] ?? "checking";
-          const meta = saveMeta[doc.identifier] ?? {
-            label: "Save to Archive",
-            disabled: false,
-            message: null,
-            tone: "info" as const
-          };
-          return (
-            <ResultCard
-              key={doc.identifier}
-              doc={doc}
-              status={status}
-              filterNSFW={filterNSFW}
-              isBookmarked={bookmarkedIds.has(doc.identifier)}
-              onToggleBookmark={onToggleBookmark}
-              onSaveSnapshot={onSaveSnapshot}
-              onOpenDetails={onOpenDetails}
-              saveLabel={meta.label}
-              saveDisabled={meta.disabled}
-              saveState={meta.message}
-              saveTone={meta.tone}
-              snapshotUrl={meta.snapshotUrl}
-            />
-          );
-        })}
-      </ol>
+      {viewMode === "images" ? (
+        <ImageResultGrid
+          results={results}
+          statuses={statuses}
+          filterNSFW={filterNSFW}
+          bookmarkedIds={bookmarkedIds}
+          onToggleBookmark={onToggleBookmark}
+          onOpenDetails={onOpenDetails}
+          onSaveSnapshot={onSaveSnapshot}
+          saveMeta={saveMeta}
+        />
+      ) : (
+        <ol className="results-list">
+          {results.map((doc) => {
+            const status = statuses[doc.identifier] ?? "checking";
+            const meta = saveMeta[doc.identifier] ?? {
+              label: "Save to Archive",
+              disabled: false,
+              message: null,
+              tone: "info" as const
+            };
+            return (
+              <ResultCard
+                key={doc.identifier}
+                doc={doc}
+                status={status}
+                filterNSFW={filterNSFW}
+                isBookmarked={bookmarkedIds.has(doc.identifier)}
+                onToggleBookmark={onToggleBookmark}
+                onSaveSnapshot={onSaveSnapshot}
+                onOpenDetails={onOpenDetails}
+                saveLabel={meta.label}
+                saveDisabled={meta.disabled}
+                saveState={meta.message}
+                saveTone={meta.tone}
+                snapshotUrl={meta.snapshotUrl}
+              />
+            );
+          })}
+        </ol>
+      )}
       <PaginationControls
         currentPage={page}
         totalPages={totalPages}
