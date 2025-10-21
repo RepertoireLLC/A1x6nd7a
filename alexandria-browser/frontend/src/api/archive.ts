@@ -53,6 +53,8 @@ function createFriendlySearchError(error: unknown): Error {
 const offlineFallbackPreference = import.meta.env.VITE_ENABLE_OFFLINE_FALLBACK;
 const OFFLINE_FALLBACK_ENABLED = offlineFallbackPreference === "true";
 
+const DEV_SERVER_PORT = (import.meta.env.VITE_DEV_SERVER_PORT ?? "5173").trim();
+
 function resolveApiBaseUrl(): string {
   const configuredUrl = import.meta.env.VITE_API_BASE_URL?.trim();
   if (configuredUrl) {
@@ -66,13 +68,22 @@ function resolveApiBaseUrl(): string {
       hostname === "127.0.0.1" ||
       hostname === "[::1]";
 
+    const normalizedPort = port?.trim() ?? "";
+    const originPort = normalizedPort ? `:${normalizedPort}` : "";
+    const sameOrigin = `${protocol}//${hostname}${originPort}`;
+    const isHttpProtocol = protocol === "http:" || protocol === "https:";
+    const matchesDevPort = normalizedPort && normalizedPort === DEV_SERVER_PORT;
+
+    if ((!isLocalhost || matchesDevPort) && isHttpProtocol) {
+      return sameOrigin.replace(/\/$/, "");
+    }
+
     if (isLocalhost) {
       return "http://localhost:4000";
     }
 
-    if (protocol === "http:" || protocol === "https:") {
-      const originPort = port ? `:${port}` : "";
-      return `${protocol}//${hostname}${originPort}`;
+    if (isHttpProtocol) {
+      return sameOrigin.replace(/\/$/, "");
     }
 
     return "http://localhost:4000";
@@ -148,8 +159,25 @@ export async function searchArchive(
     try {
       const payload = JSON.parse(trimmedBody) as ArchiveSearchResponse;
       if (!archiveApiSuccessLogged) {
-        console.info("Internet Archive API connected successfully. JSON search operational.");
+        console.info("Archive API fully connected. Live search 100% operational.");
         archiveApiSuccessLogged = true;
+      }
+      if (payload.fallback) {
+        if (payload.fallback_message) {
+          console.warn("Archive search fell back to offline dataset:", payload.fallback_message);
+        } else {
+          console.warn("Archive search fell back to offline dataset.");
+        }
+        if (payload.fallback_reason) {
+          console.warn("Offline fallback reason:", payload.fallback_reason);
+        }
+      }
+      if (payload.search_strategy && payload.search_strategy !== "primary search with fuzzy expansion") {
+        const strategyDetails = payload.search_strategy_query?.trim();
+        console.info("Archive search completed using fallback strategy:", payload.search_strategy);
+        if (strategyDetails) {
+          console.info("Retry used simplified query:", strategyDetails);
+        }
       }
       return payload;
     } catch (parseError) {

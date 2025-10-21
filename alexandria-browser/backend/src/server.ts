@@ -15,6 +15,7 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
+import { ProxyAgent, setGlobalDispatcher } from "undici";
 
 import { SAMPLE_ARCHIVE_DOCS, type SampleArchiveDoc } from "./data/sampleArchiveDocs";
 import { SAMPLE_METADATA } from "./data/sampleMetadata";
@@ -75,8 +76,24 @@ type ArchiveSearchResponse = Record<string, unknown> & {
     start?: number;
   };
   fallback?: boolean;
+  fallback_reason?: string;
+  fallback_message?: string;
   results?: ArchiveSearchResultSummary[];
   pagination?: SearchPagination;
+  search_strategy?: string;
+  search_strategy_query?: string;
+};
+
+type ArchiveSearchFiltersInput = {
+  mediaType?: string;
+  yearFrom?: string;
+  yearTo?: string;
+};
+
+type ArchiveSearchAttempt = {
+  description: string;
+  url: URL;
+  query: string;
 };
 
 type ArchiveLinks = {
@@ -130,6 +147,8 @@ type HandlerContext = {
 type RouteHandler = (context: HandlerContext) => Promise<void> | void;
 
 const HEAD_TIMEOUT_MS = 7000;
+const OFFLINE_FALLBACK_MESSAGE_BASE =
+  "Working offline — showing a limited built-in dataset.";
 
 const spellCorrector = getSpellCorrector();
 
@@ -344,6 +363,119 @@ function getEnv(name: string): string | undefined {
 const nodeEnv = getEnv("NODE_ENV") ?? "development";
 const offlineFallbackEnv = getEnv("ENABLE_OFFLINE_FALLBACK");
 const offlineFallbackEnabled = offlineFallbackEnv === "true";
+const proxyEnvCandidates = [
+  getEnv("HTTPS_PROXY"),
+  getEnv("https_proxy"),
+  getEnv("HTTP_PROXY"),
+  getEnv("http_proxy")
+];
+const proxyUrl = proxyEnvCandidates.find((value) => typeof value === "string" && value.trim().length > 0)?.trim() ?? null;
+const noProxyEnv = getEnv("NO_PROXY") ?? getEnv("no_proxy") ?? "";
+
+function parseNoProxyList(value: string): string[] {
+  return value
+    .split(/[,\s]+/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function maskProxyForLog(raw: string): string {
+  try {
+    const parsed = new URL(raw);
+    const hasAuth = parsed.username !== "" || parsed.password !== "";
+    const authFragment = hasAuth ? "***@" : "";
+    return `${parsed.protocol}//${authFragment}${parsed.host}`;
+  } catch {
+    return raw;
+  }
+}
+
+if (proxyUrl) {
+  try {
+    const bypassEntries = parseNoProxyList(noProxyEnv);
+    const agentOptions =
+      bypassEntries.length > 0
+        ? ({ uri: proxyUrl, noProxy: bypassEntries } as ProxyAgent.Options & { noProxy: string[] })
+        : proxyUrl;
+    const proxyAgent = new ProxyAgent(agentOptions);
+    setGlobalDispatcher(proxyAgent);
+    const maskedProxy = maskProxyForLog(proxyUrl);
+    if (bypassEntries.length > 0) {
+      console.info(
+        `Configured HTTP proxy for outbound archive requests via ${maskedProxy} (no_proxy=${bypassEntries.join(",")}).`
+      );
+    } else {
+      console.info(`Configured HTTP proxy for outbound archive requests via ${maskedProxy}.`);
+    }
+  } catch (error) {
+    console.warn("Unable to configure HTTP proxy for outbound archive requests.", error);
+  }
+}
+
+const HTML_CONTENT_TYPE_PATTERN = /text\/html/i;
+const HTML_DOCTYPE_PATTERN = /<!doctype\s+html/i;
+const HTML_TAG_PATTERN = /<html/i;
+const HTML_PREVIEW_LIMIT = 240;
+
+type ArchiveSearchErrorKind =
+  | "http-status"
+  | "empty-body"
+  | "html-response"
+  | "malformed-json";
+
+class ArchiveSearchResponseError extends Error {
+  public readonly retryable: boolean;
+  public readonly preview?: string;
+  public readonly contentType?: string;
+  public readonly kind?: ArchiveSearchErrorKind;
+
+  constructor(
+    message: string,
+    options: {
+      retryable?: boolean;
+      preview?: string;
+      contentType?: string;
+      kind?: ArchiveSearchErrorKind;
+    } = {}
+  ) {
+    super(message);
+    this.name = "ArchiveSearchResponseError";
+    this.retryable = options.retryable ?? false;
+    this.preview = options.preview;
+    this.contentType = options.contentType;
+    this.kind = options.kind;
+  }
+}
+
+let archiveSearchConnectivityLogged = false;
+
+function isHtmlLikeResponse(body: string, contentType: string): boolean {
+  if (!body) {
+    return false;
+  }
+
+  if (HTML_CONTENT_TYPE_PATTERN.test(contentType)) {
+    return true;
+  }
+
+  const snippet = body.slice(0, HTML_PREVIEW_LIMIT).toLowerCase();
+  if (HTML_DOCTYPE_PATTERN.test(snippet) || HTML_TAG_PATTERN.test(snippet)) {
+    return true;
+  }
+
+  return snippet.trim().startsWith("<");
+}
+
+function logArchiveConnectivitySuccess(): void {
+  if (!archiveSearchConnectivityLogged) {
+    console.info("Archive API fully connected. Live search 100% operational.");
+    archiveSearchConnectivityLogged = true;
+  }
+}
+
+function buildPreviewSnippet(body: string): string {
+  return body.slice(0, HTML_PREVIEW_LIMIT).replace(/\s+/g, " ").trim();
+}
 
 const NETWORK_ERROR_CODES = new Set([
   "ENOTFOUND",
@@ -396,10 +528,79 @@ function isNetworkError(error: unknown): boolean {
 }
 
 function shouldUseOfflineFallback(error: unknown): boolean {
-  if (offlineFallbackEnabled) {
-    return true;
+  if (!offlineFallbackEnabled) {
+    return false;
   }
+
+  if (error instanceof ArchiveSearchResponseError) {
+    return Boolean(error.retryable);
+  }
+
   return isNetworkError(error);
+}
+
+function describeArchiveFallback(
+  error: unknown
+): { reason: string; message: string } {
+  if (error instanceof ArchiveSearchResponseError) {
+    switch (error.kind) {
+      case "html-response":
+        return {
+          reason: "html-response",
+          message: `${OFFLINE_FALLBACK_MESSAGE_BASE} The Internet Archive returned HTML instead of JSON.`
+        };
+      case "malformed-json":
+        return {
+          reason: "malformed-json",
+          message: `${OFFLINE_FALLBACK_MESSAGE_BASE} The Internet Archive returned malformed JSON.`
+        };
+      case "empty-body":
+        return {
+          reason: "empty-response",
+          message: `${OFFLINE_FALLBACK_MESSAGE_BASE} The Internet Archive returned an empty response.`
+        };
+      case "http-status":
+        return {
+          reason: "http-status",
+          message: `${OFFLINE_FALLBACK_MESSAGE_BASE} The Internet Archive search endpoint responded with an error.`
+        };
+      default:
+        break;
+    }
+
+    if (error.retryable) {
+      return {
+        reason: "retryable-error",
+        message: `${OFFLINE_FALLBACK_MESSAGE_BASE} The Internet Archive search endpoint responded with an unexpected error.`
+      };
+    }
+  }
+
+  if (isNetworkError(error)) {
+    return {
+      reason: "network-error",
+      message: `${OFFLINE_FALLBACK_MESSAGE_BASE} The Internet Archive could not be reached.`
+    };
+  }
+
+  if (error instanceof Error && error.message.trim()) {
+    return {
+      reason: "unexpected-error",
+      message: `${OFFLINE_FALLBACK_MESSAGE_BASE} ${error.message.trim()}`.trim()
+    };
+  }
+
+  if (typeof error === "string" && error.trim()) {
+    return {
+      reason: "unexpected-error",
+      message: `${OFFLINE_FALLBACK_MESSAGE_BASE} ${error.trim()}`.trim()
+    };
+  }
+
+  return {
+    reason: "unknown-error",
+    message: `${OFFLINE_FALLBACK_MESSAGE_BASE} The Internet Archive search service is currently unavailable.`
+  };
 }
 
 function applyDefaultHeaders(
@@ -622,6 +823,255 @@ function gatherSearchableText(doc: SampleArchiveDoc): string {
   return values.join(" ");
 }
 
+function buildPlainKeywordQuery(query: string): string {
+  const normalized = query.normalize("NFKC");
+  const tokens = normalized
+    .split(/[^\p{L}\p{N}]+/u)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+
+  if (tokens.length === 0) {
+    return normalized.trim().replace(/\s+/g, " ");
+  }
+
+  return tokens.join(" ");
+}
+
+function buildSearchExpression(query: string, includeFuzzy: boolean): string {
+  const sanitized = query.trim();
+  if (!includeFuzzy) {
+    return sanitized;
+  }
+
+  const tokens = sanitized
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+
+  if (tokens.length === 0) {
+    return sanitized;
+  }
+
+  const fuzzyClause = tokens.map((token) => `${token}~`).join(" ");
+  if (!fuzzyClause) {
+    return sanitized;
+  }
+
+  return `(${sanitized}) OR (${fuzzyClause})`;
+}
+
+function buildFilterExpressions(filters: ArchiveSearchFiltersInput, includeFilters: boolean): string[] {
+  if (!includeFilters) {
+    return [];
+  }
+
+  const expressions: string[] = [];
+  const mediaTypeValue = filters.mediaType?.trim() ?? "";
+  const yearFromValue = filters.yearFrom?.trim() ?? "";
+  const yearToValue = filters.yearTo?.trim() ?? "";
+
+  if (mediaTypeValue) {
+    expressions.push(`mediatype:(${mediaTypeValue})`);
+  }
+
+  if (yearFromValue || yearToValue) {
+    const start = yearFromValue || "*";
+    const end = yearToValue || "*";
+    expressions.push(`year:[${start} TO ${end}]`);
+  }
+
+  return expressions;
+}
+
+function buildArchiveSearchRequestUrl(
+  query: string,
+  page: number,
+  rows: number,
+  filters: ArchiveSearchFiltersInput,
+  options: { includeFilters: boolean; includeFuzzy: boolean }
+): URL {
+  const requestUrl = new URL(ARCHIVE_SEARCH_ENDPOINT);
+  const baseExpression = buildSearchExpression(query, options.includeFuzzy);
+  const filterExpressions = buildFilterExpressions(filters, options.includeFilters);
+  const parts = [baseExpression, ...filterExpressions].filter((part) => part && part.length > 0);
+
+  const finalQuery =
+    parts.length > 1
+      ? parts.map((part) => (part.startsWith("(") && part.endsWith(")") ? part : `(${part})`)).join(" AND ")
+      : parts[0] ?? baseExpression;
+
+  requestUrl.searchParams.set("q", finalQuery);
+  requestUrl.searchParams.set("output", "json");
+  requestUrl.searchParams.set("page", String(page));
+  requestUrl.searchParams.set("rows", String(rows));
+  requestUrl.searchParams.set(
+    "fl",
+    [
+      "identifier",
+      "title",
+      "description",
+      "creator",
+      "collection",
+      "mediatype",
+      "year",
+      "date",
+      "publicdate",
+      "downloads",
+      "originalurl",
+      "original"
+    ].join(",")
+  );
+
+  return requestUrl;
+}
+
+function buildArchiveSearchAttempts(
+  query: string,
+  page: number,
+  rows: number,
+  filters: ArchiveSearchFiltersInput
+): ArchiveSearchAttempt[] {
+  const trimmedQuery = query.trim();
+
+  const createAttempt = (
+    description: string,
+    queryValue: string,
+    filterValue: ArchiveSearchFiltersInput,
+    options: { includeFilters: boolean; includeFuzzy: boolean }
+  ): ArchiveSearchAttempt => {
+    const url = buildArchiveSearchRequestUrl(queryValue, page, rows, filterValue, options);
+    const effectiveQuery = url.searchParams.get("q") ?? queryValue;
+    return { description, url, query: effectiveQuery };
+  };
+
+  const attempts: ArchiveSearchAttempt[] = [
+    createAttempt("primary search with fuzzy expansion", trimmedQuery, filters, {
+      includeFilters: true,
+      includeFuzzy: true
+    }),
+    createAttempt("clean search without fuzzy expansion", trimmedQuery, filters, {
+      includeFilters: true,
+      includeFuzzy: false
+    }),
+    createAttempt("minimal search without filters", trimmedQuery, {}, {
+      includeFilters: false,
+      includeFuzzy: false
+    })
+  ];
+
+  const plainKeywords = buildPlainKeywordQuery(trimmedQuery);
+  if (plainKeywords && plainKeywords !== trimmedQuery) {
+    attempts.push(
+      createAttempt("plain keyword search without special syntax", plainKeywords, {}, {
+        includeFilters: false,
+        includeFuzzy: false
+      })
+    );
+  }
+
+  return attempts.filter((attempt, index, array) => {
+    const signature = attempt.url.toString();
+    return array.findIndex((candidate) => candidate.url.toString() === signature) === index;
+  });
+}
+
+async function fetchArchiveSearchAttempt(attempt: ArchiveSearchAttempt): Promise<ArchiveSearchResponse> {
+  const response = await fetch(
+    attempt.url,
+    applyDefaultHeaders(undefined, { Accept: "application/json" })
+  );
+
+  const contentType = response.headers.get("content-type") ?? "";
+  const rawBody = await response.text();
+  const trimmedBody = rawBody.trim();
+
+  if (!response.ok) {
+    const preview = trimmedBody ? buildPreviewSnippet(trimmedBody) : undefined;
+    throw new ArchiveSearchResponseError(
+      `Archive API responded with status ${response.status}.`,
+      {
+        retryable: response.status >= 500,
+        preview,
+        contentType,
+        kind: "http-status"
+      }
+    );
+  }
+
+  if (!trimmedBody) {
+    throw new ArchiveSearchResponseError("Archive API returned an empty response body.", {
+      retryable: true,
+      kind: "empty-body"
+    });
+  }
+
+  if (isHtmlLikeResponse(trimmedBody, contentType)) {
+    const preview = buildPreviewSnippet(trimmedBody);
+    throw new ArchiveSearchResponseError("Archive API returned HTML instead of JSON.", {
+      retryable: true,
+      preview,
+      contentType,
+      kind: "html-response"
+    });
+  }
+
+  try {
+    return JSON.parse(trimmedBody) as ArchiveSearchResponse;
+  } catch (error) {
+    const preview = buildPreviewSnippet(trimmedBody);
+    throw new ArchiveSearchResponseError("Archive API returned malformed JSON.", {
+      retryable: true,
+      preview,
+      contentType,
+      kind: "malformed-json"
+    });
+  }
+}
+
+async function executeArchiveSearchAttempts(
+  attempts: ArchiveSearchAttempt[]
+): Promise<{ payload: ArchiveSearchResponse; attempt: ArchiveSearchAttempt }> {
+  let lastError: unknown = null;
+
+  for (let index = 0; index < attempts.length; index++) {
+    const attempt = attempts[index];
+    const isLastAttempt = index === attempts.length - 1;
+    try {
+      const payload = await fetchArchiveSearchAttempt(attempt);
+      logArchiveConnectivitySuccess();
+      return { payload, attempt };
+    } catch (error) {
+      lastError = error;
+      const retryable =
+        !isLastAttempt &&
+        ((error instanceof ArchiveSearchResponseError && error.retryable) || isNetworkError(error));
+      const context =
+        error instanceof ArchiveSearchResponseError
+          ? { message: error.message, preview: error.preview, contentType: error.contentType }
+          : { error };
+
+      if (retryable) {
+        console.warn(
+          `Archive search attempt failed (${attempt.description}). Retrying with a sanitized query variant.`,
+          {
+            ...context,
+            query: attempt.query
+          }
+        );
+        continue;
+      }
+
+      console.warn(`Archive search attempt failed (${attempt.description}).`, {
+        ...context,
+        query: attempt.query
+      });
+      throw error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Archive search attempts exhausted.");
+}
+
 function performLocalArchiveSearch(
   query: string,
   page: number,
@@ -789,60 +1239,20 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     return;
   }
 
-  const requestUrl = new URL(ARCHIVE_SEARCH_ENDPOINT);
-  const tokens = query.split(/\s+/).filter(Boolean);
-  const fuzzyClause = tokens.map((token) => `${token}~`).join(" ");
-  const searchExpression = fuzzyClause ? `(${query}) OR (${fuzzyClause})` : query;
-
-  const filterExpressions: string[] = [];
-  if (mediaTypeParam) {
-    filterExpressions.push(`mediatype:(${mediaTypeParam})`);
-  }
-
-  if (yearFromParam || yearToParam) {
-    const yearFromValue = yearFromParam || "*";
-    const yearToValue = yearToParam || "*";
-    filterExpressions.push(`year:[${yearFromValue} TO ${yearToValue}]`);
-  }
-
-  const combinedQuery = [searchExpression, ...filterExpressions]
-    .filter((part) => part && part.length > 0)
-    .map((part) => `(${part})`)
-    .join(" AND ");
-
-  requestUrl.searchParams.set("q", combinedQuery.length > 0 ? combinedQuery : searchExpression);
-  requestUrl.searchParams.set("output", "json");
-  requestUrl.searchParams.set("page", String(safePage));
-  requestUrl.searchParams.set("rows", String(safeRows));
-  requestUrl.searchParams.set(
-    "fl",
-    [
-      "identifier",
-      "title",
-      "description",
-      "creator",
-      "collection",
-      "mediatype",
-      "year",
-      "date",
-      "publicdate",
-      "downloads",
-      "originalurl",
-      "original"
-    ].join(",")
-  );
-
   let data: ArchiveSearchResponse | null = null;
   let usedFallback = false;
-  let lastSearchError: unknown;
+  let lastSearchError: unknown = null;
+  let lastAttempt: ArchiveSearchAttempt | null = null;
 
   try {
-    const response = await fetch(requestUrl, applyDefaultHeaders(undefined, { Accept: "application/json" }));
-    if (!response.ok) {
-      throw new Error(`Archive API responded with status ${response.status}`);
-    }
-
-    data = (await response.json()) as ArchiveSearchResponse;
+    const attempts = buildArchiveSearchAttempts(query, safePage, safeRows, {
+      mediaType: mediaTypeParam,
+      yearFrom: yearFromParam,
+      yearTo: yearToParam
+    });
+    const result = await executeArchiveSearchAttempts(attempts);
+    data = result.payload;
+    lastAttempt = result.attempt;
   } catch (error) {
     console.warn("Error fetching Internet Archive search results", error);
     lastSearchError = error;
@@ -870,6 +1280,29 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       yearTo: yearToParam
     });
     usedFallback = true;
+    const fallbackInfo = describeArchiveFallback(lastSearchError);
+    data.fallback_reason = fallbackInfo.reason;
+    data.fallback_message = fallbackInfo.message;
+    console.warn(
+      `Archive search is operating in offline mode (${fallbackInfo.reason}).`,
+      {
+        message: fallbackInfo.message,
+        originalError:
+          lastSearchError instanceof Error ? lastSearchError.message : lastSearchError ?? "unknown"
+      }
+    );
+  }
+
+  if (
+    data &&
+    !usedFallback &&
+    lastAttempt &&
+    lastAttempt.description !== "primary search with fuzzy expansion"
+  ) {
+    data.search_strategy = lastAttempt.description;
+    if (lastAttempt.query && lastAttempt.query.trim()) {
+      data.search_strategy_query = lastAttempt.query.trim();
+    }
   }
 
   const docsRaw = data.response?.docs;
@@ -993,8 +1426,16 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
 
   if (usedFallback) {
     payload.fallback = true;
-  } else if ("fallback" in payload) {
-    delete (payload as Record<string, unknown>).fallback;
+  } else {
+    if ("fallback" in payload) {
+      delete (payload as Record<string, unknown>).fallback;
+    }
+    if ("fallback_reason" in payload) {
+      delete (payload as Record<string, unknown>).fallback_reason;
+    }
+    if ("fallback_message" in payload) {
+      delete (payload as Record<string, unknown>).fallback_message;
+    }
   }
 
   sendJson(res, 200, payload);
