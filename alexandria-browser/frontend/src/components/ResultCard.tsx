@@ -1,6 +1,7 @@
 import type { ArchiveSearchDoc, LinkStatus } from "../types";
 import { getDescription, getYearOrDate, mediaIcon } from "../utils/format";
 import { resolveDocLinks, STATUS_ARIA_LABELS, STATUS_LABELS } from "../utils/resultPresentation";
+import { ExpandableDescription } from "./ExpandableDescription";
 
 interface ResultCardProps {
   doc: ArchiveSearchDoc;
@@ -36,6 +37,7 @@ export function ResultCard({
 }: ResultCardProps) {
   const { archiveUrl, waybackUrl, originalUrl } = resolveDocLinks(doc);
   const description = getDescription(doc.description);
+  const hasDescription = description.trim().length > 0;
   const yearOrDate = getYearOrDate(doc);
   const creator = Array.isArray(doc.creator) ? doc.creator.join(", ") : doc.creator ?? "";
   const isNSFW = doc.nsfw === true;
@@ -70,7 +72,9 @@ export function ResultCard({
             </div>
           </div>
         </div>
-        {description ? <p className="result-description">{description}</p> : null}
+        {hasDescription ? (
+          <ExpandableDescription text={description} paragraphClassName="result-description" previewCharLimit={220} />
+        ) : null}
         <div className="result-footer">
           <span className={`result-status status-${status}`} aria-label={STATUS_ARIA_LABELS[status]}>
             {STATUS_LABELS[status]}

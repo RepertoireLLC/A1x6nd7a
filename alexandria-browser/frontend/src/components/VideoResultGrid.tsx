@@ -9,6 +9,7 @@ import {
   STATUS_ARIA_LABELS,
   STATUS_LABELS
 } from "../utils/resultPresentation";
+import { ExpandableDescription } from "./ExpandableDescription";
 
 type SaveTone = "success" | "error" | "info" | undefined;
 
@@ -92,6 +93,7 @@ export function VideoResultGrid({
         const creator = getCreatorLabel(doc);
         const downloadsLabel = getDownloadsLabel(doc.downloads);
         const description = getDescription(doc.description);
+        const hasDescription = description.trim().length > 0;
         const displayUrl = formatDisplayUrl(originalUrl ?? archiveUrl);
         const saveTone: SaveTone = meta.tone ?? "info";
 
@@ -148,7 +150,15 @@ export function VideoResultGrid({
                   >
                     {displayUrl}
                   </a>
-                  {description ? <p className="video-result-description">{description}</p> : null}
+                  {hasDescription ? (
+                    <ExpandableDescription
+                      text={description}
+                      paragraphClassName="video-result-description"
+                      previewCharLimit={200}
+                      expandLabel="Show full description"
+                      collapseLabel="Show less"
+                    />
+                  ) : null}
                   <div className="result-links video-result-links">
                     {originalUrl ? (
                       <a href={originalUrl} target="_blank" rel="noreferrer">

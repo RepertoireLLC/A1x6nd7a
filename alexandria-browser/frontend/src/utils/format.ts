@@ -10,6 +10,20 @@ export function getDescription(description?: string | string[]) {
   return Array.isArray(description) ? description.join(" ") : description;
 }
 
+export function buildDescriptionPreview(description: string, maxLength = 200) {
+  const normalized = description.trim().replace(/\s+/g, " ");
+  if (normalized.length <= maxLength) {
+    return { preview: normalized, truncated: false } as const;
+  }
+
+  const snippet = normalized.slice(0, maxLength);
+  const lastSpaceIndex = snippet.lastIndexOf(" ");
+  const cutoff = lastSpaceIndex > maxLength * 0.6 ? lastSpaceIndex : maxLength;
+  const trimmed = normalized.slice(0, cutoff).replace(/[\s.,;:!-]+$/, "");
+
+  return { preview: `${trimmed}…`, truncated: true } as const;
+}
+
 /**
  * Determine a human readable date or year for a document.
  */

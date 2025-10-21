@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import type { ArchiveSearchDoc, LinkStatus } from "../types";
-import { getYearOrDate, mediaIcon } from "../utils/format";
+import { getDescription, getYearOrDate, mediaIcon } from "../utils/format";
 import {
   formatDisplayUrl,
   getImagePreviewUrl,
@@ -9,6 +9,7 @@ import {
   STATUS_ARIA_LABELS,
   STATUS_LABELS
 } from "../utils/resultPresentation";
+import { ExpandableDescription } from "./ExpandableDescription";
 
 type SaveTone = "success" | "error" | "info" | undefined;
 
@@ -85,6 +86,8 @@ export function ImageResultGrid({
         const creator = getCreatorLabel(doc);
         const displayUrl = formatDisplayUrl(originalUrl ?? archiveUrl);
         const saveTone: SaveTone = meta.tone ?? "info";
+        const description = getDescription(doc.description);
+        const hasDescription = description.trim().length > 0;
 
         const handleToggle = () => {
           setExpandedId((current) => (current === doc.identifier ? null : doc.identifier));
@@ -151,6 +154,15 @@ export function ImageResultGrid({
                       Wayback snapshots
                     </a>
                   </div>
+                  {hasDescription ? (
+                    <ExpandableDescription
+                      text={description}
+                      paragraphClassName="image-result-description"
+                      previewCharLimit={180}
+                      expandLabel="Show full description"
+                      collapseLabel="Show less"
+                    />
+                  ) : null}
                   <div className="result-links image-result-actions">
                     <button
                       type="button"

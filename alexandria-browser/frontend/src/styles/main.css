@@ -702,13 +702,12 @@ html[data-theme="light"] datalist option {
   white-space: nowrap;
 }
 
-.video-result-description {
+.video-result-description,
+.image-result-description {
   margin: 0;
   font-size: 0.85rem;
   line-height: 1.4;
-  max-height: 6.5rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  color: color-mix(in srgb, var(--harmonia-text) 88%, transparent);
 }
 
 .video-result-links,
@@ -816,6 +815,38 @@ html[data-theme="light"] datalist option {
   margin: 0;
   color: color-mix(in srgb, var(--harmonia-text) 82%, transparent);
   line-height: 1.55;
+}
+
+.expandable-description {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.description-toggle {
+  border: none;
+  background: transparent;
+  color: var(--harmonia-accent);
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 0;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.video-result-details .description-toggle,
+.image-result-details .description-toggle {
+  color: color-mix(in srgb, var(--harmonia-accent) 85%, white 15%);
+}
+
+.description-toggle:hover,
+.description-toggle:focus-visible {
+  text-decoration: underline;
+}
+
+.description-toggle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--harmonia-accent) 65%, transparent);
+  outline-offset: 2px;
 }
 
 .result-footer {
