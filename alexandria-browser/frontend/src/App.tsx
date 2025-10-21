@@ -261,6 +261,13 @@ function App() {
   const performSearch = useCallback(
     async (searchQuery: string, pageNumber: number, options?: { recordHistory?: boolean; rowsOverride?: number }) => {
       const rows = options?.rowsOverride ?? resultsPerPage;
+      const safeQuery = searchQuery.trim();
+      if (!safeQuery) {
+        setError("Please enter a search query.");
+        setFallbackNotice(null);
+        return;
+      }
+
       setIsLoading(true);
       setError(null);
       setFallbackNotice(null);
@@ -282,7 +289,7 @@ function App() {
           throw new Error("The start year cannot be later than the end year.");
         }
 
-        const payload = await searchArchive(searchQuery, pageNumber, rows, {
+        const payload = await searchArchive(safeQuery, pageNumber, rows, {
           mediaType,
           yearFrom: normalizedYearFrom,
           yearTo: normalizedYearTo
@@ -334,8 +341,8 @@ function App() {
 
         if (options?.recordHistory ?? true) {
           setHistory((previous) => {
-            const entry: SearchHistoryEntry = { query: searchQuery, timestamp: Date.now() };
-            return [entry, ...previous.filter((item) => item.query !== searchQuery)].slice(0, 50);
+            const entry: SearchHistoryEntry = { query: safeQuery, timestamp: Date.now() };
+            return [entry, ...previous.filter((item) => item.query !== safeQuery)].slice(0, 50);
           });
           setHistoryIndex(0);
         }
@@ -348,14 +355,14 @@ function App() {
           setLiveStatus(null);
           setWaybackDetails(null);
           setWaybackError(null);
-        } else if (isLikelyUrl(searchQuery)) {
+        } else if (isLikelyUrl(safeQuery)) {
           setLiveStatus("checking");
           setWaybackDetails(null);
           setWaybackError(null);
           try {
             const [status, availability] = await Promise.all([
-              checkLinkStatus(searchQuery),
-              getWaybackAvailability(searchQuery)
+              checkLinkStatus(safeQuery),
+              getWaybackAvailability(safeQuery)
             ]);
             setLiveStatus(status);
             setWaybackDetails(availability);
@@ -371,7 +378,18 @@ function App() {
         }
       } catch (fetchError) {
         console.error(fetchError);
-        setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
+        const fallbackMessage = "Search request failed. Please try again later.";
+        let message = fetchError instanceof Error ? fetchError.message : String(fetchError);
+        if (message && /unexpected token/i.test(message)) {
+          message = "Invalid response from Internet Archive. Please try again later.";
+        }
+        if (message && message.includes("<!doctype")) {
+          message = "Invalid response from Internet Archive. Please try again later.";
+        }
+        if (!message || !message.trim()) {
+          message = fallbackMessage;
+        }
+        setError(message);
         setFallbackNotice(null);
         setResults([]);
         setTotalResults(null);

@@ -10,6 +10,46 @@ import type {
 } from "../types";
 import { performFallbackArchiveSearch } from "../utils/fallbackSearch";
 
+const HTML_CONTENT_TYPE_PATTERN = /text\/html/i;
+const HTML_DOCTYPE_PATTERN = /^\s*<!DOCTYPE\s+html/i;
+const HTML_TAG_PATTERN = /^\s*<html/i;
+const HTML_PREVIEW_LIMIT = 200;
+const NETWORK_ERROR_MESSAGE_PATTERN = /(failed to fetch|fetch failed|network\s?error|network request failed|load failed|connection refused|dns lookup failed)/i;
+
+let archiveApiSuccessLogged = false;
+
+function isLikelyHtmlResponse(body: string, contentType: string): boolean {
+  if (!body) {
+    return false;
+  }
+
+  if (HTML_CONTENT_TYPE_PATTERN.test(contentType)) {
+    return true;
+  }
+
+  return HTML_DOCTYPE_PATTERN.test(body) || HTML_TAG_PATTERN.test(body) || body.trim().startsWith("<");
+}
+
+function createFriendlySearchError(error: unknown): Error {
+  if (!error) {
+    return new Error("Search request failed. Please try again later.");
+  }
+
+  if (error instanceof Error) {
+    const message = error.message ?? "";
+    if (NETWORK_ERROR_MESSAGE_PATTERN.test(message)) {
+      return new Error("Unable to reach the Internet Archive. Please check your connection and try again.");
+    }
+    return error;
+  }
+
+  if (typeof error === "string" && error.trim()) {
+    return new Error(error.trim());
+  }
+
+  return new Error("Search request failed. Please try again later.");
+}
+
 const offlineFallbackPreference = import.meta.env.VITE_ENABLE_OFFLINE_FALLBACK;
 const OFFLINE_FALLBACK_ENABLED = offlineFallbackPreference === "true";
 
@@ -56,8 +96,13 @@ export async function searchArchive(
   rows: number,
   filters: SearchFilters
 ): Promise<ArchiveSearchResponse> {
+  const sanitizedQuery = query.trim();
+  if (!sanitizedQuery) {
+    throw new Error("Please enter a search query before searching the Internet Archive.");
+  }
+
   const url = buildApiUrl("/api/searchArchive");
-  url.searchParams.set("q", query);
+  url.searchParams.set("q", sanitizedQuery);
   url.searchParams.set("page", String(page));
   url.searchParams.set("rows", String(rows));
 
@@ -74,7 +119,9 @@ export async function searchArchive(
   let lastError: unknown;
 
   try {
-    const response = await fetch(url.toString());
+    const response = await fetch(url.toString(), {
+      headers: { Accept: "application/json" }
+    });
     if (!response.ok) {
       throw await buildResponseError(
         response,
@@ -83,19 +130,34 @@ export async function searchArchive(
     }
 
     const rawBody = await response.text();
-    if (!rawBody.trim()) {
+    const trimmedBody = rawBody.trim();
+    if (!trimmedBody) {
       throw new Error("Search request returned an empty response body.");
     }
 
+    const contentType = response.headers.get("content-type") ?? "";
+    if (isLikelyHtmlResponse(trimmedBody, contentType)) {
+      const preview = trimmedBody.slice(0, HTML_PREVIEW_LIMIT).replace(/\s+/g, " ").trim();
+      console.warn("Received non-JSON response from Internet Archive search endpoint.", {
+        contentType,
+        preview
+      });
+      throw new Error("Invalid response from Internet Archive. Please try again later.");
+    }
+
     try {
-      return JSON.parse(rawBody) as ArchiveSearchResponse;
+      const payload = JSON.parse(trimmedBody) as ArchiveSearchResponse;
+      if (!archiveApiSuccessLogged) {
+        console.info("Internet Archive API connected successfully. JSON search operational.");
+        archiveApiSuccessLogged = true;
+      }
+      return payload;
     } catch (parseError) {
-      const preview = rawBody.slice(0, 200).replace(/\s+/g, " ").trim();
-      const message =
-        parseError instanceof Error ? parseError.message : "Unexpected response payload.";
-      throw new Error(
-        `Search request returned invalid JSON. ${message}${preview ? ` — ${preview}` : ""}`.trim()
-      );
+      const preview = trimmedBody.slice(0, HTML_PREVIEW_LIMIT).replace(/\s+/g, " ").trim();
+      console.warn("Failed to parse Internet Archive search response as JSON.", parseError, {
+        preview
+      });
+      throw new Error("Invalid response from Internet Archive. Please try again later.");
     }
   } catch (error) {
     lastError = error;
@@ -103,12 +165,10 @@ export async function searchArchive(
 
   if (OFFLINE_FALLBACK_ENABLED) {
     console.warn("Search request failed, using local fallback dataset.", lastError);
-    return performFallbackArchiveSearch(query, page, rows, filters);
+    return performFallbackArchiveSearch(sanitizedQuery, page, rows, filters);
   }
 
-  throw lastError instanceof Error
-    ? lastError
-    : new Error("Search request failed. Please try again later.");
+  throw createFriendlySearchError(lastError);
 }
 
 /**
