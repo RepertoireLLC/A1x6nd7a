@@ -9,6 +9,7 @@ interface SidebarProps {
   bookmarks: BookmarkEntry[];
   history: SearchHistoryEntry[];
   onSelectHistoryItem: (query: string) => void;
+  onRemoveHistoryItem: (query: string) => void;
   onRemoveBookmark: (identifier: string) => void;
   settingsPanel: ReactNode;
 }
@@ -24,6 +25,7 @@ export function Sidebar({
   bookmarks,
   history,
   onSelectHistoryItem,
+  onRemoveHistoryItem,
   onRemoveBookmark,
   settingsPanel
 }: SidebarProps) {
@@ -89,13 +91,24 @@ export function Sidebar({
             {history.length === 0 ? <li>No searches yet.</li> : null}
             {history.map((entry) => (
               <li key={`${entry.query}-${entry.timestamp}`}>
-                <button
-                  type="button"
-                  className="history-button"
-                  onClick={() => onSelectHistoryItem(entry.query)}
-                >
-                  {entry.query}
-                </button>
+                <div className="history-entry">
+                  <button
+                    type="button"
+                    className="history-button"
+                    onClick={() => onSelectHistoryItem(entry.query)}
+                  >
+                    {entry.query}
+                  </button>
+                  <button
+                    type="button"
+                    className="history-remove-button"
+                    onClick={() => onRemoveHistoryItem(entry.query)}
+                    aria-label={`Remove search "${entry.query}" from history`}
+                    title="Remove search"
+                  >
+                    ×
+                  </button>
+                </div>
                 <div className="sidebar-item-meta">
                   {new Date(entry.timestamp).toLocaleString()}
                 </div>

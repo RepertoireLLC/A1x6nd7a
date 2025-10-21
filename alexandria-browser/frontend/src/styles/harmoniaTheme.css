@@ -1,5 +1,4 @@
 :root {
-  color-scheme: light dark;
   --harmonia-font-primary: "Sora", "Inter", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   --harmonia-radius-xs: 0.5rem;
   --harmonia-radius-sm: 0.75rem;
@@ -31,6 +30,7 @@ body {
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
   --harmonia-background: radial-gradient(circle at top, #05070f, #020308 55%, #010104 95%);
   --harmonia-surface: rgba(13, 16, 35, 0.86);
   --harmonia-surface-alt: rgba(32, 39, 83, 0.35);
@@ -48,6 +48,7 @@ body {
 }
 
 [data-theme="light"] {
+  color-scheme: light;
   --harmonia-background: radial-gradient(circle at top, #ffffff, #f5f7ff 55%, #e8edff 100%);
   --harmonia-surface: rgba(255, 255, 255, 0.9);
   --harmonia-surface-alt: rgba(255, 255, 255, 0.7);

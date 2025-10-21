@@ -34,6 +34,19 @@ textarea {
   color: inherit;
 }
 
+select option,
+select optgroup,
+datalist option {
+  color: var(--harmonia-text);
+  background-color: color-mix(in srgb, var(--harmonia-surface) 92%, transparent);
+}
+
+html[data-theme="light"] select option,
+html[data-theme="light"] select optgroup,
+html[data-theme="light"] datalist option {
+  background-color: color-mix(in srgb, var(--harmonia-surface) 96%, transparent);
+}
+
 .app-shell {
   display: flex;
   flex-direction: column;
@@ -984,8 +997,15 @@ textarea {
   box-shadow: 0 12px 24px -20px var(--harmonia-glow-primary);
 }
 
+.history-entry {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .history-button {
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   text-align: left;
   border-radius: var(--harmonia-radius-md);
   border: var(--harmonia-border-weight) solid color-mix(in srgb, var(--harmonia-border) 60%, transparent);
@@ -1001,6 +1021,34 @@ textarea {
 .history-button:focus-visible {
   transform: translateY(-1px);
   box-shadow: 0 12px 28px -22px var(--harmonia-glow-primary);
+}
+
+.history-remove-button {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--harmonia-radius-pill);
+  border: var(--harmonia-border-weight) solid color-mix(in srgb, var(--harmonia-border) 60%, transparent);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--harmonia-surface-muted) 75%, transparent),
+      color-mix(in srgb, var(--harmonia-surface-alt) 50%, transparent));
+  color: var(--harmonia-text-muted);
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform var(--harmonia-transition), box-shadow var(--harmonia-transition),
+    background var(--harmonia-transition), color var(--harmonia-transition);
+}
+
+.history-remove-button:hover,
+.history-remove-button:focus-visible {
+  color: var(--harmonia-text);
+  transform: translateY(-1px);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--harmonia-surface-muted) 85%, transparent),
+      color-mix(in srgb, var(--harmonia-surface-alt) 60%, transparent));
+  box-shadow: 0 12px 26px -22px var(--harmonia-glow-primary);
 }
 
 .sidebar-item-meta {

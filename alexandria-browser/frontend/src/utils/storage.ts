@@ -6,6 +6,7 @@ import type {
 
 const SETTINGS_KEY = "alexandria-browser-settings";
 const HISTORY_KEY = "alexandria-browser-history";
+const HISTORY_BOOTSTRAP_KEY = "alexandria-browser-history-cleared";
 const BOOKMARKS_KEY = "alexandria-browser-bookmarks";
 
 // ADD: Default preference snapshot used when initializing or resetting stored settings.
@@ -72,7 +73,26 @@ export function saveSettings(settings: StoredSettings) {
  * Fetch the saved search history entries.
  */
 export function loadHistory(): SearchHistoryEntry[] {
-  return readJSON(HISTORY_KEY, []);
+  const history = readJSON(HISTORY_KEY, []);
+  if (typeof window === "undefined") {
+    return history;
+  }
+
+  try {
+    const bootstrapped = window.localStorage.getItem(HISTORY_BOOTSTRAP_KEY);
+    if (!bootstrapped) {
+      window.localStorage.setItem(HISTORY_BOOTSTRAP_KEY, "true");
+      if (history.length > 0) {
+        writeJSON(HISTORY_KEY, []);
+      }
+      return [];
+    }
+  } catch (error) {
+    console.warn("Failed to initialize stored history", error);
+    return [];
+  }
+
+  return history;
 }
 
 /**

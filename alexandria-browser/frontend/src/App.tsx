@@ -612,6 +612,43 @@ function App() {
     void performSearch(nextQuery, 1);
   };
 
+  const handleRemoveHistoryItem = useCallback((targetQuery: string) => {
+    setHistory((previous) => {
+      const targetIndex = previous.findIndex((entry) => entry.query === targetQuery);
+      if (targetIndex === -1) {
+        return previous;
+      }
+
+      const nextHistory = [
+        ...previous.slice(0, targetIndex),
+        ...previous.slice(targetIndex + 1)
+      ];
+
+      setHistoryIndex((prevIndex) => {
+        if (prevIndex < 0) {
+          return prevIndex;
+        }
+
+        const nextLength = nextHistory.length;
+        if (nextLength === 0) {
+          return -1;
+        }
+
+        if (prevIndex > targetIndex) {
+          return prevIndex - 1;
+        }
+
+        if (prevIndex === targetIndex) {
+          return Math.min(prevIndex, nextLength - 1);
+        }
+
+        return prevIndex;
+      });
+
+      return nextHistory;
+    });
+  }, []);
+
   const goBack = () => {
     if (history.length === 0 || historyIndex === history.length - 1) {
       return;
@@ -850,6 +887,7 @@ function App() {
           setSidebarOpen(false);
           handleSuggestionClick(value);
         }}
+        onRemoveHistoryItem={handleRemoveHistoryItem}
         onRemoveBookmark={removeBookmark}
         settingsPanel={settingsPanel}
       />
