@@ -1,11 +1,11 @@
 import { toggleKeyword } from '../utils/nsfwFilter.js';
 
 export function createSettingsModal({
-  initialNSFWEnabled,
+  initialNSFWMode,
   initialPageSize,
   pageSizeOptions = [],
   keywords,
-  onToggleNSFW,
+  onChangeNSFWMode,
   onKeywordsChange,
   onChangePageSize,
   onResetSettings,
@@ -36,19 +36,37 @@ export function createSettingsModal({
   const content = document.createElement('div');
   content.className = 'modal-content';
 
-  const nsfwToggleWrapper = document.createElement('label');
-  nsfwToggleWrapper.className = 'toggle-wrapper';
-  nsfwToggleWrapper.textContent = 'Enable NSFW filtering';
+  const nsfwModeWrapper = document.createElement('label');
+  nsfwModeWrapper.className = 'settings-label';
+  nsfwModeWrapper.textContent = 'NSFW filtering mode';
 
-  const nsfwToggle = document.createElement('input');
-  nsfwToggle.type = 'checkbox';
-  nsfwToggle.checked = initialNSFWEnabled;
-  nsfwToggle.addEventListener('change', () => {
-    onToggleNSFW?.(nsfwToggle.checked);
+  const nsfwModeSelect = document.createElement('select');
+  nsfwModeSelect.className = 'settings-select';
+
+  const modeOptions = [
+    { value: 'safe', label: 'Safe — hide all NSFW content' },
+    { value: 'moderate', label: 'Moderate — allow mild, block explicit' },
+    { value: 'off', label: 'No filter — show everything' },
+    { value: 'only', label: 'Only NSFW — show tagged content only' }
+  ];
+
+  modeOptions.forEach((option) => {
+    const opt = document.createElement('option');
+    opt.value = option.value;
+    opt.textContent = option.label;
+    nsfwModeSelect.appendChild(opt);
   });
 
-  nsfwToggleWrapper.appendChild(nsfwToggle);
-  content.appendChild(nsfwToggleWrapper);
+  nsfwModeSelect.value = modeOptions.some((option) => option.value === initialNSFWMode)
+    ? initialNSFWMode
+    : 'safe';
+
+  nsfwModeSelect.addEventListener('change', () => {
+    onChangeNSFWMode?.(nsfwModeSelect.value);
+  });
+
+  nsfwModeWrapper.appendChild(nsfwModeSelect);
+  content.appendChild(nsfwModeWrapper);
 
   const preferencesSection = document.createElement('div');
   preferencesSection.className = 'settings-section';
@@ -171,8 +189,12 @@ export function createSettingsModal({
     }
   });
 
-  function setNSFWEnabled(enabled) {
-    nsfwToggle.checked = Boolean(enabled);
+  function setNSFWMode(mode) {
+    if (modeOptions.some((option) => option.value === mode)) {
+      nsfwModeSelect.value = mode;
+    } else {
+      nsfwModeSelect.value = 'safe';
+    }
   }
 
   function setPageSize(size) {
@@ -184,5 +206,5 @@ export function createSettingsModal({
     }
   }
 
-  return { overlay, open, close, renderKeywords, setNSFWEnabled, setPageSize };
+  return { overlay, open, close, renderKeywords, setNSFWMode, setPageSize };
 }

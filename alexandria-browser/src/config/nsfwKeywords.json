@@ -1,20 +1,39 @@
 {
-  "keywords": [
-    "nsfw",
-    "adult",
-    "porn",
-    "nudity",
-    "explicit",
-    "sex",
-    "xxx",
-    "fetish",
-    "nude",
-    "hardcore",
-    "bdsm",
-    "escort",
-    "camgirl",
-    "orgy",
-    "incest",
-    "lust"
-  ]
+  "categories": {
+    "mild": [
+      "nsfw",
+      "mature",
+      "suggestive",
+      "risque",
+      "lingerie",
+      "pinup",
+      "burlesque",
+      "provocative",
+      "sultry"
+    ],
+    "explicit": [
+      "porn",
+      "porno",
+      "adult",
+      "nudity",
+      "explicit",
+      "sex",
+      "xxx",
+      "fetish",
+      "nude",
+      "hardcore",
+      "bdsm",
+      "escort",
+      "camgirl",
+      "orgy",
+      "incest",
+      "lust",
+      "onlyfans",
+      "anal",
+      "milf",
+      "strip",
+      "cum",
+      "erotic"
+    ]
+  }
 }

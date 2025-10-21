@@ -232,6 +232,18 @@ export async function searchArchive(query, page = 1, rows = 10) {
 
     const downloads = parseDownloads(doc.downloads ?? fallbackDoc.downloads);
 
+    const nsfwFlag = Boolean(fallbackDoc.nsfw);
+    const nsfwLevel = typeof fallbackDoc.nsfwLevel === 'string'
+      ? fallbackDoc.nsfwLevel
+      : typeof fallbackDoc.nsfw_level === 'string'
+      ? fallbackDoc.nsfw_level
+      : null;
+    const nsfwMatches = Array.isArray(fallbackDoc.nsfwMatches)
+      ? fallbackDoc.nsfwMatches
+      : Array.isArray(fallbackDoc.nsfw_matches)
+      ? fallbackDoc.nsfw_matches
+      : [];
+
     return {
       identifier,
       title,
@@ -240,7 +252,9 @@ export async function searchArchive(query, page = 1, rows = 10) {
       originalUrl: originalUrl || null,
       downloads,
       mediatype: mediatype || 'unknown',
-      nsfw: Boolean(fallbackDoc.nsfw)
+      nsfw: nsfwFlag,
+      ...(nsfwLevel ? { nsfwLevel } : {}),
+      ...(nsfwMatches.length > 0 ? { nsfwMatches } : {})
     };
   });
 

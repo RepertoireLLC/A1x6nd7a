@@ -1,5 +1,6 @@
 import { SAMPLE_ARCHIVE_DOCS } from "../data/sampleArchiveDocs";
 import type { ArchiveDocLinks, ArchiveSearchDoc, ArchiveSearchResponse, SearchFilters } from "../types";
+import { annotateDocs } from "./nsfw";
 
 function extractYearValue(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -139,10 +140,11 @@ export function performFallbackArchiveSearch(
   const startIndex = (safePage - 1) * safeRows;
 
   const docs = matches.slice(startIndex, startIndex + safeRows).map((doc) => enrichDoc({ ...doc }));
+  const annotatedDocs = annotateDocs(docs);
 
   return {
     response: {
-      docs,
+      docs: annotatedDocs,
       numFound: matches.length,
       start: startIndex
     },

@@ -21,7 +21,7 @@ import { SAMPLE_ARCHIVE_DOCS, type SampleArchiveDoc } from "./data/sampleArchive
 import { SAMPLE_METADATA } from "./data/sampleMetadata";
 import { SAMPLE_CDX_SNAPSHOTS } from "./data/sampleCdxSnapshots";
 import { DEFAULT_SCRAPE_RESPONSE, SAMPLE_SCRAPE_RESULTS } from "./data/sampleScrapeResults";
-import { isNSFWContent } from "./services/nsfwFilter";
+import { annotateRecord } from "./services/nsfwFilter";
 import { getSpellCorrector, type SpellcheckResult } from "./services/spellCorrector";
 import { isValidReportReason, sendReportEmail, type ReportSubmission } from "./services/reporting";
 
@@ -139,6 +139,15 @@ type ScrapeResponse = {
   query: string;
 };
 
+type WithArchiveLinkFields<T extends Record<string, unknown>> = T & {
+  links?: ArchiveLinks;
+  archive_url?: string;
+  original_url?: string;
+  originalurl?: string;
+  wayback_url?: string;
+  thumbnail?: string;
+};
+
 type HandlerContext = {
   req: IncomingMessage;
   res: ServerResponse;
@@ -205,7 +214,9 @@ function buildArchiveThumbnail(identifier: unknown): string | null {
   return `https://archive.org/services/img/${encoded}`;
 }
 
-function attachArchiveLinks(record: Record<string, unknown>): Record<string, unknown> {
+function attachArchiveLinks<T extends Record<string, unknown> & { identifier?: unknown }>(
+  record: T
+): WithArchiveLinkFields<T> {
   const existingLinks =
     record.links && typeof record.links === "object"
       ? (record.links as Record<string, unknown>)
@@ -241,10 +252,10 @@ function attachArchiveLinks(record: Record<string, unknown>): Record<string, unk
   const hasExistingThumbnail = Boolean(existingThumbnail && existingThumbnail.trim().length > 0);
 
   if (!archive && !original && !wayback && !thumbnail) {
-    return record;
+    return record as WithArchiveLinkFields<T>;
   }
 
-  const next: Record<string, unknown> = { ...record };
+  const next: WithArchiveLinkFields<T> = { ...record } as WithArchiveLinkFields<T>;
 
   if (archive) {
     const nextLinks: ArchiveLinks = { archive };
@@ -1114,7 +1125,9 @@ function performLocalArchiveSearch(
   const safeRows = Number.isFinite(rows) && rows > 0 ? rows : 20;
   const startIndex = (safePage - 1) * safeRows;
 
-  const docs = matches.slice(startIndex, startIndex + safeRows).map((doc) => attachArchiveLinks({ ...doc }));
+  const docs = matches
+    .slice(startIndex, startIndex + safeRows)
+    .map((doc) => annotateRecord(attachArchiveLinks({ ...doc })));
 
   return {
     response: {
@@ -1339,7 +1352,7 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       if (combinedText) {
         combinedTexts.push(combinedText);
       }
-      return { ...withLinks, nsfw: isNSFWContent(combinedText) };
+      return annotateRecord(withLinks);
     }
 
     return doc;
@@ -1618,7 +1631,7 @@ async function handleScrape({ res, url }: HandlerContext): Promise<void> {
 
     const payload = (await response.json()) as { items?: ScrapeItem[]; count?: number; total?: number };
     const itemsRaw = Array.isArray(payload.items) ? payload.items : [];
-    const items = itemsRaw.map((item) => attachArchiveLinks({ ...item })) as ScrapeItem[];
+    const items = itemsRaw.map((item) => annotateRecord(attachArchiveLinks({ ...item })));
     const total = typeof payload.total === "number" ? payload.total : typeof payload.count === "number" ? payload.count : items.length;
 
     sendJson(res, 200, { items, total, query });
@@ -1642,7 +1655,7 @@ async function handleScrape({ res, url }: HandlerContext): Promise<void> {
   }
 
   const fallback = getSampleScrapeResults(query);
-  const items = fallback.items.map((item) => attachArchiveLinks({ ...item })) as ScrapeItem[];
+  const items = fallback.items.map((item) => annotateRecord(attachArchiveLinks({ ...item })));
   sendJson(res, 200, { ...fallback, items });
 }
 
