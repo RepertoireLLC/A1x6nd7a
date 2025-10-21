@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useMemo } from "react";
 import type { ArchiveSearchDoc, LinkStatus } from "../types";
 import { ResultCard } from "./ResultCard";
 import { PaginationControls } from "./PaginationControls";
@@ -22,6 +23,7 @@ interface ResultsListProps {
   saveMeta: Record<string, { label: string; disabled: boolean; message: string | null; snapshotUrl?: string; tone?: "success" | "error" | "info" }>;
   suggestionNode: ReactNode;
   notice?: string | null;
+  notices?: string[];
 }
 
 /**
@@ -45,8 +47,24 @@ export function ResultsList({
   onSaveSnapshot,
   saveMeta,
   suggestionNode,
-  notice
+  notice,
+  notices
 }: ResultsListProps) {
+  const noticeMessages = useMemo(() => {
+    const messages: string[] = [];
+    if (notice && typeof notice === "string" && notice.trim()) {
+      messages.push(notice.trim());
+    }
+    if (Array.isArray(notices)) {
+      for (const entry of notices) {
+        if (entry && entry.trim()) {
+          messages.push(entry.trim());
+        }
+      }
+    }
+    return messages;
+  }, [notice, notices]);
+
   if (isLoading) {
     return <div className="results-message">Searching the archives…</div>;
   }
@@ -78,9 +96,11 @@ export function ResultsList({
   return (
     <>
       {suggestionNode}
-      {notice ? (
+      {noticeMessages.length > 0 ? (
         <div className="results-notice" role="status">
-          {notice}
+          {noticeMessages.map((message, index) => (
+            <p key={`${message}-${index}`}>{message}</p>
+          ))}
         </div>
       ) : null}
       <div className="results-summary">

@@ -10,7 +10,7 @@ import {
 import { BrowserNav } from "./components/BrowserNav";
 import { SearchBar } from "./components/SearchBar";
 import { Sidebar } from "./components/Sidebar";
-import { ResultsList } from "./components/ResultsList";
+import { SearchResults } from "./components/SearchResults";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { LiveStatusCard } from "./components/LiveStatusCard";
 import { WaybackAvailabilityCard } from "./components/WaybackAvailabilityCard";
@@ -46,6 +46,7 @@ import type {
   WaybackAvailabilityResponse
 } from "./types";
 import { ItemDetailsPanel } from "./components/ItemDetailsPanel";
+import { SettingsProvider } from "./context/SettingsContext";
 
 const RESULTS_PER_PAGE_OPTIONS = [10, 20, 50];
 const MEDIA_TYPE_OPTIONS = [
@@ -74,6 +75,13 @@ const DEFAULT_SAVE_META: SaveMeta = {
   tone: "info"
 };
 
+function normalizeSearchInput(input: string): string {
+  return input
+    .normalize("NFKC")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /**
  * Alexandria Browser root application component orchestrating layout and data fetching.
  */
@@ -98,6 +106,8 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
+  const [searchNotice, setSearchNotice] = useState<string | null>(null);
+  const [connectionMode, setConnectionMode] = useState<"backend" | "direct" | "offline">("backend");
   const [hasSearched, setHasSearched] = useState(() => Boolean(settings.lastQuery));
   const [resultsPerPage, setResultsPerPage] = useState(() => settings.resultsPerPage);
   const [mediaType, setMediaType] = useState(() => settings.mediaType);
@@ -261,16 +271,18 @@ function App() {
   const performSearch = useCallback(
     async (searchQuery: string, pageNumber: number, options?: { recordHistory?: boolean; rowsOverride?: number }) => {
       const rows = options?.rowsOverride ?? resultsPerPage;
-      const safeQuery = searchQuery.trim();
+      const safeQuery = normalizeSearchInput(searchQuery);
       if (!safeQuery) {
         setError("Please enter a search query.");
         setFallbackNotice(null);
+        setSearchNotice(null);
         return;
       }
 
       setIsLoading(true);
       setError(null);
       setFallbackNotice(null);
+      setSearchNotice(null);
       setSelectedDoc(null);
       setMetadataState({ data: null, loading: false, error: null });
       setTimelineState({ data: null, loading: false, error: null });
@@ -295,11 +307,43 @@ function App() {
           yearTo: normalizedYearTo
         });
 
+        const nextConnectionMode =
+          payload.connection_mode ?? (payload.fallback ? "offline" : "backend");
+        setConnectionMode(nextConnectionMode);
+
         if (payload.fallback) {
-          setFallbackNotice(
-            "Working offline — showing a limited built-in dataset while the Alexandria backend is unreachable."
+          const fallbackReason = payload.fallback_reason?.trim() ?? "";
+          const fallbackMessage =
+            payload.fallback_message?.trim() ??
+            (fallbackReason === "network-error"
+              ? "Working offline — showing a limited built-in dataset because the Internet Archive could not be reached."
+              : fallbackReason === "html-response" || fallbackReason === "malformed-json"
+              ? "Working offline — showing a limited built-in dataset because the Internet Archive returned an invalid response."
+              : "Working offline — showing a limited built-in dataset while the Internet Archive search service is unavailable.");
+          setFallbackNotice(fallbackMessage);
+          if (fallbackReason) {
+            console.warn("Archive search is relying on offline data due to:", fallbackReason);
+          }
+        } else if (
+          payload.search_strategy &&
+          payload.search_strategy !== "primary search with fuzzy expansion"
+        ) {
+          const simplifiedQuery = payload.search_strategy_query?.trim();
+          const strategyMessage = simplifiedQuery
+            ? `Recovered from an unexpected Internet Archive response by retrying with the simplified query "${simplifiedQuery}". Results may be broader than usual.`
+            : "Recovered from an unexpected Internet Archive response by retrying with a simplified query. Results may be broader than usual.";
+          setFallbackNotice(strategyMessage);
+        }
+
+        if (nextConnectionMode === "direct" && !payload.fallback) {
+          setFallbackNotice((previous) =>
+            previous ??
+            "Connected directly to the Internet Archive after the Alexandria proxy was unreachable. Some features may be limited until the proxy returns."
           );
         }
+
+        const noticeText = payload.search_notice?.trim() ?? null;
+        setSearchNotice(noticeText);
 
         const docs = payload.response?.docs ?? [];
         const numFound = payload.response?.numFound ?? null;
@@ -311,7 +355,8 @@ function App() {
         setHasSearched(true);
         setStatuses(() => {
           const next: Record<string, LinkStatus> = {};
-          const defaultStatus: LinkStatus = payload.fallback ? "offline" : "checking";
+          const defaultStatus: LinkStatus =
+            payload.fallback || nextConnectionMode !== "backend" ? "offline" : "checking";
           for (const doc of docs) {
             next[doc.identifier] = defaultStatus;
           }
@@ -351,7 +396,7 @@ function App() {
           resultsContainerRef.current.scrollTo({ top: 0, behavior: "smooth" });
         }
 
-        if (payload.fallback) {
+        if (payload.fallback || nextConnectionMode !== "backend") {
           setLiveStatus(null);
           setWaybackDetails(null);
           setWaybackError(null);
@@ -378,6 +423,7 @@ function App() {
         }
       } catch (fetchError) {
         console.error(fetchError);
+        setConnectionMode("backend");
         const fallbackMessage = "Search request failed. Please try again later.";
         let message = fetchError instanceof Error ? fetchError.message : String(fetchError);
         if (message && /unexpected token/i.test(message)) {
@@ -391,6 +437,7 @@ function App() {
         }
         setError(message);
         setFallbackNotice(null);
+        setSearchNotice(null);
         setResults([]);
         setTotalResults(null);
         setTotalPages(null);
@@ -416,7 +463,7 @@ function App() {
   }, [performSearch, settings.lastQuery, settings.resultsPerPage]);
 
   useEffect(() => {
-    if (results.length === 0 || fallbackNotice) {
+    if (results.length === 0 || fallbackNotice || connectionMode !== "backend") {
       return;
     }
     let cancelled = false;
@@ -452,16 +499,16 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [results, fallbackNotice]);
+  }, [results, fallbackNotice, connectionMode]);
 
-  const handleSubmit = async () => {
-    const trimmed = query.trim();
-    if (!trimmed) {
+  const handleSubmit = async (submitted: string) => {
+    const normalized = normalizeSearchInput(submitted);
+    if (!normalized) {
       return;
     }
-    setQuery(trimmed);
-    setActiveQuery(trimmed);
-    await performSearch(trimmed, 1);
+    setQuery(normalized);
+    setActiveQuery(normalized);
+    await performSearch(normalized, 1);
   };
 
   const handlePageChange = async (direction: "previous" | "next") => {
@@ -589,9 +636,13 @@ function App() {
   };
 
   const handleSuggestionClick = (nextQuery: string) => {
-    setQuery(nextQuery);
-    setActiveQuery(nextQuery);
-    void performSearch(nextQuery, 1);
+    const normalized = normalizeSearchInput(nextQuery);
+    if (!normalized) {
+      return;
+    }
+    setQuery(normalized);
+    setActiveQuery(normalized);
+    void performSearch(normalized, 1);
   };
 
   const goBack = () => {
@@ -600,10 +651,11 @@ function App() {
     }
     const nextIndex = historyIndex + 1;
     const entry = history[nextIndex];
+    const normalized = normalizeSearchInput(entry.query);
     setHistoryIndex(nextIndex);
-    setQuery(entry.query);
-    setActiveQuery(entry.query);
-    void performSearch(entry.query, 1, { recordHistory: false });
+    setQuery(normalized);
+    setActiveQuery(normalized);
+    void performSearch(normalized, 1, { recordHistory: false });
   };
 
   const goForward = () => {
@@ -612,10 +664,11 @@ function App() {
     }
     const nextIndex = historyIndex - 1;
     const entry = history[nextIndex];
+    const normalized = normalizeSearchInput(entry.query);
     setHistoryIndex(nextIndex);
-    setQuery(entry.query);
-    setActiveQuery(entry.query);
-    void performSearch(entry.query, 1, { recordHistory: false });
+    setQuery(normalized);
+    setActiveQuery(normalized);
+    void performSearch(normalized, 1, { recordHistory: false });
   };
 
   const refresh = () => {
@@ -635,6 +688,7 @@ function App() {
     setHasSearched(false);
     setLiveStatus(null);
     setSelectedDoc(null);
+    setSearchNotice(null);
   };
 
   const clearHistory = () => {
@@ -713,7 +767,8 @@ function App() {
   const canRefresh = Boolean(activeQuery) && !isLoading;
 
   return (
-    <div className="app-shell">
+    <SettingsProvider filterNSFW={filterNSFW} setFilterNSFW={setFilterNSFW}>
+      <div className="app-shell">
       <header className="hero">
         <h1>Alexandria Browser</h1>
         <p className="tagline">Preserve Everything · No Gatekeepers · Serve the Seeker · Build Open and Forkable</p>
@@ -799,10 +854,9 @@ function App() {
       ) : null}
 
       <section className="results-container" aria-live="polite" ref={resultsContainerRef}>
-        <ResultsList
+        <SearchResults
           results={results}
           statuses={statuses}
-          filterNSFW={filterNSFW}
           isLoading={isLoading}
           error={error}
           hasSearched={hasSearched}
@@ -817,7 +871,8 @@ function App() {
           onSaveSnapshot={handleSaveSnapshot}
           saveMeta={saveMeta}
           suggestionNode={suggestionNode}
-          notice={fallbackNotice}
+          fallbackNotice={fallbackNotice}
+          searchNotice={searchNotice}
         />
       </section>
 
@@ -851,7 +906,8 @@ function App() {
           onClose={closeDetails}
         />
       ) : null}
-    </div>
+      </div>
+    </SettingsProvider>
   );
 }
 

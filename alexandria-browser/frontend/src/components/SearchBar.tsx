@@ -4,8 +4,15 @@ interface SearchBarProps {
   value: string;
   suggestions: string[];
   onChange: (next: string) => void;
-  onSubmit: () => void;
+  onSubmit: (sanitizedValue: string) => void;
   onSelectSuggestion: (suggestion: string) => void;
+}
+
+function sanitizeInputValue(input: string): string {
+  return input
+    .normalize("NFKC")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**
@@ -21,7 +28,11 @@ export function SearchBar({
   const suggestionSet = useMemo(() => Array.from(new Set(suggestions)), [suggestions]);
 
   const handleSubmit = () => {
-    onSubmit();
+    const sanitizedValue = sanitizeInputValue(value);
+    if (sanitizedValue !== value) {
+      onChange(sanitizedValue);
+    }
+    onSubmit(sanitizedValue);
   };
 
   return (

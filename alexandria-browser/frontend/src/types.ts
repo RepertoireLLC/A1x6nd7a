@@ -13,6 +13,10 @@ export interface ArchiveSearchDoc {
   publicdate?: string;
   creator?: string | string[];
   collection?: string | string[];
+  subject?: string | string[];
+  tags?: string | string[];
+  topic?: string | string[];
+  keywords?: string | string[];
   nsfw?: boolean;
   links?: ArchiveDocLinks;
   thumbnail?: string;
@@ -47,8 +51,16 @@ export interface ArchiveSearchResponse {
   };
   spellcheck?: SpellcheckPayload | null;
   fallback?: boolean;
+  fallback_reason?: string;
+  fallback_message?: string;
   results?: ArchiveSearchResultSummary[];
   pagination?: SearchPagination;
+  search_strategy?: string;
+  search_strategy_query?: string;
+  search_notice?: string | null;
+  search_transformations?: string[];
+  sanitized_query?: string | null;
+  connection_mode?: "backend" | "direct" | "offline";
 }
 
 export interface ArchiveSearchResultSummary {
