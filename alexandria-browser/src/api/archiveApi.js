@@ -1,97 +1,170 @@
 import { getFuzzySuggestion } from '../utils/fuzzySearch.js';
 
-const BASE_URL = 'https://archive.org/advancedsearch.php';
-const METADATA_URL = 'https://archive.org/metadata/';
+const DEFAULT_API_BASE_URL = 'http://localhost:4000';
 
-function extractSuggestion(spellcheck) {
-  if (!spellcheck?.suggestions) return null;
-  const entries = spellcheck.suggestions;
-  for (let i = 0; i < entries.length; i += 2) {
-    const data = entries[i + 1];
-    const suggestionList = data?.suggestion;
-    if (Array.isArray(suggestionList) && suggestionList.length > 0) {
-      return suggestionList[0];
-    }
+function resolveApiBaseUrl() {
+  if (typeof window === 'undefined') {
+    return DEFAULT_API_BASE_URL;
   }
-  return null;
+
+  const { hostname, protocol, port } = window.location;
+  const isLocalhost = ['localhost', '127.0.0.1', '[::1]'].includes(hostname);
+
+  if (isLocalhost) {
+    return DEFAULT_API_BASE_URL;
+  }
+
+  if (protocol === 'http:' || protocol === 'https:') {
+    const resolvedPort = port ? `:${port}` : '';
+    return `${protocol}//${hostname}${resolvedPort}`;
+  }
+
+  return DEFAULT_API_BASE_URL;
+}
+
+const API_BASE_URL = resolveApiBaseUrl().replace(/\/$/, '');
+
+function buildSearchUrl(query, page, rows) {
+  const url = new URL('/api/searchArchive', `${API_BASE_URL}/`);
+  url.searchParams.set('q', query);
+  url.searchParams.set('page', String(page));
+  url.searchParams.set('rows', String(rows));
+  return url.toString();
 }
 
 function sanitizeText(value) {
   if (!value) return '';
   if (Array.isArray(value)) {
-    return sanitizeText(value[0]);
+    return sanitizeText(value.join(' '));
   }
   const text = String(value).replace(/<[^>]+>/g, ' ');
   return text.replace(/\s+/g, ' ').trim();
 }
 
-function buildQuery(query, page, rows) {
-  const params = new URLSearchParams();
-  params.set('q', query || '');
-  params.set('page', String(page));
-  params.set('rows', String(rows));
-  params.set('output', 'json');
-  ['identifier', 'title', 'description', 'creator', 'downloads', 'originalurl'].forEach((field) => {
-    params.append('fl[]', field);
-  });
-  params.append('spellcheck', 'true');
-  return `${BASE_URL}?${params.toString()}`;
+function extractSuggestion(spellcheck) {
+  if (!spellcheck) return null;
+  const corrected = typeof spellcheck.correctedQuery === 'string' ? spellcheck.correctedQuery.trim() : '';
+  return corrected || null;
+}
+
+function pickString(...values) {
+  for (const value of values) {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed) {
+        return trimmed;
+      }
+    }
+  }
+  return '';
+}
+
+function parseDownloads(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return 0;
 }
 
 async function fetchJson(url) {
   const response = await fetch(url);
   if (!response.ok) {
-    throw new Error(`Archive API error: ${response.status}`);
+    let message = `Archive API error: ${response.status}`;
+    try {
+      const payload = await response.json();
+      if (payload && typeof payload.error === 'string') {
+        message = payload.error;
+      }
+    } catch (error) {
+      console.warn('Unable to parse error payload', error);
+    }
+    throw new Error(message);
   }
   return response.json();
 }
 
-async function fetchOriginalUrl(identifier) {
-  try {
-    const metadata = await fetchJson(`${METADATA_URL}${encodeURIComponent(identifier)}`);
-    return metadata?.metadata?.originalurl || null;
-  } catch (error) {
-    console.warn('Unable to resolve original URL for', identifier, error);
-    return null;
-  }
-}
-
 export async function searchArchive(query, page = 1, rows = 10) {
-  if (!query) {
+  const trimmed = query.trim();
+  if (!trimmed) {
     return { total: 0, results: [], suggestion: null };
   }
 
-  const url = buildQuery(query, page, rows);
+  const url = buildSearchUrl(trimmed, page, rows);
   const payload = await fetchJson(url);
-  const docs = payload?.response?.docs ?? [];
-  const suggestionFromApi = extractSuggestion(payload?.spellcheck);
 
-  const datasetForFuzzy = docs.map((doc) => sanitizeText(doc.title) || doc.identifier);
-  const fallbackSuggestion = getFuzzySuggestion(query, datasetForFuzzy);
+  const normalizedDocs = Array.isArray(payload?.response?.docs) ? payload.response.docs : [];
+  const docMap = new Map();
+  normalizedDocs.forEach((doc) => {
+    if (doc && typeof doc === 'object') {
+      const identifier = typeof doc.identifier === 'string' ? doc.identifier : null;
+      if (identifier) {
+        docMap.set(identifier, doc);
+      }
+    }
+  });
 
-  const results = await Promise.all(
-    docs.map(async (doc) => {
-      const identifier = doc.identifier;
-      const archiveUrl = `https://archive.org/details/${identifier}`;
-      const originalUrl = doc.originalurl || await fetchOriginalUrl(identifier);
-      const cleanTitle = sanitizeText(doc.title) || identifier;
-      const rawDescription = sanitizeText(doc.description) || sanitizeText(doc.creator) || 'No description available.';
-      const description = rawDescription.length > 260 ? `${rawDescription.slice(0, 257)}…` : rawDescription;
+  const summaries = Array.isArray(payload?.results) ? payload.results : [];
+  const baseResults = summaries.length > 0 ? summaries : normalizedDocs;
 
-      return {
-        identifier,
-        title: cleanTitle,
-        description,
-        archiveUrl,
-        originalUrl,
-        downloads: doc.downloads ?? 0
-      };
-    })
-  );
+  const results = baseResults.map((entry) => {
+    const doc = entry && typeof entry === 'object' ? entry : {};
+    const identifier = typeof doc.identifier === 'string' ? doc.identifier : '';
+    const fallbackDoc = docMap.get(identifier) || doc;
+    const fallbackLinks =
+      fallbackDoc && typeof fallbackDoc.links === 'object' ? fallbackDoc.links : null;
+
+    const title = sanitizeText(doc.title || fallbackDoc.title || identifier) || identifier;
+    const description = sanitizeText(doc.description || fallbackDoc.description);
+    const mediatype = pickString(doc.mediatype, fallbackDoc.mediatype);
+
+    const archiveCandidate = pickString(
+      doc.archive_url,
+      fallbackDoc.archive_url,
+      fallbackDoc.archiveUrl,
+      fallbackLinks && fallbackLinks.archive,
+      identifier ? `https://archive.org/details/${encodeURIComponent(identifier)}` : ''
+    );
+    const archiveUrl = archiveCandidate || (identifier ? `https://archive.org/details/${encodeURIComponent(identifier)}` : '');
+    const originalUrl = pickString(
+      doc.original_url,
+      doc.originalurl,
+      fallbackDoc.original_url,
+      fallbackDoc.originalurl,
+      fallbackLinks && fallbackLinks.original
+    );
+
+    const downloads = parseDownloads(doc.downloads ?? fallbackDoc.downloads);
+
+    return {
+      identifier,
+      title,
+      description: description || 'No description available.',
+      archiveUrl,
+      originalUrl: originalUrl || null,
+      downloads,
+      mediatype: mediatype || 'unknown',
+      nsfw: Boolean(fallbackDoc.nsfw)
+    };
+  });
+
+  const datasetForFuzzy = results.map((doc) => doc.title || doc.identifier);
+  const suggestionFromSpellcheck = extractSuggestion(payload?.spellcheck);
+  const fallbackSuggestion = getFuzzySuggestion(trimmed, datasetForFuzzy);
+
+  const total =
+    (payload?.pagination && typeof payload.pagination.total === 'number'
+      ? payload.pagination.total
+      : payload?.response?.numFound) ?? results.length;
 
   return {
-    total: payload?.response?.numFound ?? results.length,
+    total,
     results,
-    suggestion: suggestionFromApi || fallbackSuggestion
+    suggestion: suggestionFromSpellcheck || fallbackSuggestion
   };
 }

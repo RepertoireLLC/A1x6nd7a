@@ -1,5 +1,16 @@
 import { checkUrlStatus } from '../utils/fetchStatus.js';
 
+function formatMediaType(type) {
+  if (!type) {
+    return 'Unknown';
+  }
+  const normalized = String(type).trim();
+  if (!normalized) {
+    return 'Unknown';
+  }
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
 export function createResultCard(result, { nsfwFiltering }) {
   const card = document.createElement('article');
   card.className = 'result-card';
@@ -48,7 +59,10 @@ export function createResultCard(result, { nsfwFiltering }) {
 
   const meta = document.createElement('div');
   meta.className = 'result-meta';
-  meta.textContent = `Downloads: ${result.downloads}`;
+  const mediaLabel = formatMediaType(result.mediatype);
+  const downloadCount =
+    typeof result.downloads === 'number' && Number.isFinite(result.downloads) ? result.downloads : 0;
+  meta.textContent = `Type: ${mediaLabel} · Downloads: ${downloadCount}`;
 
   content.appendChild(title);
   content.appendChild(description);

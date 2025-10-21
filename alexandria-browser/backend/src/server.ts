@@ -50,6 +50,24 @@ const YEAR_PATTERN = /^\d{4}$/;
 
 type LinkStatus = "online" | "archived-only" | "offline";
 
+type ArchiveSearchResultSummary = {
+  identifier: string;
+  title: string;
+  description: string;
+  mediatype: string | null;
+  year: string | null;
+  creator: string | null;
+  archive_url: string | null;
+  original_url: string | null;
+  downloads: number | null;
+};
+
+type SearchPagination = {
+  page: number;
+  rows: number;
+  total: number | null;
+};
+
 type ArchiveSearchResponse = Record<string, unknown> & {
   response?: {
     docs?: Array<Record<string, unknown>>;
@@ -57,6 +75,8 @@ type ArchiveSearchResponse = Record<string, unknown> & {
     start?: number;
   };
   fallback?: boolean;
+  results?: ArchiveSearchResultSummary[];
+  pagination?: SearchPagination;
 };
 
 type ArchiveLinks = {
@@ -185,7 +205,7 @@ function attachArchiveLinks(record: Record<string, unknown>): Record<string, unk
 
   const generatedLinks = buildArchiveLinks(
     record.identifier,
-    originalFromRecord ?? record["original"] ?? record["url"]
+    originalFromRecord ?? record["original_url"] ?? record["originalurl"] ?? record["original"] ?? record["url"]
   );
 
   let archive = archiveFromRecord ?? generatedLinks?.archive ?? null;
@@ -223,6 +243,9 @@ function attachArchiveLinks(record: Record<string, unknown>): Record<string, unk
     if (original && (typeof next["original_url"] !== "string" || (next["original_url"] as string).length === 0)) {
       next["original_url"] = original;
     }
+    if (original && (typeof next["originalurl"] !== "string" || (next["originalurl"] as string).length === 0)) {
+      next["originalurl"] = original;
+    }
     if (wayback && (typeof next["wayback_url"] !== "string" || (next["wayback_url"] as string).length === 0)) {
       next["wayback_url"] = wayback;
     }
@@ -233,6 +256,66 @@ function attachArchiveLinks(record: Record<string, unknown>): Record<string, unk
   }
 
   return next;
+}
+
+function collectStringValues(value: unknown): string[] {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return [String(value)];
+  }
+
+  if (Array.isArray(value)) {
+    const results: string[] = [];
+    for (const entry of value) {
+      if (typeof entry === "string") {
+        const trimmed = entry.trim();
+        if (trimmed) {
+          results.push(trimmed);
+        }
+      } else if (typeof entry === "number" && Number.isFinite(entry)) {
+        results.push(String(entry));
+      }
+    }
+    return results;
+  }
+
+  return [];
+}
+
+function coerceSingleString(value: unknown): string | null {
+  const values = collectStringValues(value);
+  return values.length > 0 ? values[0] : null;
+}
+
+function coerceText(value: unknown): string | null {
+  const values = collectStringValues(value);
+  if (values.length === 0) {
+    return null;
+  }
+  return values.join(" ");
+}
+
+function coerceNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const parsed = Number.parseInt(trimmed, 10);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return null;
 }
 
 function setCorsHeaders(res: ServerResponse): void {
@@ -742,7 +825,10 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       "mediatype",
       "year",
       "date",
-      "publicdate"
+      "publicdate",
+      "downloads",
+      "originalurl",
+      "original"
     ].join(",")
   );
 
@@ -824,6 +910,44 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     return doc;
   });
 
+  const summaryResults: ArchiveSearchResultSummary[] = normalizedDocs.map((doc) => {
+    const record = doc && typeof doc === "object" ? (doc as Record<string, unknown>) : {};
+    const identifier = coerceSingleString(record.identifier) ?? "";
+    const title = coerceText(record.title) ?? identifier;
+    const description = coerceText(record.description) ?? "";
+    const mediatype = coerceSingleString(record.mediatype);
+    const creatorText = coerceText(record.creator);
+    const yearValue =
+      coerceSingleString(record.year) ??
+      coerceSingleString(record.date) ??
+      coerceSingleString(record.publicdate);
+    const linksRecord =
+      record.links && typeof record.links === "object"
+        ? (record.links as Record<string, unknown>)
+        : null;
+    const archiveUrl =
+      coerceSingleString(record.archive_url) ??
+      coerceSingleString(linksRecord ? linksRecord["archive"] : undefined) ??
+      (identifier ? `https://archive.org/details/${encodeURIComponent(identifier)}` : null);
+    const originalUrl =
+      coerceSingleString(record.original_url) ??
+      coerceSingleString(record.originalurl) ??
+      coerceSingleString(linksRecord ? linksRecord["original"] : undefined);
+    const downloadsValue = coerceNumber(record.downloads);
+
+    return {
+      identifier,
+      title,
+      description,
+      mediatype: mediatype ?? null,
+      year: yearValue ?? null,
+      creator: creatorText ?? null,
+      archive_url: archiveUrl,
+      original_url: originalUrl,
+      downloads: downloadsValue,
+    };
+  });
+
   if (data.response) {
     data.response = {
       ...data.response,
@@ -858,7 +982,13 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
 
   const payload: Record<string, unknown> = {
     ...data,
-    spellcheck
+    spellcheck,
+    results: summaryResults,
+    pagination: {
+      page: safePage,
+      rows: safeRows,
+      total: data.response?.numFound ?? summaryResults.length
+    }
   };
 
   if (usedFallback) {
