@@ -19,6 +19,7 @@ export interface ArchiveSearchDoc {
   archive_url?: string;
   original_url?: string;
   wayback_url?: string;
+  downloads?: number | string | null;
 }
 
 export interface ArchiveDocLinks {
@@ -46,6 +47,26 @@ export interface ArchiveSearchResponse {
   };
   spellcheck?: SpellcheckPayload | null;
   fallback?: boolean;
+  results?: ArchiveSearchResultSummary[];
+  pagination?: SearchPagination;
+}
+
+export interface ArchiveSearchResultSummary {
+  identifier: string;
+  title: string;
+  description: string;
+  mediatype: string | null;
+  year: string | null;
+  creator: string | null;
+  archive_url: string | null;
+  original_url: string | null;
+  downloads: number | null;
+}
+
+export interface SearchPagination {
+  page: number;
+  rows: number;
+  total: number | null;
 }
 
 export type LinkStatus = "online" | "archived-only" | "offline" | "checking";
