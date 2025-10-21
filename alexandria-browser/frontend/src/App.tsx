@@ -296,9 +296,27 @@ function App() {
         });
 
         if (payload.fallback) {
-          setFallbackNotice(
-            "Working offline — showing a limited built-in dataset while the Alexandria backend is unreachable."
-          );
+          const fallbackReason = payload.fallback_reason?.trim() ?? "";
+          const fallbackMessage =
+            payload.fallback_message?.trim() ??
+            (fallbackReason === "network-error"
+              ? "Working offline — showing a limited built-in dataset because the Internet Archive could not be reached."
+              : fallbackReason === "html-response" || fallbackReason === "malformed-json"
+              ? "Working offline — showing a limited built-in dataset because the Internet Archive returned an invalid response."
+              : "Working offline — showing a limited built-in dataset while the Internet Archive search service is unavailable.");
+          setFallbackNotice(fallbackMessage);
+          if (fallbackReason) {
+            console.warn("Archive search is relying on offline data due to:", fallbackReason);
+          }
+        } else if (
+          payload.search_strategy &&
+          payload.search_strategy !== "primary search with fuzzy expansion"
+        ) {
+          const simplifiedQuery = payload.search_strategy_query?.trim();
+          const strategyMessage = simplifiedQuery
+            ? `Recovered from an unexpected Internet Archive response by retrying with the simplified query "${simplifiedQuery}". Results may be broader than usual.`
+            : "Recovered from an unexpected Internet Archive response by retrying with a simplified query. Results may be broader than usual.";
+          setFallbackNotice(strategyMessage);
         }
 
         const docs = payload.response?.docs ?? [];

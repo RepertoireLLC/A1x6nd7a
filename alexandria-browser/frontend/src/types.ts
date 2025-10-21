@@ -47,8 +47,12 @@ export interface ArchiveSearchResponse {
   };
   spellcheck?: SpellcheckPayload | null;
   fallback?: boolean;
+  fallback_reason?: string;
+  fallback_message?: string;
   results?: ArchiveSearchResultSummary[];
   pagination?: SearchPagination;
+  search_strategy?: string;
+  search_strategy_query?: string;
 }
 
 export interface ArchiveSearchResultSummary {
