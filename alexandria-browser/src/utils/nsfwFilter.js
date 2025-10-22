@@ -12,6 +12,8 @@ const DEFAULT_KEYWORD_SETS = Object.freeze({
   mild: []
 });
 
+const MAX_COLLECTION_DEPTH = 6;
+
 let cachedKeywordData = null;
 let cachedOverrides = null;
 let baseKeywordsCache = null;
@@ -126,13 +128,59 @@ function collectCandidateStrings(entry) {
   }
 
   const values = [];
-  const append = (value) => {
-    if (!value) return;
+  const seen = new WeakSet();
+
+  const append = (value, depth = 0) => {
+    if (value === null || value === undefined) return;
+
     if (typeof value === 'string') {
-      values.push(value);
-    } else if (Array.isArray(value)) {
+      const trimmed = value.trim();
+      if (trimmed) {
+        values.push(trimmed);
+      }
+      return;
+    }
+
+    if (typeof value === 'number') {
+      if (Number.isFinite(value)) {
+        values.push(String(value));
+      }
+      return;
+    }
+
+    if (typeof value === 'bigint') {
+      values.push(value.toString());
+      return;
+    }
+
+    if (typeof value === 'boolean') {
+      return;
+    }
+
+    if (depth >= MAX_COLLECTION_DEPTH) {
+      return;
+    }
+
+    if (Array.isArray(value)) {
       for (const item of value) {
-        append(item);
+        append(item, depth + 1);
+      }
+      return;
+    }
+
+    if (typeof value === 'object') {
+      if (value instanceof Date) {
+        values.push(value.toISOString());
+        return;
+      }
+
+      if (seen.has(value)) {
+        return;
+      }
+      seen.add(value);
+
+      for (const nested of Object.values(value)) {
+        append(nested, depth + 1);
       }
     }
   };
@@ -148,21 +196,10 @@ function collectCandidateStrings(entry) {
   append(entry.subject);
   append(entry.tags);
   append(entry.keywords);
-
-  if (entry.metadata && typeof entry.metadata === 'object') {
-    const metadata = entry.metadata;
-    append(metadata.tags);
-    append(metadata.subject);
-    append(metadata.keywords);
-    append(metadata.topic);
-    append(metadata.topics);
-  }
-
-  if (entry.links && typeof entry.links === 'object') {
-    append(entry.links.archive);
-    append(entry.links.original);
-    append(entry.links.wayback);
-  }
+  append(entry.topic);
+  append(entry.topics);
+  append(entry.metadata);
+  append(entry.links);
 
   return values;
 }

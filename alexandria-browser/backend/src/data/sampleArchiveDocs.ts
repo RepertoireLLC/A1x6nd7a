@@ -73,6 +73,30 @@ export const SAMPLE_ARCHIVE_DOCS: SampleArchiveDoc[] = [
     collection: ["smithsonian", "images"]
   },
   {
+    identifier: "retro_pinup_gallery",
+    title: "Retro Pin-Up Photography Gallery",
+    description:
+      "Digitized pin-up photography featuring bikinis, lingerie sets, and glamorous boudoir poses sourced from vintage magazines.",
+    mediatype: "image",
+    year: "1984",
+    date: "1984-05-01",
+    publicdate: "1984-05-01T00:00:00Z",
+    creator: "Vintage Studio Collective",
+    collection: ["images", "pinup", "glamour"]
+  },
+  {
+    identifier: "underground_xxx_portfolio",
+    title: "Underground XXX Photo Portfolio",
+    description:
+      "Explicit nude photo spreads, topless centerfolds, and pornographic scans digitized from underground adult magazines.",
+    mediatype: "image",
+    year: "1992",
+    date: "1992-09-15",
+    publicdate: "1992-09-15T00:00:00Z",
+    creator: "Underground Press Syndicate",
+    collection: ["adult", "magazines", "images"]
+  },
+  {
     identifier: "msdos_games_collection",
     title: "MS-DOS Games Collection",
     description: "Playable software titles from the MS-DOS era preserved and emulated in the browser, including classic adventure and action games.",

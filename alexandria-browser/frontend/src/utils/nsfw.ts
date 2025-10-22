@@ -27,6 +27,7 @@ type Classification = {
 };
 
 const MODE_VALUES: readonly NSFWFilterMode[] = ["safe", "moderate", "off", "only"];
+const MAX_COLLECTION_DEPTH = 6;
 
 function normalizeList(input: unknown): string[] {
   if (!Array.isArray(input)) {
@@ -71,10 +72,11 @@ function normalizeMode(mode: NSFWFilterMode | string | undefined): NSFWFilterMod
   return "safe";
 }
 
-function appendValue(values: string[], input: unknown) {
-  if (!input) {
+function appendValue(values: string[], input: unknown, seen: WeakSet<object>, depth = 0) {
+  if (input === null || input === undefined) {
     return;
   }
+
   if (typeof input === "string") {
     const trimmed = input.trim();
     if (trimmed) {
@@ -82,49 +84,74 @@ function appendValue(values: string[], input: unknown) {
     }
     return;
   }
-  if (Array.isArray(input)) {
-    for (const entry of input) {
-      appendValue(values, entry);
+
+  if (typeof input === "number") {
+    if (Number.isFinite(input)) {
+      values.push(String(input));
     }
     return;
+  }
+
+  if (typeof input === "bigint") {
+    values.push(input.toString());
+    return;
+  }
+
+  if (typeof input === "boolean") {
+    return;
+  }
+
+  if (depth >= MAX_COLLECTION_DEPTH) {
+    return;
+  }
+
+  if (Array.isArray(input)) {
+    for (const entry of input) {
+      appendValue(values, entry, seen, depth + 1);
+    }
+    return;
+  }
+
+  if (typeof input === "object") {
+    if (input instanceof Date) {
+      values.push(input.toISOString());
+      return;
+    }
+
+    const candidate = input as Record<string, unknown>;
+    if (seen.has(candidate)) {
+      return;
+    }
+    seen.add(candidate);
+
+    for (const value of Object.values(candidate)) {
+      appendValue(values, value, seen, depth + 1);
+    }
   }
 }
 
 function collectCandidateStrings(record: Record<string, unknown>): string[] {
   const values: string[] = [];
+  const seen = new WeakSet<object>();
+  const append = (input: unknown) => appendValue(values, input, seen);
 
-  appendValue(values, record.title);
-  appendValue(values, record.description);
-  appendValue(values, record.identifier);
-  appendValue(values, record.mediatype);
-  appendValue(values, record.creator);
-  appendValue(values, record.collection);
-  appendValue(values, record.subject);
-  appendValue(values, record.tags);
-  appendValue(values, record.keywords);
-  appendValue(values, record.topic);
-  appendValue(values, record.topics);
-  appendValue(values, record.originalUrl);
-  appendValue(values, record.original_url);
-  appendValue(values, record.archiveUrl);
-  appendValue(values, record.archive_url);
-
-  const metadata = record.metadata;
-  if (metadata && typeof metadata === "object") {
-    const metadataRecord = metadata as Record<string, unknown>;
-    appendValue(values, metadataRecord.tags);
-    appendValue(values, metadataRecord.subject);
-    appendValue(values, metadataRecord.keywords);
-    appendValue(values, metadataRecord.topic);
-    appendValue(values, metadataRecord.topics);
-  }
-
-  const links = record.links;
-  if (links && typeof links === "object") {
-    const linkRecord = links as Record<string, unknown>;
-    appendValue(values, linkRecord.archive);
-    appendValue(values, linkRecord.original);
-  }
+  append(record.title);
+  append(record.description);
+  append(record.identifier);
+  append(record.mediatype);
+  append(record.creator);
+  append(record.collection);
+  append(record.subject);
+  append(record.tags);
+  append(record.keywords);
+  append(record.topic);
+  append(record.topics);
+  append(record.originalUrl);
+  append(record.original_url);
+  append(record.archiveUrl);
+  append(record.archive_url);
+  append(record.metadata);
+  append(record.links);
 
   return values;
 }

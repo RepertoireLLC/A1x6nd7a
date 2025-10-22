@@ -23,6 +23,7 @@ interface KeywordSets {
 }
 
 const KEYWORD_SETS = loadKeywordSets();
+const MAX_COLLECTION_DEPTH = 6;
 
 function loadKeywordSets(): KeywordSets {
   const configPath = join(dirname(fileURLToPath(import.meta.url)), "../../../src/config/nsfwKeywords.json");
@@ -55,10 +56,11 @@ function normalizeList(value: unknown): string[] {
   return Array.from(result);
 }
 
-function append(values: string[], input: unknown) {
-  if (!input) {
+function append(values: string[], input: unknown, seen: WeakSet<object>, depth = 0) {
+  if (input === null || input === undefined) {
     return;
   }
+
   if (typeof input === "string") {
     const trimmed = input.trim();
     if (trimmed) {
@@ -66,47 +68,74 @@ function append(values: string[], input: unknown) {
     }
     return;
   }
+
+  if (typeof input === "number") {
+    if (Number.isFinite(input)) {
+      values.push(String(input));
+    }
+    return;
+  }
+
+  if (typeof input === "bigint") {
+    values.push(input.toString());
+    return;
+  }
+
+  if (typeof input === "boolean") {
+    return;
+  }
+
+  if (depth >= MAX_COLLECTION_DEPTH) {
+    return;
+  }
+
   if (Array.isArray(input)) {
     for (const entry of input) {
-      append(values, entry);
+      append(values, entry, seen, depth + 1);
+    }
+    return;
+  }
+
+  if (typeof input === "object") {
+    if (input instanceof Date) {
+      values.push(input.toISOString());
+      return;
+    }
+
+    const candidate = input as Record<string, unknown>;
+    if (seen.has(candidate)) {
+      return;
+    }
+    seen.add(candidate);
+
+    for (const value of Object.values(candidate)) {
+      append(values, value, seen, depth + 1);
     }
   }
 }
 
 function collectStrings(record: Record<string, unknown>): string[] {
   const values: string[] = [];
-  append(values, record.title);
-  append(values, record.description);
-  append(values, record.identifier);
-  append(values, record.mediatype);
-  append(values, record.creator);
-  append(values, record.collection);
-  append(values, record.subject);
-  append(values, record.tags);
-  append(values, record.keywords);
-  append(values, record.topic);
-  append(values, record.topics);
-  append(values, record.originalUrl);
-  append(values, record.original_url);
-  append(values, record.archiveUrl);
-  append(values, record.archive_url);
+  const seen = new WeakSet<object>();
+  const appendValue = (input: unknown) => append(values, input, seen);
 
-  const metadata = record.metadata;
-  if (metadata && typeof metadata === "object") {
-    const data = metadata as Record<string, unknown>;
-    append(values, data.tags);
-    append(values, data.subject);
-    append(values, data.keywords);
-    append(values, data.topic);
-    append(values, data.topics);
-  }
-
-  const links = record.links;
-  if (links && typeof links === "object") {
-    const linkRecord = links as Record<string, unknown>;
-    append(values, linkRecord.archive);
-    append(values, linkRecord.original);
-  }
+  appendValue(record.title);
+  appendValue(record.description);
+  appendValue(record.identifier);
+  appendValue(record.mediatype);
+  appendValue(record.creator);
+  appendValue(record.collection);
+  appendValue(record.subject);
+  appendValue(record.tags);
+  appendValue(record.keywords);
+  appendValue(record.topic);
+  appendValue(record.topics);
+  appendValue(record.originalUrl);
+  appendValue(record.original_url);
+  appendValue(record.archiveUrl);
+  appendValue(record.archive_url);
+  appendValue(record.metadata);
+  appendValue(record.links);
 
   return values;
 }
