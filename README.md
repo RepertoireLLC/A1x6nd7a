@@ -87,6 +87,16 @@ The frontend expects the backend at `http://localhost:4000` by default. Override
 
 > **Tip:** The demo previously bundled mock datasets for offline browsing. Production builds now require the live API. Opt-in to the legacy behaviour locally by setting `VITE_ENABLE_OFFLINE_FALLBACK=true` for the frontend and `ENABLE_OFFLINE_FALLBACK=true` for the backend before starting the dev servers.
 
+### Configure the offline Mistral AI assistant
+
+Alexandria bundles optional support for the [Mistral 7B Instruct](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2) `gguf` model via the `node-llama-cpp` runtime.
+
+1. **Install dependencies** – running `npm install --workspaces` triggers a post-install script that downloads `Mistral-7B-Instruct-v0.2.Q4_K_M.gguf` into `alexandria-browser/backend/models/`. Subsequent installs skip the transfer when the file already exists. Set `ALEXANDRIA_SKIP_MODEL_DOWNLOAD=true` (or run in CI without opting in) to bypass the download and fetch the model manually.
+2. **Manual download (optional)** – if the automated step is skipped, download the model directly from Hugging Face and place it at the path referenced in `config/ai.json` (default: `alexandria-browser/backend/models/mistral-7b-instruct.gguf`).
+3. **Enable the assistant** – edit `alexandria-browser/backend/config/ai.json` and change `"aiEnabled": false` to `true` once the model is available. You may also adjust `modelPath` or `defaultModel` to match a different filename or location.
+4. **Override via environment (optional)** – the backend honours `ALEXANDRIA_AI_MODEL_PATH`, `ALEXANDRIA_AI_MODEL_DIR`, `ALEXANDRIA_AI_MODEL`, and `ALEXANDRIA_DISABLE_LOCAL_AI` for runtime overrides without editing the JSON file. These variables are resolved before loading the model.
+5. **Run the dev servers** – start the backend and frontend as described above, then toggle **AI Mode** inside the Alexandria settings panel to verify the assistant responds. If the model is missing or disabled, the UI falls back to the standard search experience and logs a warning instead of failing.
+
 #### Production build
 
 ```bash
