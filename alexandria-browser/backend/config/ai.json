@@ -1,0 +1,5 @@
+{
+  "aiEnabled": false,
+  "defaultModel": "mistral-7b-instruct",
+  "modelPath": "./models/mistral-7b-instruct.gguf"
+}
