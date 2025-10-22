@@ -36,7 +36,10 @@ export const DEFAULT_SETTINGS: StoredSettings = {
   resultsPerPage: 20,
   mediaType: "all",
   yearFrom: "",
-  yearTo: ""
+  yearTo: "",
+  language: "",
+  sourceTrust: "any",
+  availability: "any"
 };
 
 /**

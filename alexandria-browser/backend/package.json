@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "test": "vitest run"
   },
   "dependencies": {
     "nodemailer": "^6.9.12",
@@ -16,6 +17,7 @@
     "@types/node": "^20.11.30",
     "@types/nodemailer": "^6.4.12",
     "tsx": "^4.7.2",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
   }
 }

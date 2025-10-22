@@ -43,6 +43,19 @@ export function ResultCard({
   const creator = Array.isArray(doc.creator) ? doc.creator.join(", ") : doc.creator ?? "";
   const severity = doc.nsfwLevel ?? doc.nsfw_level ?? null;
   const isNSFW = doc.nsfw === true || severity === "mild" || severity === "explicit";
+  const scoreValue =
+    typeof doc.score === "number" && Number.isFinite(doc.score)
+      ? doc.score
+      : typeof doc.score === "string"
+      ? Number.parseFloat(doc.score)
+      : null;
+  const scorePercent = scoreValue !== null && Number.isFinite(scoreValue) ? Math.round(scoreValue * 100) : null;
+  const trustLabel = (doc.source_trust ?? doc.source_trust_level) || null;
+  const languageLabel = Array.isArray(doc.language)
+    ? doc.language.find((entry) => typeof entry === "string" && entry.trim()) ?? null
+    : typeof doc.language === "string"
+    ? doc.language.trim()
+    : null;
 
   const cardClasses = ["result-card"];
   if (isNSFW) {
@@ -79,6 +92,9 @@ export function ResultCard({
               <span>{yearOrDate}</span>
               {creator ? <span>· {creator}</span> : null}
               {isNSFW ? <span className="nsfw-label">{nsfwLabelText}</span> : null}
+              {scorePercent !== null ? <span>· Relevance {scorePercent}%</span> : null}
+              {trustLabel ? <span>· {trustLabel.charAt(0).toUpperCase() + trustLabel.slice(1)} trust</span> : null}
+              {languageLabel ? <span>· {languageLabel}</span> : null}
             </div>
           </div>
         </div>
