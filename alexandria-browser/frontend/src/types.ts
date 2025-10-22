@@ -7,6 +7,16 @@ export type NSFWSeverity = "mild" | "explicit";
 
 export type NSFWFilterMode = "safe" | "moderate" | "off" | "only";
 
+export type SourceTrustLevel = "high" | "medium" | "low";
+
+export interface SearchScoreBreakdown {
+  keywordRelevance: number;
+  semanticRelevance: number;
+  documentQuality: number;
+  popularityScore: number;
+  combinedScore: number;
+}
+
 export interface ArchiveSearchDoc {
   identifier: string;
   title?: string;
@@ -28,6 +38,12 @@ export interface ArchiveSearchDoc {
   original_url?: string;
   wayback_url?: string;
   downloads?: number | string | null;
+  score?: number | null;
+  score_breakdown?: SearchScoreBreakdown;
+  availability?: LinkStatus;
+  source_trust?: SourceTrustLevel | null;
+  source_trust_level?: SourceTrustLevel | null;
+  language?: string | string[] | null;
 }
 
 export interface ArchiveDocLinks {
@@ -61,6 +77,9 @@ export interface ArchiveSearchResponse {
   pagination?: SearchPagination;
   search_strategy?: string;
   search_strategy_query?: string;
+  alternate_queries?: string[];
+  original_numFound?: number | null;
+  filtered_count?: number | null;
 }
 
 export interface ArchiveSearchResultSummary {
@@ -73,6 +92,11 @@ export interface ArchiveSearchResultSummary {
   archive_url: string | null;
   original_url: string | null;
   downloads: number | null;
+  score?: number | null;
+  score_breakdown?: SearchScoreBreakdown;
+  availability?: LinkStatus | null;
+  source_trust?: SourceTrustLevel | null;
+  language?: string | null;
 }
 
 export interface SearchPagination {
@@ -167,12 +191,19 @@ export interface StoredSettings {
   mediaType: string;
   yearFrom: string;
   yearTo: string;
+  language: string;
+  sourceTrust: string;
+  availability: string;
 }
 
 export interface SearchFilters {
   mediaType: string;
   yearFrom: string;
   yearTo: string;
+  language: string;
+  sourceTrust: string;
+  availability: string;
+  nsfwMode: NSFWFilterMode;
 }
 
 export interface SearchHistoryEntry {

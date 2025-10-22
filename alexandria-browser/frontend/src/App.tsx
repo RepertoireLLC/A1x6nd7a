@@ -4,7 +4,8 @@ import {
   useMemo,
   useRef,
   useState,
-  type ChangeEvent
+  type ChangeEvent,
+  type JSX
 } from "react";
 
 import { BrowserNav } from "./components/BrowserNav";
@@ -72,6 +73,27 @@ const MEDIA_TYPE_OPTIONS = [
   { value: "data", label: "Data" }
 ] as const;
 
+const LANGUAGE_OPTIONS = [
+  { value: "", label: "All languages" },
+  { value: "english", label: "English" },
+  { value: "spanish", label: "Spanish" },
+  { value: "french", label: "French" },
+  { value: "german", label: "German" }
+] as const;
+
+const SOURCE_TRUST_OPTIONS = [
+  { value: "any", label: "All sources" },
+  { value: "high", label: "High trust" },
+  { value: "medium", label: "Standard" },
+  { value: "low", label: "Community" }
+] as const;
+
+const AVAILABILITY_OPTIONS = [
+  { value: "any", label: "Any availability" },
+  { value: "online", label: "Online" },
+  { value: "archived-only", label: "Archived only" }
+] as const;
+
 interface SaveMeta {
   label: string;
   disabled: boolean;
@@ -117,6 +139,9 @@ function App() {
   const [mediaType, setMediaType] = useState(() => settings.mediaType);
   const [yearFrom, setYearFrom] = useState(() => settings.yearFrom);
   const [yearTo, setYearTo] = useState(() => settings.yearTo);
+  const [language, setLanguage] = useState(() => settings.language);
+  const [sourceTrust, setSourceTrust] = useState(() => settings.sourceTrust);
+  const [availability, setAvailability] = useState(() => settings.availability);
   const [statuses, setStatuses] = useState<Record<string, LinkStatus>>({});
   const [saveMeta, setSaveMeta] = useState<Record<string, SaveMeta>>({});
   const [suggestedQuery, setSuggestedQuery] = useState<string | null>(null);
@@ -153,6 +178,8 @@ function App() {
   const [relatedError, setRelatedError] = useState<string | null>(null);
   const [waybackDetails, setWaybackDetails] = useState<WaybackAvailabilityResponse | null>(null);
   const [waybackError, setWaybackError] = useState<string | null>(null);
+  const [alternateSuggestions, setAlternateSuggestions] = useState<string[]>([]);
+  const [filterNotice, setFilterNotice] = useState<string | null>(null);
 
   const resultsContainerRef = useRef<HTMLDivElement | null>(null);
   const bootstrapped = useRef(false);
@@ -172,10 +199,25 @@ function App() {
       resultsPerPage,
       mediaType,
       yearFrom,
-      yearTo
+      yearTo,
+      language,
+      sourceTrust,
+      availability
     };
     saveSettings(settingsPayload);
-  }, [theme, nsfwMode, nsfwAcknowledged, activeQuery, resultsPerPage, mediaType, yearFrom, yearTo]);
+  }, [
+    theme,
+    nsfwMode,
+    nsfwAcknowledged,
+    activeQuery,
+    resultsPerPage,
+    mediaType,
+    yearFrom,
+    yearTo,
+    language,
+    sourceTrust,
+    availability
+  ]);
 
   useEffect(() => {
     saveHistory(history);
@@ -318,6 +360,8 @@ function App() {
       if (!safeQuery) {
         setError("Please enter a search query.");
         setFallbackNotice(null);
+        setAlternateSuggestions([]);
+        setFilterNotice(null);
         return;
       }
 
@@ -330,9 +374,14 @@ function App() {
       setRelatedItems([]);
       setRelatedFallback(false);
       setRelatedError(null);
+      setAlternateSuggestions([]);
+      setFilterNotice(null);
 
       const normalizedYearFrom = normalizeYear(yearFrom);
       const normalizedYearTo = normalizeYear(yearTo);
+      const normalizedLanguage = language.trim();
+      const normalizedSourceTrust = sourceTrust.trim();
+      const normalizedAvailability = availability.trim();
 
       try {
         if (!isYearValid(yearFrom) || !isYearValid(yearTo)) {
@@ -345,7 +394,11 @@ function App() {
         const result = await searchArchive(safeQuery, pageNumber, rows, {
           mediaType,
           yearFrom: normalizedYearFrom,
-          yearTo: normalizedYearTo
+          yearTo: normalizedYearTo,
+          language: normalizedLanguage,
+          sourceTrust: normalizedSourceTrust,
+          availability: normalizedAvailability,
+          nsfwMode
         });
 
         if (!result.ok) {
@@ -360,6 +413,8 @@ function App() {
           setSaveMeta({});
           setSuggestedQuery(null);
           setSuggestionCorrections([]);
+          setAlternateSuggestions([]);
+          setFilterNotice(null);
           setLiveStatus(null);
           return;
         }
@@ -392,6 +447,38 @@ function App() {
 
         const docs = payload.response?.docs ?? [];
         const numFound = payload.response?.numFound ?? null;
+        const altQueries = Array.isArray(payload.alternate_queries)
+          ? payload.alternate_queries
+              .map((item) => (typeof item === "string" ? item.trim() : ""))
+              .filter((item, index, array) => item.length > 0 && array.indexOf(item) === index)
+          : [];
+        setAlternateSuggestions(altQueries);
+
+        const originalCount =
+          typeof payload.original_numFound === "number" && Number.isFinite(payload.original_numFound)
+            ? payload.original_numFound
+            : null;
+        const filteredCountValue =
+          typeof payload.filtered_count === "number" && Number.isFinite(payload.filtered_count)
+            ? payload.filtered_count
+            : typeof numFound === "number" && Number.isFinite(numFound)
+            ? numFound
+            : null;
+
+        if (
+          originalCount !== null &&
+          filteredCountValue !== null &&
+          filteredCountValue < originalCount
+        ) {
+          const hiddenByFilters = originalCount - filteredCountValue;
+          setFilterNotice(
+            hiddenByFilters === 1
+              ? "1 result hidden by the current filters."
+              : `${hiddenByFilters} results hidden by the current filters.`
+          );
+        } else {
+          setFilterNotice(null);
+        }
         const hiddenIdentifiers =
           blacklistRef.current.length > 0 ? new Set(blacklistRef.current) : null;
         const visibleDocs = hiddenIdentifiers
@@ -506,11 +593,13 @@ function App() {
         setSuggestedQuery(null);
         setSuggestionCorrections([]);
         setLiveStatus(null);
+        setAlternateSuggestions([]);
+        setFilterNotice(null);
       } finally {
         setIsLoading(false);
       }
     },
-    [resultsPerPage, mediaType, yearFrom, yearTo]
+    [resultsPerPage, mediaType, yearFrom, yearTo, language, sourceTrust, availability, nsfwMode]
   );
 
   useEffect(() => {
@@ -603,6 +692,18 @@ function App() {
 
   const handleMediaTypeChange = (event: ChangeEvent<HTMLSelectElement>) => {
     setMediaType(event.target.value);
+  };
+
+  const handleLanguageChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    setLanguage(event.target.value);
+  };
+
+  const handleSourceTrustChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    setSourceTrust(event.target.value);
+  };
+
+  const handleAvailabilityChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    setAvailability(event.target.value);
   };
 
   const handleYearFromChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -821,6 +922,9 @@ function App() {
     setHasSearched(false);
     setLiveStatus(null);
     setSelectedDoc(null);
+    setAlternateSuggestions([]);
+    setFilterNotice(null);
+    setFallbackNotice(null);
   };
 
   const clearHistory = () => {
@@ -843,6 +947,9 @@ function App() {
     setMediaType(defaults.mediaType);
     setYearFrom(defaults.yearFrom);
     setYearTo(defaults.yearTo);
+    setLanguage(defaults.language);
+    setSourceTrust(defaults.sourceTrust);
+    setAvailability(defaults.availability);
     setPage(1);
     setError(null);
     setIsLoading(false);
@@ -855,6 +962,9 @@ function App() {
     setSuggestionCorrections([]);
     setLiveStatus(null);
     setSelectedDoc(null);
+    setAlternateSuggestions([]);
+    setFilterNotice(null);
+    setFallbackNotice(null);
     const trimmedQuery = defaults.lastQuery.trim();
     setQuery(trimmedQuery);
     setActiveQuery(null);
@@ -891,25 +1001,52 @@ function App() {
     [nsfwMode]
   );
 
-  const suggestionNode = suggestedQuery ? (
-    <div className="spellcheck-suggestion" role="note">
-      Did you mean
-      {" "}
-      <button
-        type="button"
-        className="spellcheck-button"
-        onClick={() => handleSuggestionClick(suggestedQuery)}
-      >
-        {suggestedQuery}
-      </button>
-      {suggestionCorrections.length > 0 ? (
-        <span className="spellcheck-details">
-          (
-          {suggestionCorrections.map((item) => `${item.original} → ${item.corrected}`).join(", ")})
-        </span>
-      ) : null}
-    </div>
-  ) : null;
+  const suggestionElements: JSX.Element[] = [];
+
+  if (suggestedQuery) {
+    suggestionElements.push(
+      <div key="spellcheck" className="spellcheck-suggestion" role="note">
+        Did you mean{" "}
+        <button
+          type="button"
+          className="spellcheck-button"
+          onClick={() => handleSuggestionClick(suggestedQuery)}
+        >
+          {suggestedQuery}
+        </button>
+        {suggestionCorrections.length > 0 ? (
+          <span className="spellcheck-details">
+            (
+            {suggestionCorrections.map((item) => `${item.original} → ${item.corrected}`).join(", ")})
+          </span>
+        ) : null}
+      </div>
+    );
+  }
+
+  const alternateCandidates = alternateSuggestions.filter((item) =>
+    !suggestedQuery || item.toLowerCase() !== suggestedQuery.toLowerCase()
+  );
+
+  if (alternateCandidates.length > 0) {
+    suggestionElements.push(
+      <div key="alternates" className="spellcheck-suggestion" role="note">
+        Try also{" "}
+        {alternateCandidates.slice(0, 3).map((suggestion) => (
+          <button
+            key={suggestion}
+            type="button"
+            className="spellcheck-button"
+            onClick={() => handleSuggestionClick(suggestion)}
+          >
+            {suggestion}
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  const suggestionNode = suggestionElements.length > 0 ? <>{suggestionElements}</> : null;
 
   const settingsPanel = (
     <SettingsPanel
@@ -927,6 +1064,13 @@ function App() {
   const canGoBack = history.length > 0 && historyIndex >= 0 && historyIndex < history.length - 1;
   const canGoForward = history.length > 0 && historyIndex > 0;
   const canRefresh = Boolean(activeQuery) && !isLoading;
+
+  const combinedNotice = useMemo(() => {
+    if (fallbackNotice && filterNotice) {
+      return `${fallbackNotice} ${filterNotice}`;
+    }
+    return fallbackNotice ?? filterNotice;
+  }, [fallbackNotice, filterNotice]);
 
   return (
     <div className="app-shell">
@@ -975,6 +1119,45 @@ function App() {
                   {option}
                 </option>
               ))}
+            </select>
+          </label>
+          <label>
+            <span>Language</span>
+            <select value={language} onChange={handleLanguageChange}>
+              {LANGUAGE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Source trust</span>
+            <select value={sourceTrust} onChange={handleSourceTrustChange}>
+              {SOURCE_TRUST_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Availability</span>
+            <select value={availability} onChange={handleAvailabilityChange}>
+              {AVAILABILITY_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>NSFW mode</span>
+            <select value={nsfwMode} onChange={(event) => handleChangeNSFWMode(event.target.value as NSFWFilterMode)}>
+              <option value="safe">Safe</option>
+              <option value="moderate">Moderate</option>
+              <option value="off">Unrestricted</option>
+              <option value="only">Only NSFW</option>
             </select>
           </label>
           <div className="year-filters">
@@ -1035,7 +1218,7 @@ function App() {
           saveMeta={saveMeta}
           onReport={handleReportSubmission}
           suggestionNode={suggestionNode}
-          notice={fallbackNotice}
+          notice={combinedNotice}
           viewMode={mediaType === "image" ? "images" : "default"}
           hiddenCount={hiddenResultCount}
         />

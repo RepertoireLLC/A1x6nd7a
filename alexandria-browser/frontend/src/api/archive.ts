@@ -10,6 +10,7 @@ import type {
 } from "../types";
 import type { ReportSubmissionPayload, ReportResponse } from "../reporting";
 import { performFallbackArchiveSearch } from "../utils/fallbackSearch";
+import { postProcessDirectSearchPayload } from "./postProcess";
 
 const HTML_CONTENT_TYPE_PATTERN = /text\/html/i;
 const HTML_DOCTYPE_PATTERN = /^\s*<!DOCTYPE\s+html/i;
@@ -351,6 +352,7 @@ function buildFilterExpressions(filters: SearchFilters, includeFilters: boolean)
   const mediaTypeValue = filters.mediaType?.trim().toLowerCase() ?? "";
   const yearFromValue = filters.yearFrom?.trim() ?? "";
   const yearToValue = filters.yearTo?.trim() ?? "";
+  const languageValue = filters.language?.trim() ?? "";
 
   if (mediaTypeValue && mediaTypeValue !== "all") {
     expressions.push(`mediatype:(${mediaTypeValue})`);
@@ -360,6 +362,17 @@ function buildFilterExpressions(filters: SearchFilters, includeFilters: boolean)
     const start = yearFromValue || "*";
     const end = yearToValue || "*";
     expressions.push(`year:[${start} TO ${end}]`);
+  }
+
+  if (languageValue) {
+    const tokens = languageValue
+      .split(/[,\s]+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length > 0);
+    if (tokens.length > 0) {
+      const clause = tokens.map((token) => `"${token.replace(/"/g, '\\"')}"`).join(" OR ");
+      expressions.push(`language:(${clause})`);
+    }
   }
 
   return expressions;
@@ -412,7 +425,11 @@ function buildDirectArchiveSearchAttempts(
   const normalizedFilters: SearchFilters = {
     mediaType: filters.mediaType.trim(),
     yearFrom: filters.yearFrom.trim(),
-    yearTo: filters.yearTo.trim()
+    yearTo: filters.yearTo.trim(),
+    language: filters.language.trim(),
+    sourceTrust: filters.sourceTrust.trim(),
+    availability: filters.availability.trim(),
+    nsfwMode: filters.nsfwMode,
   };
 
   const createAttempt = (
@@ -426,7 +443,15 @@ function buildDirectArchiveSearchAttempts(
     return { description, url, query: effectiveQuery };
   };
 
-  const emptyFilters: SearchFilters = { mediaType: "", yearFrom: "", yearTo: "" };
+  const emptyFilters: SearchFilters = {
+    mediaType: "",
+    yearFrom: "",
+    yearTo: "",
+    language: "",
+    sourceTrust: "",
+    availability: "",
+    nsfwMode: filters.nsfwMode,
+  };
 
   const attempts: DirectArchiveSearchAttempt[] = [
     createAttempt(ARCHIVE_PRIMARY_STRATEGY, trimmedQuery, normalizedFilters, {
@@ -533,6 +558,7 @@ async function executeDirectArchiveSearch(
         search_strategy: attempt.description,
         search_strategy_query: attempt.query
       };
+      const processed = postProcessDirectSearchPayload(augmented, query, filters);
 
       if (!archiveApiSuccessLogged) {
         console.info("Archive API fully connected. Live search 100% operational.");
@@ -546,7 +572,7 @@ async function executeDirectArchiveSearch(
         }
       }
 
-      return { payload: augmented, attempt };
+      return { payload: processed, attempt };
     } catch (error) {
       lastError = error;
       const context =
@@ -606,6 +632,18 @@ export async function searchArchive(
   if (filters.yearTo.trim()) {
     url.searchParams.set("yearTo", filters.yearTo.trim());
   }
+  if (filters.language.trim()) {
+    url.searchParams.set("language", filters.language.trim());
+  }
+  if (filters.sourceTrust.trim() && filters.sourceTrust !== "any") {
+    url.searchParams.set("sourceTrust", filters.sourceTrust.trim());
+  }
+  if (filters.availability.trim() && filters.availability !== "any") {
+    url.searchParams.set("availability", filters.availability.trim());
+  }
+  if (filters.nsfwMode) {
+    url.searchParams.set("nsfwMode", filters.nsfwMode);
+  }
 
   let lastError: unknown = null;
 
@@ -652,6 +690,10 @@ export async function searchArchive(
       mediaType: filters.mediaType.trim(),
       yearFrom: filters.yearFrom.trim(),
       yearTo: filters.yearTo.trim(),
+      language: filters.language.trim(),
+      sourceTrust: filters.sourceTrust.trim(),
+      availability: filters.availability.trim(),
+      nsfwMode: filters.nsfwMode,
     };
     const { payload } = await executeDirectArchiveSearch(sanitizedQuery, page, rows, directFilters);
     return { ok: true, data: payload, status: 200 };

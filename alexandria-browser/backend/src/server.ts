@@ -22,6 +22,17 @@ import { SAMPLE_METADATA } from "./data/sampleMetadata";
 import { SAMPLE_CDX_SNAPSHOTS } from "./data/sampleCdxSnapshots";
 import { DEFAULT_SCRAPE_RESPONSE, SAMPLE_SCRAPE_RESULTS } from "./data/sampleScrapeResults";
 import { annotateRecord } from "./services/nsfwFilter";
+import { buildHybridSearchExpression, suggestAlternativeQueries } from "./services/queryExpansion";
+import { scoreArchiveRecord, type SearchScoreBreakdown } from "./services/resultScoring";
+import {
+  matchesAdvancedFilters,
+  normalizeAvailability,
+  normalizeSourceTrust,
+  type ArchiveSearchFiltersInput,
+  type LinkStatus,
+  type NSFWFilterMode,
+  type SourceTrustLevel
+} from "./services/filtering";
 import { getSpellCorrector, type SpellcheckResult } from "./services/spellCorrector";
 import { isValidReportReason, sendReportEmail, type ReportSubmission } from "./services/reporting";
 
@@ -50,8 +61,6 @@ const ALLOWED_MEDIA_TYPES = new Set([
 
 const YEAR_PATTERN = /^\d{4}$/;
 
-type LinkStatus = "online" | "archived-only" | "offline";
-
 type ArchiveSearchResultSummary = {
   identifier: string;
   title: string;
@@ -62,6 +71,11 @@ type ArchiveSearchResultSummary = {
   archive_url: string | null;
   original_url: string | null;
   downloads: number | null;
+  score?: number | null;
+  score_breakdown?: SearchScoreBreakdown;
+  availability?: LinkStatus | null;
+  source_trust?: SourceTrustLevel | null;
+  language?: string | null;
 };
 
 type SearchPagination = {
@@ -83,12 +97,9 @@ type ArchiveSearchResponse = Record<string, unknown> & {
   pagination?: SearchPagination;
   search_strategy?: string;
   search_strategy_query?: string;
-};
-
-type ArchiveSearchFiltersInput = {
-  mediaType?: string;
-  yearFrom?: string;
-  yearTo?: string;
+  alternate_queries?: string[];
+  original_numFound?: number | null;
+  filtered_count?: number | null;
 };
 
 type ArchiveSearchAttempt = {
@@ -347,6 +358,29 @@ function coerceNumber(value: unknown): number | null {
   }
 
   return null;
+}
+
+function coerceLanguageValue(value: unknown): string | null {
+  const values = collectStringValues(value);
+  return values.length > 0 ? values[0] : null;
+}
+
+function coerceAvailabilityValue(value: unknown): LinkStatus | null {
+  const text = coerceSingleString(value);
+  const normalized = normalizeAvailability(text ?? undefined);
+  if (!normalized || normalized === "any") {
+    return null;
+  }
+  return normalized;
+}
+
+function coerceSourceTrustValue(value: unknown): SourceTrustLevel | null {
+  const text = coerceSingleString(value);
+  const normalized = normalizeSourceTrust(text ?? undefined);
+  if (!normalized || normalized === "any") {
+    return null;
+  }
+  return normalized;
 }
 
 function setCorsHeaders(res: ServerResponse): void {
@@ -851,25 +885,15 @@ function buildPlainKeywordQuery(query: string): string {
 
 function buildSearchExpression(query: string, includeFuzzy: boolean): string {
   const sanitized = query.trim();
+  if (!sanitized) {
+    return sanitized;
+  }
+
   if (!includeFuzzy) {
     return sanitized;
   }
 
-  const tokens = sanitized
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0);
-
-  if (tokens.length === 0) {
-    return sanitized;
-  }
-
-  const fuzzyClause = tokens.map((token) => `${token}~`).join(" ");
-  if (!fuzzyClause) {
-    return sanitized;
-  }
-
-  return `(${sanitized}) OR (${fuzzyClause})`;
+  return buildHybridSearchExpression(sanitized, includeFuzzy);
 }
 
 function buildFilterExpressions(filters: ArchiveSearchFiltersInput, includeFilters: boolean): string[] {
@@ -881,6 +905,7 @@ function buildFilterExpressions(filters: ArchiveSearchFiltersInput, includeFilte
   const mediaTypeValue = filters.mediaType?.trim() ?? "";
   const yearFromValue = filters.yearFrom?.trim() ?? "";
   const yearToValue = filters.yearTo?.trim() ?? "";
+  const languageValue = filters.language?.trim() ?? "";
 
   if (mediaTypeValue) {
     expressions.push(`mediatype:(${mediaTypeValue})`);
@@ -890,6 +915,17 @@ function buildFilterExpressions(filters: ArchiveSearchFiltersInput, includeFilte
     const start = yearFromValue || "*";
     const end = yearToValue || "*";
     expressions.push(`year:[${start} TO ${end}]`);
+  }
+
+  if (languageValue) {
+    const tokens = languageValue
+      .split(/[,\s]+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length > 0);
+    if (tokens.length > 0) {
+      const clause = tokens.map((token) => `"${token.replace(/"/g, '\\"')}"`).join(" OR ");
+      expressions.push(`language:(${clause})`);
+    }
   }
 
   return expressions;
@@ -1088,7 +1124,7 @@ function performLocalArchiveSearch(
   query: string,
   page: number,
   rows: number,
-  filters: { mediaType?: string; yearFrom?: string; yearTo?: string }
+  filters: ArchiveSearchFiltersInput
 ): ArchiveSearchResponse {
   const tokens = query
     .toLowerCase()
@@ -1220,6 +1256,10 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
   const mediaTypeParam = url.searchParams.get("mediaType")?.trim().toLowerCase() ?? "";
   const yearFromParam = url.searchParams.get("yearFrom")?.trim() ?? "";
   const yearToParam = url.searchParams.get("yearTo")?.trim() ?? "";
+  const languageParam = url.searchParams.get("language")?.trim() ?? "";
+  const sourceTrustParam = url.searchParams.get("sourceTrust")?.trim().toLowerCase() ?? "";
+  const availabilityParam = url.searchParams.get("availability")?.trim().toLowerCase() ?? "";
+  const nsfwModeParam = url.searchParams.get("nsfwMode")?.trim().toLowerCase() ?? "";
 
   if (mediaTypeParam && !ALLOWED_MEDIA_TYPES.has(mediaTypeParam)) {
     sendJson(res, 400, {
@@ -1259,12 +1299,18 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
   let lastSearchError: unknown = null;
   let lastAttempt: ArchiveSearchAttempt | null = null;
 
+  const filterConfig: ArchiveSearchFiltersInput = {
+    mediaType: mediaTypeParam,
+    yearFrom: yearFromParam,
+    yearTo: yearToParam,
+    language: languageParam,
+    sourceTrust: sourceTrustParam,
+    availability: availabilityParam,
+    nsfwMode: nsfwModeParam
+  };
+
   try {
-    const attempts = buildArchiveSearchAttempts(query, safePage, safeRows, {
-      mediaType: mediaTypeParam,
-      yearFrom: yearFromParam,
-      yearTo: yearToParam
-    });
+    const attempts = buildArchiveSearchAttempts(query, safePage, safeRows, filterConfig);
     const result = await executeArchiveSearchAttempts(attempts);
     data = result.payload;
     lastAttempt = result.attempt;
@@ -1289,11 +1335,7 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       return;
     }
 
-    data = performLocalArchiveSearch(query, safePage, safeRows, {
-      mediaType: mediaTypeParam,
-      yearFrom: yearFromParam,
-      yearTo: yearToParam
-    });
+    data = performLocalArchiveSearch(query, safePage, safeRows, filterConfig);
     usedFallback = true;
     const fallbackInfo = describeArchiveFallback(lastSearchError);
     data.fallback_reason = fallbackInfo.reason;
@@ -1320,10 +1362,12 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     }
   }
 
+  const originalNumFound = data.response?.numFound ?? null;
+
   const docsRaw = data.response?.docs;
   const docs = Array.isArray(docsRaw) ? (docsRaw as Array<Record<string, unknown>>) : [];
   const combinedTexts: string[] = [];
-  const normalizedDocs = docs.map((doc) => {
+  let normalizedDocs = docs.map((doc) => {
     if (doc && typeof doc === "object") {
       const record = doc as Record<string, unknown>;
       const textualFields: string[] = [];
@@ -1356,7 +1400,58 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     }
 
     return doc;
-  });
+  }) as Array<Record<string, unknown>>;
+
+  const scoredDocs = normalizedDocs.map((doc) => {
+    if (doc && typeof doc === "object") {
+      const analysis = scoreArchiveRecord(doc, query);
+      const enriched: Record<string, unknown> = {
+        ...doc,
+        score: analysis.breakdown.combinedScore,
+        score_breakdown: analysis.breakdown,
+        availability: analysis.availability,
+        source_trust: analysis.trustLevel,
+      };
+
+      if (!enriched.source_trust_level) {
+        enriched.source_trust_level = analysis.trustLevel;
+      }
+
+      if (analysis.language && !enriched.language) {
+        enriched.language = analysis.language;
+      }
+
+      return enriched;
+    }
+
+    return doc;
+  }) as Array<Record<string, unknown>>;
+
+  const filteredDocs = scoredDocs.filter((doc) => {
+    if (!doc || typeof doc !== "object") {
+      return true;
+    }
+    return matchesAdvancedFilters(doc as Record<string, unknown>, filterConfig);
+  }) as Array<Record<string, unknown>>;
+
+  normalizedDocs = filteredDocs;
+
+  const scoreValues = filteredDocs
+    .map((doc) => {
+      const raw = doc.score;
+      if (typeof raw === "number" && Number.isFinite(raw)) {
+        return raw;
+      }
+      if (typeof raw === "string") {
+        const parsed = Number.parseFloat(raw.trim());
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+      return null;
+    })
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const highestScore = scoreValues.length > 0 ? Math.max(...scoreValues) : 0;
+  const alternateSuggestions =
+    filteredDocs.length === 0 || highestScore < 0.35 ? suggestAlternativeQueries(query) : [];
 
   const summaryResults: ArchiveSearchResultSummary[] = normalizedDocs.map((doc) => {
     const record = doc && typeof doc === "object" ? (doc as Record<string, unknown>) : {};
@@ -1382,6 +1477,22 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       coerceSingleString(record.originalurl) ??
       coerceSingleString(linksRecord ? linksRecord["original"] : undefined);
     const downloadsValue = coerceNumber(record.downloads);
+    let scoreValue: number | null = null;
+    if (typeof record.score === "number" && Number.isFinite(record.score)) {
+      scoreValue = record.score;
+    } else if (typeof record.score === "string") {
+      const parsedScore = Number.parseFloat(record.score.trim());
+      if (Number.isFinite(parsedScore)) {
+        scoreValue = parsedScore;
+      }
+    }
+    const scoreBreakdown =
+      record.score_breakdown && typeof record.score_breakdown === "object"
+        ? (record.score_breakdown as SearchScoreBreakdown)
+        : undefined;
+    const availabilityValue = coerceAvailabilityValue(record.availability);
+    const sourceTrustValue = coerceSourceTrustValue(record.source_trust ?? record.source_trust_level);
+    const languageValue = coerceLanguageValue(record.language ?? record.languages ?? record.lang);
 
     return {
       identifier,
@@ -1393,18 +1504,26 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       archive_url: archiveUrl,
       original_url: originalUrl,
       downloads: downloadsValue,
+      score: scoreValue,
+      score_breakdown: scoreBreakdown,
+      availability: availabilityValue,
+      source_trust: sourceTrustValue,
+      language: languageValue,
     };
   });
+
+  const filteredCount = normalizedDocs.length;
 
   if (data.response) {
     data.response = {
       ...data.response,
-      docs: normalizedDocs
+      docs: normalizedDocs,
+      numFound: filteredCount
     };
   } else {
     data.response = {
       docs: normalizedDocs,
-      numFound: normalizedDocs.length,
+      numFound: filteredCount,
       start: 0
     };
   }
@@ -1435,9 +1554,16 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     pagination: {
       page: safePage,
       rows: safeRows,
-      total: data.response?.numFound ?? summaryResults.length
+      total: filteredCount
     }
   };
+
+  if (alternateSuggestions.length > 0) {
+    payload.alternate_queries = alternateSuggestions;
+  }
+
+  payload.original_numFound = originalNumFound;
+  payload.filtered_count = filteredCount;
 
   if (usedFallback) {
     payload.fallback = true;
