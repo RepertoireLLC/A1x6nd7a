@@ -29,6 +29,102 @@ type Classification = {
 const MODE_VALUES: readonly NSFWFilterMode[] = ["safe", "moderate", "off", "only"];
 const MAX_COLLECTION_DEPTH = 6;
 
+const EXPLICIT_SEVERITY_KEYWORDS = [
+  "explicit",
+  "hardcore",
+  "xxx",
+  "x-rated",
+  "porn",
+  "pornographic",
+  "adult",
+  "18+",
+  "nsfw-explicit"
+];
+
+const MILD_SEVERITY_KEYWORDS = [
+  "mild",
+  "soft",
+  "softcore",
+  "soft-core",
+  "soft core",
+  "sensitive",
+  "nsfw",
+  "suggestive",
+  "moderate"
+];
+
+function normalizeSeverityValue(input: unknown): NSFWSeverity | null {
+  if (typeof input !== "string") {
+    return null;
+  }
+  const value = input.trim().toLowerCase();
+  if (!value) {
+    return null;
+  }
+  if (EXPLICIT_SEVERITY_KEYWORDS.some((keyword) => value.includes(keyword))) {
+    return "explicit";
+  }
+  if (MILD_SEVERITY_KEYWORDS.some((keyword) => value.includes(keyword))) {
+    return "mild";
+  }
+  return null;
+}
+
+function isTruthyFlag(value: unknown): boolean {
+  if (value === true) {
+    return true;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "y";
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value > 0;
+  }
+  return false;
+}
+
+function extractMatchList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const matches: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const normalized = trimmed.toLowerCase();
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      matches.push(trimmed);
+    }
+  }
+  return matches;
+}
+
+function mergeMatches(primary: string[], secondary: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const list of [primary, secondary]) {
+    for (const entry of list) {
+      if (typeof entry !== "string") {
+        continue;
+      }
+      const normalized = entry.toLowerCase();
+      if (!seen.has(normalized)) {
+        seen.add(normalized);
+        result.push(entry);
+      }
+    }
+  }
+  return result;
+}
+
 function normalizeList(input: unknown): string[] {
   if (!Array.isArray(input)) {
     return [];
@@ -174,23 +270,48 @@ function classifyRecord(record: Record<string, unknown>): Classification {
     }
   }
 
-  if (explicitMatches.size > 0) {
-    return {
-      flagged: true,
-      severity: "explicit",
-      matches: Array.from(new Set([...explicitMatches, ...mildMatches]))
-    };
+  const severityFromFlag = normalizeSeverityValue(record["nsfw"]);
+  const existingSeverity =
+    severityFromFlag ??
+    normalizeSeverityValue(
+      record["nsfwLevel"] ?? record["nsfw_level"] ?? record["nsfwSeverity"] ?? record["nsfw_severity"]
+    );
+  const existingMatches = extractMatchList(
+    record["nsfwMatches"] ?? record["nsfw_matches"] ?? record["nsfwTags"] ?? record["nsfw_tags"]
+  );
+  const flaggedByMetadata =
+    isTruthyFlag(record["nsfw"]) || existingSeverity !== null || existingMatches.length > 0;
+
+  const keywordFlagged = explicitMatches.size > 0 || mildMatches.size > 0;
+  const keywordSeverity: NSFWSeverity | null =
+    explicitMatches.size > 0 ? "explicit" : mildMatches.size > 0 ? "mild" : null;
+  const keywordMatches = explicitMatches.size > 0
+    ? Array.from(new Set([...explicitMatches, ...mildMatches]))
+    : Array.from(mildMatches);
+
+  const flagged = keywordFlagged || flaggedByMetadata;
+  if (!flagged) {
+    return { flagged: false, severity: null, matches: [] };
   }
 
-  if (mildMatches.size > 0) {
-    return {
-      flagged: true,
-      severity: "mild",
-      matches: Array.from(mildMatches)
-    };
+  let severity: NSFWSeverity | null = keywordSeverity;
+  if (existingSeverity) {
+    if (existingSeverity === "explicit" || severity === "explicit") {
+      severity = "explicit";
+    } else {
+      severity = existingSeverity;
+    }
+  } else if (!severity && flaggedByMetadata) {
+    severity = "mild";
   }
 
-  return { flagged: false, severity: null, matches: [] };
+  const matches = mergeMatches(keywordMatches, existingMatches);
+
+  return {
+    flagged: true,
+    severity,
+    matches
+  };
 }
 
 function shouldInclude(classification: Classification, mode: NSFWFilterMode): boolean {
@@ -206,59 +327,50 @@ function shouldInclude(classification: Classification, mode: NSFWFilterMode): bo
   return true;
 }
 
-function annotateRecord<T extends Record<string, unknown>>(record: T): ClassifiedRecord<T> {
-  const existingLevel = record.nsfwLevel ?? record.nsfw_level;
-  const existingMatches = Array.isArray((record as Record<string, unknown>).nsfwMatches)
-    ? (record as Record<string, unknown>).nsfwMatches
-    : Array.isArray((record as Record<string, unknown>).nsfw_matches)
-    ? (record as Record<string, unknown>).nsfw_matches
-    : undefined;
-
-  if (typeof existingLevel === "string") {
-    const severity = existingLevel as NSFWSeverity;
-    const nsfw = record.nsfw === true || severity === "explicit" || severity === "mild";
-    return {
-      ...record,
-      nsfw,
-      nsfwLevel: severity,
-      nsfwMatches: existingMatches ?? []
-    } as ClassifiedRecord<T>;
-  }
-
-  const classification = classifyRecord(record);
-
-  if (!classification.flagged) {
-    const next = { ...record } as ClassifiedRecord<T>;
-    if (next.nsfw) {
-      next.nsfw = false;
-    }
-    if ("nsfwLevel" in next) {
+function annotateWithClassification<T extends Record<string, unknown>>(
+  record: T,
+  classification: Classification
+): ClassifiedRecord<T> {
+  const next = { ...record } as ClassifiedRecord<T>;
+  if (classification.flagged) {
+    next.nsfw = true;
+    if (classification.severity) {
+      next.nsfwLevel = classification.severity;
+    } else if ("nsfwLevel" in next) {
       delete next.nsfwLevel;
     }
-    if ("nsfwMatches" in next) {
+    if (classification.matches.length > 0) {
+      next.nsfwMatches = classification.matches;
+    } else if ("nsfwMatches" in next) {
       delete next.nsfwMatches;
     }
     return next;
   }
 
-  const next = { ...record } as ClassifiedRecord<T>;
-  next.nsfw = true;
-  if (classification.severity) {
-    next.nsfwLevel = classification.severity;
+  if (next.nsfw) {
+    next.nsfw = false;
   }
-  if (classification.matches.length > 0) {
-    next.nsfwMatches = classification.matches;
+  if ("nsfwLevel" in next) {
+    delete next.nsfwLevel;
+  }
+  if ("nsfwMatches" in next) {
+    delete next.nsfwMatches;
   }
   return next;
+}
+
+function annotateRecord<T extends Record<string, unknown>>(record: T): ClassifiedRecord<T> {
+  const classification = classifyRecord(record);
+  return annotateWithClassification(record, classification);
 }
 
 function filterByMode<T extends Record<string, unknown>>(items: T[], mode: NSFWFilterMode): ClassifiedRecord<T>[] {
   const normalized = normalizeMode(mode);
   const results: ClassifiedRecord<T>[] = [];
   for (const item of items) {
-    const annotated = annotateRecord(item);
-    if (shouldInclude(classifyRecord(annotated), normalized)) {
-      results.push(annotated);
+    const classification = classifyRecord(item);
+    if (shouldInclude(classification, normalized)) {
+      results.push(annotateWithClassification(item, classification));
     }
   }
   return results;
@@ -281,16 +393,14 @@ export function annotateScrapeItems(items: ScrapeItem[]): ScrapeItem[] {
 }
 
 export function shouldIncludeDoc(doc: ArchiveSearchDoc, mode: NSFWFilterMode): boolean {
-  const annotated = annotateRecord(doc);
-  return shouldInclude(classifyRecord(annotated), normalizeMode(mode));
+  return shouldInclude(classifyRecord(doc), normalizeMode(mode));
 }
 
 export function countHiddenByMode(docs: ArchiveSearchDoc[], mode: NSFWFilterMode): number {
   const normalized = normalizeMode(mode);
   let hidden = 0;
   for (const doc of docs) {
-    const annotated = annotateRecord(doc);
-    if (!shouldInclude(classifyRecord(annotated), normalized)) {
+    if (!shouldInclude(classifyRecord(doc), normalized)) {
       hidden += 1;
     }
   }

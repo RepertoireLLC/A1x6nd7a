@@ -8,6 +8,9 @@ export interface SampleArchiveDoc {
   publicdate?: string;
   creator?: string | string[];
   collection?: string | string[];
+  nsfw?: boolean;
+  nsfwLevel?: "mild" | "explicit";
+  nsfwMatches?: string[];
   links?: {
     archive: string;
     original?: string | null;
@@ -82,7 +85,10 @@ export const SAMPLE_ARCHIVE_DOCS: SampleArchiveDoc[] = [
     date: "1984-05-01",
     publicdate: "1984-05-01T00:00:00Z",
     creator: "Vintage Studio Collective",
-    collection: ["images", "pinup", "glamour"]
+    collection: ["images", "pinup", "glamour"],
+    nsfw: true,
+    nsfwLevel: "mild",
+    nsfwMatches: ["pin-up", "lingerie"]
   },
   {
     identifier: "underground_xxx_portfolio",
@@ -94,7 +100,10 @@ export const SAMPLE_ARCHIVE_DOCS: SampleArchiveDoc[] = [
     date: "1992-09-15",
     publicdate: "1992-09-15T00:00:00Z",
     creator: "Underground Press Syndicate",
-    collection: ["adult", "magazines", "images"]
+    collection: ["adult", "magazines", "images"],
+    nsfw: true,
+    nsfwLevel: "explicit",
+    nsfwMatches: ["xxx", "pornographic"]
   },
   {
     identifier: "msdos_games_collection",

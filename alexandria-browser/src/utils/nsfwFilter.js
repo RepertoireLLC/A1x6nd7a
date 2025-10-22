@@ -14,12 +14,108 @@ const DEFAULT_KEYWORD_SETS = Object.freeze({
 
 const MAX_COLLECTION_DEPTH = 6;
 
+const EXPLICIT_SEVERITY_KEYWORDS = [
+  'explicit',
+  'hardcore',
+  'xxx',
+  'x-rated',
+  'porn',
+  'pornographic',
+  'adult',
+  '18+',
+  'nsfw-explicit'
+];
+
+const MILD_SEVERITY_KEYWORDS = [
+  'mild',
+  'soft',
+  'softcore',
+  'soft-core',
+  'soft core',
+  'sensitive',
+  'nsfw',
+  'suggestive',
+  'moderate'
+];
+
 let cachedKeywordData = null;
 let cachedOverrides = null;
 let baseKeywordsCache = null;
 
 function normalizeList(list = []) {
   return Array.from(new Set(list.map((item) => (typeof item === 'string' ? item.toLowerCase() : '')).filter(Boolean)));
+}
+
+function normalizeSeverityValue(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (EXPLICIT_SEVERITY_KEYWORDS.some((keyword) => normalized.includes(keyword))) {
+    return 'explicit';
+  }
+  if (MILD_SEVERITY_KEYWORDS.some((keyword) => normalized.includes(keyword))) {
+    return 'mild';
+  }
+  return null;
+}
+
+function isTruthyFlag(value) {
+  if (value === true) {
+    return true;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'y';
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0;
+  }
+  return false;
+}
+
+function extractMatchList(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set();
+  const matches = [];
+  for (const entry of value) {
+    if (typeof entry !== 'string') {
+      continue;
+    }
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const normalized = trimmed.toLowerCase();
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      matches.push(trimmed);
+    }
+  }
+  return matches;
+}
+
+function mergeMatches(primary, secondary) {
+  const seen = new Set();
+  const result = [];
+  for (const list of [primary, secondary]) {
+    for (const entry of list) {
+      if (typeof entry !== 'string') {
+        continue;
+      }
+      const normalized = entry.toLowerCase();
+      if (!seen.has(normalized)) {
+        seen.add(normalized);
+        result.push(entry);
+      }
+    }
+  }
+  return result;
 }
 
 function readFromStorage() {
@@ -222,23 +318,41 @@ function classifyEntry(entry, keywordData) {
     }
   }
 
-  if (explicitMatches.size > 0) {
-    return {
-      flagged: true,
-      severity: 'explicit',
-      matches: Array.from(new Set([...explicitMatches, ...mildMatches]))
-    };
+  const severityFromFlag = normalizeSeverityValue(entry?.nsfw);
+  const existingSeverity =
+    severityFromFlag ??
+    normalizeSeverityValue(entry?.nsfwLevel ?? entry?.nsfw_level ?? entry?.nsfwSeverity ?? entry?.nsfw_severity);
+  const existingMatches = extractMatchList(
+    entry?.nsfwMatches ?? entry?.nsfw_matches ?? entry?.nsfwTags ?? entry?.nsfw_tags
+  );
+  const flaggedByMetadata =
+    isTruthyFlag(entry?.nsfw) || existingSeverity !== null || existingMatches.length > 0;
+
+  const keywordFlagged = explicitMatches.size > 0 || mildMatches.size > 0;
+  const keywordSeverity = explicitMatches.size > 0 ? 'explicit' : mildMatches.size > 0 ? 'mild' : null;
+  const keywordMatches = explicitMatches.size > 0
+    ? Array.from(new Set([...explicitMatches, ...mildMatches]))
+    : Array.from(mildMatches);
+
+  const flagged = keywordFlagged || flaggedByMetadata;
+  if (!flagged) {
+    return { flagged: false, severity: null, matches: [] };
   }
 
-  if (mildMatches.size > 0) {
-    return {
-      flagged: true,
-      severity: 'mild',
-      matches: Array.from(mildMatches)
-    };
+  let severity = keywordSeverity;
+  if (existingSeverity) {
+    severity = existingSeverity === 'explicit' || severity === 'explicit' ? 'explicit' : existingSeverity;
+  } else if (!severity && flaggedByMetadata) {
+    severity = 'mild';
   }
 
-  return { flagged: false, severity: null, matches: [] };
+  const matches = mergeMatches(keywordMatches, existingMatches);
+
+  return {
+    flagged: true,
+    severity,
+    matches
+  };
 }
 
 function shouldIncludeEntry(classification, mode) {
