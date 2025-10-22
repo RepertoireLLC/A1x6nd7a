@@ -166,19 +166,6 @@ function classifyRecord(record: Record<string, unknown>): Classification {
   return { flagged: false, severity: null, matches: [] };
 }
 
-function shouldInclude(classification: Classification, mode: NSFWFilterMode): boolean {
-  if (mode === "only") {
-    return classification.flagged;
-  }
-  if (mode === "safe") {
-    return !classification.flagged;
-  }
-  if (mode === "moderate") {
-    return classification.severity !== "explicit";
-  }
-  return true;
-}
-
 function annotateRecord<T extends Record<string, unknown>>(record: T): ClassifiedRecord<T> {
   const existingLevel = record.nsfwLevel ?? record.nsfw_level;
   const existingMatches = Array.isArray((record as Record<string, unknown>).nsfwMatches)
@@ -225,12 +212,47 @@ function annotateRecord<T extends Record<string, unknown>>(record: T): Classifie
   return next;
 }
 
+function resolveSeverity(record: ClassifiedRecord<unknown>): NSFWSeverity | null {
+  const value = record.nsfwLevel ?? (record as Record<string, unknown>).nsfw_level;
+  if (typeof value === "string") {
+    const lowered = value.trim().toLowerCase();
+    if (lowered === "explicit" || lowered === "mild") {
+      return lowered as NSFWSeverity;
+    }
+  }
+  return null;
+}
+
+function isFlagged(record: ClassifiedRecord<unknown>): boolean {
+  const severity = resolveSeverity(record);
+  if (severity === "explicit" || severity === "mild") {
+    return true;
+  }
+  return record.nsfw === true;
+}
+
+function matchesMode(record: ClassifiedRecord<unknown>, mode: NSFWFilterMode): boolean {
+  const severity = resolveSeverity(record);
+  const flagged = isFlagged(record);
+
+  if (mode === "only") {
+    return flagged;
+  }
+  if (mode === "safe") {
+    return !flagged;
+  }
+  if (mode === "moderate") {
+    return severity !== "explicit";
+  }
+  return true;
+}
+
 function filterByMode<T extends Record<string, unknown>>(items: T[], mode: NSFWFilterMode): ClassifiedRecord<T>[] {
   const normalized = normalizeMode(mode);
   const results: ClassifiedRecord<T>[] = [];
   for (const item of items) {
     const annotated = annotateRecord(item);
-    if (shouldInclude(classifyRecord(annotated), normalized)) {
+    if (matchesMode(annotated, normalized)) {
       results.push(annotated);
     }
   }
@@ -255,15 +277,18 @@ export function annotateScrapeItems(items: ScrapeItem[]): ScrapeItem[] {
 
 export function shouldIncludeDoc(doc: ArchiveSearchDoc, mode: NSFWFilterMode): boolean {
   const annotated = annotateRecord(doc);
-  return shouldInclude(classifyRecord(annotated), normalizeMode(mode));
+  return matchesMode(annotated, normalizeMode(mode));
 }
 
 export function countHiddenByMode(docs: ArchiveSearchDoc[], mode: NSFWFilterMode): number {
   const normalized = normalizeMode(mode);
+  if (normalized === "off" || normalized === "only") {
+    return 0;
+  }
   let hidden = 0;
   for (const doc of docs) {
     const annotated = annotateRecord(doc);
-    if (!shouldInclude(classifyRecord(annotated), normalized)) {
+    if (!matchesMode(annotated, normalized)) {
       hidden += 1;
     }
   }
