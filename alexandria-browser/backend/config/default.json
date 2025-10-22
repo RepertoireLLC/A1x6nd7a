@@ -1,9 +1,9 @@
 {
   "ai": {
-    "enabled": true,
+    "enabled": false,
     "autoInitialize": false,
     "modelDirectory": "./models",
-    "modelName": "",
-    "modelPath": ""
+    "modelName": "mistral-7b-instruct",
+    "modelPath": "./models/mistral-7b-instruct.gguf"
   }
 }

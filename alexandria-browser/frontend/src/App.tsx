@@ -27,7 +27,7 @@ import {
   getWaybackAvailability,
   submitReport
 } from "./api/archive";
-import { submitAIQuery, type AIQueryContext } from "./api/ai";
+import { fetchAIStatus, submitAIQuery, type AIQueryContext } from "./api/ai";
 import {
   loadBookmarks,
   loadHistory,
@@ -287,6 +287,65 @@ function App() {
   useEffect(() => {
     saveBookmarks(bookmarks);
   }, [bookmarks]);
+
+  useEffect(() => {
+    if (!aiAssistantEnabled) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const evaluateStatus = async () => {
+      const statusResult = await fetchAIStatus();
+      if (cancelled) {
+        return;
+      }
+
+      if (!statusResult.ok) {
+        setAiAvailability("error");
+        return;
+      }
+
+      const { enabled, outcome, models, directoryAccessible } = statusResult.data;
+
+      if (!enabled || outcome.status === "disabled") {
+        setAiAvailability("disabled");
+        return;
+      }
+
+      if (!directoryAccessible && models.length === 0) {
+        setAiAvailability("unavailable");
+        return;
+      }
+
+      switch (outcome.status) {
+        case "error":
+          setAiAvailability("error");
+          return;
+        case "missing-model":
+          setAiAvailability("unavailable");
+          return;
+        case "blocked":
+          setAiAvailability("unavailable");
+          return;
+        default:
+          break;
+      }
+
+      if (models.length === 0) {
+        setAiAvailability("unavailable");
+        return;
+      }
+
+      setAiAvailability("ready");
+    };
+
+    void evaluateStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [aiAssistantEnabled]);
 
   useEffect(() => {
     blacklistRef.current = blacklist;

@@ -38,11 +38,17 @@ test.describe("AI assistant heuristics", () => {
     await expect(summaryLocator).toContainText(/Alexandria heuristics reviewed|No archive items matched/i, {
       timeout: 45000,
     });
-    await expect(summaryLocator).toContainText(/Keyword suggestions/i);
-    await expect(summaryLocator).toContainText(/Apollo 11/i);
+
+    const summaryText = await summaryLocator.innerText();
+    expect(summaryText).toContain("Alexandria heuristics reviewed 1 result for \"Apollo 11 mission\"");
+    expect(summaryText).toContain("Apollo 11 Mission Reports (1969 · Texts · NASA)");
+    expect(summaryText).toMatch(/Keyword suggestions:\s*- apollo\s*- mission\s*- [\w-]+\s*- [\w-]+\s*- landing/i);
+    expect(summaryText).toContain("Notable media types: Texts (1).");
 
     const noticeLocator = page.locator(".ai-assistant-notice");
-    await expect(noticeLocator).toContainText(/current search results/i);
+    const noticeText = await noticeLocator.innerText();
+    expect(noticeText).toMatch(/No offline AI response was available|No compatible local AI model was found/i);
+    expect(noticeText).toContain("Suggestions are synthesized from the current search results.");
 
     const sourceBadge = page.locator(".ai-assistant-source");
     await expect(sourceBadge).toContainText(/heuristic/i);
