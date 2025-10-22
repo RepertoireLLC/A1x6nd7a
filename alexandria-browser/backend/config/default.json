@@ -1,0 +1,9 @@
+{
+  "ai": {
+    "enabled": true,
+    "autoInitialize": false,
+    "modelDirectory": "./models",
+    "modelName": "",
+    "modelPath": ""
+  }
+}

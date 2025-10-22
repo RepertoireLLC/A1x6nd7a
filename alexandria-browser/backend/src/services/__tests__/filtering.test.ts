@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   matchesAdvancedFilters,
   normalizeAvailability,
+  normalizeNsfwMode,
   normalizeSourceTrust,
   type ArchiveSearchFiltersInput
 } from "../filtering";
@@ -20,6 +21,8 @@ describe("filtering", () => {
     expect(normalizeAvailability("archive")).toBe("archived-only");
     expect(normalizeSourceTrust("Curated")).toBe("high");
     expect(normalizeSourceTrust("default")).toBe("medium");
+    expect(normalizeNsfwMode("only-nsfw")).toBe("only");
+    expect(normalizeNsfwMode("unrestricted")).toBe("off");
   });
 
   it("matches language, trust, availability, and nsfw filters", () => {

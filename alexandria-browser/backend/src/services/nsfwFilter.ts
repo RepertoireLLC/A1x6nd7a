@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { detectKeywordMatches } from "../utils/nsfwKeywordMatcher";
+
 export type NSFWSeverity = "mild" | "explicit";
 
 export interface NSFWClassification {
@@ -116,16 +118,14 @@ function classifyStrings(values: string[]): NSFWClassification {
   const mildMatches = new Set<string>();
 
   for (const value of values) {
-    const normalized = value.toLowerCase();
-    for (const keyword of KEYWORD_SETS.explicit) {
-      if (normalized.includes(keyword)) {
-        explicitMatches.add(keyword);
-      }
+    const explicit = detectKeywordMatches(value, KEYWORD_SETS.explicit);
+    for (const keyword of explicit) {
+      explicitMatches.add(keyword);
     }
-    for (const keyword of KEYWORD_SETS.mild) {
-      if (normalized.includes(keyword)) {
-        mildMatches.add(keyword);
-      }
+
+    const mild = detectKeywordMatches(value, KEYWORD_SETS.mild);
+    for (const keyword of mild) {
+      mildMatches.add(keyword);
     }
   }
 

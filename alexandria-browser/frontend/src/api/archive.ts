@@ -136,7 +136,7 @@ function resolveApiBaseUrl(): string {
   return "http://localhost:4000";
 }
 
-const API_BASE_URL = resolveApiBaseUrl();
+export const API_BASE_URL = resolveApiBaseUrl();
 
 export interface ApiErrorInfo {
   message: string;
@@ -609,7 +609,8 @@ export async function searchArchive(
   query: string,
   page: number,
   rows: number,
-  filters: SearchFilters
+  filters: SearchFilters,
+  options?: { aiMode?: boolean }
 ): Promise<ApiResult<ArchiveSearchResponse>> {
   const sanitizedQuery = query.trim();
   if (!sanitizedQuery) {
@@ -643,6 +644,9 @@ export async function searchArchive(
   }
   if (filters.nsfwMode) {
     url.searchParams.set("nsfwMode", filters.nsfwMode);
+  }
+  if (options?.aiMode) {
+    url.searchParams.set("ai", "1");
   }
 
   let lastError: unknown = null;
