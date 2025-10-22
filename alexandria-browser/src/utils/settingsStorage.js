@@ -1,9 +1,26 @@
 const STORAGE_KEY = 'alexandria_browser_settings';
 
+const NSFW_MODE_VALUES = ['safe', 'moderate', 'off', 'only'];
+
 const DEFAULT_SETTINGS = Object.freeze({
+  nsfwMode: 'safe',
   nsfwFiltering: true,
   pageSize: 10
 });
+
+function isValidMode(mode) {
+  return typeof mode === 'string' && NSFW_MODE_VALUES.includes(mode.toLowerCase());
+}
+
+function resolveMode(preferred, fallbackBoolean) {
+  if (isValidMode(preferred)) {
+    return preferred.toLowerCase();
+  }
+  if (typeof fallbackBoolean === 'boolean') {
+    return fallbackBoolean ? 'safe' : 'off';
+  }
+  return DEFAULT_SETTINGS.nsfwMode;
+}
 
 function readSettings() {
   try {
@@ -13,9 +30,11 @@ function readSettings() {
     }
     const parsed = JSON.parse(raw);
     const pageSizeValue = Number(parsed?.pageSize);
+    const nsfwMode = resolveMode(parsed?.nsfwMode, parsed?.nsfwFiltering);
+    const nsfwFiltering = nsfwMode !== 'off';
     return {
-      nsfwFiltering:
-        typeof parsed?.nsfwFiltering === 'boolean' ? parsed.nsfwFiltering : DEFAULT_SETTINGS.nsfwFiltering,
+      nsfwMode,
+      nsfwFiltering,
       pageSize: Number.isFinite(pageSizeValue) && pageSizeValue > 0 ? pageSizeValue : DEFAULT_SETTINGS.pageSize
     };
   } catch (error) {
@@ -38,9 +57,10 @@ export function loadSettings() {
 
 export function saveSettings(next) {
   const pageSizeValue = Number(next?.pageSize);
+  const nsfwMode = resolveMode(next?.nsfwMode, next?.nsfwFiltering);
   const settings = {
-    nsfwFiltering:
-      typeof next?.nsfwFiltering === 'boolean' ? next.nsfwFiltering : DEFAULT_SETTINGS.nsfwFiltering,
+    nsfwMode,
+    nsfwFiltering: nsfwMode !== 'off',
     pageSize: Number.isFinite(pageSizeValue) && pageSizeValue > 0 ? pageSizeValue : DEFAULT_SETTINGS.pageSize
   };
   writeSettings(settings);

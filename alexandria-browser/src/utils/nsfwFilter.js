@@ -1,10 +1,23 @@
 const STORAGE_KEY = 'alexandria_nsfw_keywords';
-let cachedKeywords = null;
+
+export const NSFW_MODES = Object.freeze({
+  SAFE: 'safe',
+  MODERATE: 'moderate',
+  OFF: 'off',
+  ONLY: 'only'
+});
+
+const DEFAULT_KEYWORD_SETS = Object.freeze({
+  explicit: [],
+  mild: []
+});
+
+let cachedKeywordData = null;
 let cachedOverrides = null;
 let baseKeywordsCache = null;
 
 function normalizeList(list = []) {
-  return Array.from(new Set(list.map((item) => item.toLowerCase()).filter(Boolean)));
+  return Array.from(new Set(list.map((item) => (typeof item === 'string' ? item.toLowerCase() : '')).filter(Boolean)));
 }
 
 function readFromStorage() {
@@ -34,65 +47,214 @@ function saveToStorage(overrides) {
   }
 }
 
+function normalizeKeywordPayload(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return { ...DEFAULT_KEYWORD_SETS };
+  }
+
+  if (Array.isArray(payload.keywords)) {
+    const keywords = normalizeList(payload.keywords);
+    return { explicit: keywords, mild: [] };
+  }
+
+  if (payload.categories && typeof payload.categories === 'object') {
+    const categories = payload.categories;
+    const explicit = normalizeList(categories.explicit || categories.hard || categories.high || []);
+    const mildSource = categories.mild || categories.soft || categories.moderate || [];
+    const mild = normalizeList(mildSource);
+    return { explicit, mild };
+  }
+
+  return { ...DEFAULT_KEYWORD_SETS };
+}
+
 async function loadBaseKeywords() {
   if (baseKeywordsCache) return baseKeywordsCache;
   try {
     const response = await fetch('./src/config/nsfwKeywords.json');
     if (!response.ok) throw new Error('Failed to load NSFW keywords');
     const data = await response.json();
-    baseKeywordsCache = normalizeList(data.keywords || []);
+    baseKeywordsCache = normalizeKeywordPayload(data);
   } catch (error) {
     console.error('Unable to load NSFW keyword list:', error);
-    baseKeywordsCache = [];
+    baseKeywordsCache = { ...DEFAULT_KEYWORD_SETS };
   }
   return baseKeywordsCache;
 }
 
-async function loadKeywords() {
-  if (cachedKeywords) return cachedKeywords;
+async function loadKeywordData() {
+  if (cachedKeywordData) return cachedKeywordData;
+
   if (!cachedOverrides) {
     cachedOverrides = readFromStorage();
   }
-  const baseKeywords = await loadBaseKeywords();
-  const filteredBase = baseKeywords.filter((keyword) => !cachedOverrides.removed.includes(keyword));
-  cachedKeywords = normalizeList([...filteredBase, ...cachedOverrides.custom]);
-  return cachedKeywords;
+
+  const base = await loadBaseKeywords();
+  const removed = cachedOverrides.removed ?? [];
+  const custom = cachedOverrides.custom ?? [];
+
+  const filteredExplicit = base.explicit.filter((keyword) => !removed.includes(keyword));
+  const filteredMild = base.mild.filter((keyword) => !removed.includes(keyword));
+
+  const explicit = normalizeList([...filteredExplicit, ...custom]);
+  const explicitSet = new Set(explicit);
+  const mild = normalizeList(filteredMild.filter((keyword) => !explicitSet.has(keyword)));
+  const combined = normalizeList([...explicit, ...mild]);
+
+  cachedKeywordData = { explicit, mild, all: combined };
+  return cachedKeywordData;
 }
 
-function containsKeyword(text, keywords) {
-  if (!text) return false;
-  const normalized = text.toLowerCase();
-  return keywords.some((keyword) => normalized.includes(keyword));
+function normalizeMode(mode) {
+  if (typeof mode !== 'string') {
+    return NSFW_MODES.SAFE;
+  }
+  const normalized = mode.toLowerCase();
+  if (normalized === NSFW_MODES.MODERATE) return NSFW_MODES.MODERATE;
+  if (normalized === NSFW_MODES.OFF || normalized === 'none' || normalized === 'no_filter') {
+    return NSFW_MODES.OFF;
+  }
+  if (normalized === NSFW_MODES.ONLY || normalized === 'only_nsfw') {
+    return NSFW_MODES.ONLY;
+  }
+  return NSFW_MODES.SAFE;
+}
+
+function collectCandidateStrings(entry) {
+  if (!entry || typeof entry !== 'object') {
+    return [];
+  }
+
+  const values = [];
+  const append = (value) => {
+    if (!value) return;
+    if (typeof value === 'string') {
+      values.push(value);
+    } else if (Array.isArray(value)) {
+      for (const item of value) {
+        append(item);
+      }
+    }
+  };
+
+  append(entry.title);
+  append(entry.description);
+  append(entry.identifier);
+  append(entry.mediatype);
+  append(entry.originalUrl || entry.original_url || entry.original);
+  append(entry.archiveUrl || entry.archive_url || entry.archive);
+  append(entry.creator);
+  append(entry.collection);
+  append(entry.subject);
+  append(entry.tags);
+  append(entry.keywords);
+
+  if (entry.metadata && typeof entry.metadata === 'object') {
+    const metadata = entry.metadata;
+    append(metadata.tags);
+    append(metadata.subject);
+    append(metadata.keywords);
+    append(metadata.topic);
+    append(metadata.topics);
+  }
+
+  if (entry.links && typeof entry.links === 'object') {
+    append(entry.links.archive);
+    append(entry.links.original);
+    append(entry.links.wayback);
+  }
+
+  return values;
+}
+
+function classifyEntry(entry, keywordData) {
+  const explicitMatches = new Set();
+  const mildMatches = new Set();
+
+  for (const value of collectCandidateStrings(entry)) {
+    const normalized = value.toLowerCase();
+    for (const keyword of keywordData.explicit) {
+      if (normalized.includes(keyword)) {
+        explicitMatches.add(keyword);
+      }
+    }
+    for (const keyword of keywordData.mild) {
+      if (normalized.includes(keyword)) {
+        mildMatches.add(keyword);
+      }
+    }
+  }
+
+  if (explicitMatches.size > 0) {
+    return {
+      flagged: true,
+      severity: 'explicit',
+      matches: Array.from(new Set([...explicitMatches, ...mildMatches]))
+    };
+  }
+
+  if (mildMatches.size > 0) {
+    return {
+      flagged: true,
+      severity: 'mild',
+      matches: Array.from(mildMatches)
+    };
+  }
+
+  return { flagged: false, severity: null, matches: [] };
+}
+
+function shouldIncludeEntry(classification, mode) {
+  if (mode === NSFW_MODES.ONLY) {
+    return classification.flagged;
+  }
+  if (mode === NSFW_MODES.SAFE) {
+    return !classification.flagged;
+  }
+  if (mode === NSFW_MODES.MODERATE) {
+    return classification.severity !== 'explicit';
+  }
+  return true;
 }
 
 /**
- * Marks results that should be blocked based on the NSFW keyword list.
+ * Marks and filters results based on the configured NSFW mode.
  * @param {Array} results
- * @param {boolean} enabled
+ * @param {string} mode
  * @returns {Promise<Array>}
  */
-export async function applyNSFWFilter(results, enabled) {
+export async function applyNSFWFilter(results, mode) {
   const safeResults = Array.isArray(results) ? results : [];
+  const keywordData = await loadKeywordData();
+  const normalizedMode = normalizeMode(mode);
 
-  if (!enabled) {
-    return safeResults.map((result) => ({ ...result, nsfw: false }));
-  }
+  return safeResults.reduce((accumulator, entry) => {
+    const classification = classifyEntry(entry, keywordData);
+    const enriched = { ...entry, nsfw: classification.flagged };
+    if (classification.severity) {
+      enriched.nsfwLevel = classification.severity;
+    } else if ('nsfwLevel' in enriched) {
+      delete enriched.nsfwLevel;
+    }
+    if (classification.matches.length > 0) {
+      enriched.nsfwMatches = classification.matches;
+    } else if ('nsfwMatches' in enriched) {
+      delete enriched.nsfwMatches;
+    }
 
-  const keywords = await loadKeywords();
-  return safeResults.map((result) => {
-    const isBlocked = containsKeyword(result.title, keywords) ||
-      containsKeyword(result.description, keywords) ||
-      containsKeyword(result.identifier, keywords) ||
-      containsKeyword(result.originalUrl, keywords);
+    if (shouldIncludeEntry(classification, normalizedMode)) {
+      accumulator.push(enriched);
+    }
 
-    return { ...result, nsfw: isBlocked };
-  });
+    return accumulator;
+  }, []);
 }
 
 export async function toggleKeyword(word, action = 'add') {
   const normalized = word.trim().toLowerCase();
   if (!normalized) {
-    return loadKeywords();
+    const data = await loadKeywordData();
+    return data.all;
   }
 
   if (!cachedOverrides) {
@@ -113,10 +275,12 @@ export async function toggleKeyword(word, action = 'add') {
   }
 
   saveToStorage(cachedOverrides);
-  cachedKeywords = null;
-  return loadKeywords();
+  cachedKeywordData = null;
+  const data = await loadKeywordData();
+  return data.all;
 }
 
 export async function getKeywords() {
-  return loadKeywords();
+  const data = await loadKeywordData();
+  return data.all;
 }

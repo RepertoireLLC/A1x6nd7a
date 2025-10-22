@@ -1,7 +1,8 @@
 import type {
   BookmarkEntry,
   SearchHistoryEntry,
-  StoredSettings
+  StoredSettings,
+  NSFWFilterMode
 } from "../types";
 
 const SETTINGS_KEY = "alexandria-browser-settings";
@@ -11,9 +12,25 @@ const BOOKMARKS_KEY = "alexandria-browser-bookmarks";
 const REPORT_BLACKLIST_KEY = "alexandria-browser-report-blacklist";
 
 // ADD: Default preference snapshot used when initializing or resetting stored settings.
+const NSFW_MODE_VALUES: readonly NSFWFilterMode[] = ["safe", "moderate", "off", "only"];
+
+function normalizeMode(value: unknown, fallback: unknown): NSFWFilterMode {
+  if (typeof value === "string") {
+    const lowered = value.toLowerCase();
+    if (NSFW_MODE_VALUES.includes(lowered as NSFWFilterMode)) {
+      return lowered as NSFWFilterMode;
+    }
+  }
+  if (typeof fallback === "boolean") {
+    return fallback ? "safe" : "off";
+  }
+  return "safe";
+}
+
 export const DEFAULT_SETTINGS: StoredSettings = {
   theme: "light",
   filterNSFW: true,
+  nsfwMode: "safe",
   lastQuery: "",
   resultsPerPage: 20,
   mediaType: "all",
@@ -60,14 +77,25 @@ function writeJSON<T>(key: string, value: T) {
  * Retrieve stored application settings or default values.
  */
 export function loadSettings(): StoredSettings {
-  return readJSON(SETTINGS_KEY, DEFAULT_SETTINGS);
+  const stored = readJSON(SETTINGS_KEY, DEFAULT_SETTINGS as StoredSettings);
+  const nsfwMode = normalizeMode((stored as Partial<StoredSettings>).nsfwMode, stored.filterNSFW);
+  return {
+    ...stored,
+    nsfwMode,
+    filterNSFW: nsfwMode !== "off"
+  };
 }
 
 /**
  * Persist the provided application settings snapshot.
  */
 export function saveSettings(settings: StoredSettings) {
-  writeJSON(SETTINGS_KEY, settings);
+  const nsfwMode = normalizeMode(settings.nsfwMode, settings.filterNSFW);
+  writeJSON(SETTINGS_KEY, {
+    ...settings,
+    nsfwMode,
+    filterNSFW: nsfwMode !== "off"
+  });
 }
 
 /**

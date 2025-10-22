@@ -1,8 +1,12 @@
+import type { ChangeEvent } from "react";
+
+import type { NSFWFilterMode } from "../types";
+
 interface SettingsPanelProps {
   theme: "light" | "dark";
-  filterNSFW: boolean;
+  nsfwMode: NSFWFilterMode;
   onToggleTheme: () => void;
-  onToggleNSFW: (next: boolean) => void;
+  onChangeNSFWMode: (mode: NSFWFilterMode) => void;
   onClearHistory: () => void;
   onClearBookmarks: () => void;
   onResetPreferences: () => void; // ADD: Handler to restore default preference values.
@@ -13,13 +17,18 @@ interface SettingsPanelProps {
  */
 export function SettingsPanel({
   theme,
-  filterNSFW,
+  nsfwMode,
   onToggleTheme,
-  onToggleNSFW,
+  onChangeNSFWMode,
   onClearHistory,
   onClearBookmarks,
   onResetPreferences
 }: SettingsPanelProps) {
+  const handleModeChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    const value = event.target.value as NSFWFilterMode;
+    onChangeNSFWMode(value);
+  };
+
   return (
     <div className="settings-panel">
       <div className="setting-row">
@@ -29,12 +38,13 @@ export function SettingsPanel({
         </button>
       </div>
       <label className="setting-row">
-        <span>Filter NSFW content</span>
-        <input
-          type="checkbox"
-          checked={filterNSFW}
-          onChange={(event) => onToggleNSFW(event.target.checked)}
-        />
+        <span>NSFW filtering</span>
+        <select className="settings-select" value={nsfwMode} onChange={handleModeChange}>
+          <option value="safe">Safe — hide all NSFW</option>
+          <option value="moderate">Moderate — allow mild</option>
+          <option value="off">No filter</option>
+          <option value="only">Only NSFW content</option>
+        </select>
       </label>
       <button type="button" className="danger" onClick={onClearHistory}>
         Clear history

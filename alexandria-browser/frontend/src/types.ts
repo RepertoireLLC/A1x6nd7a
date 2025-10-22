@@ -3,6 +3,10 @@
  * These interfaces mirror the payloads returned by the backend API
  * so components can rely on a consistent shape when exchanging data.
  */
+export type NSFWSeverity = "mild" | "explicit";
+
+export type NSFWFilterMode = "safe" | "moderate" | "off" | "only";
+
 export interface ArchiveSearchDoc {
   identifier: string;
   title?: string;
@@ -14,6 +18,10 @@ export interface ArchiveSearchDoc {
   creator?: string | string[];
   collection?: string | string[];
   nsfw?: boolean;
+  nsfwLevel?: NSFWSeverity;
+  nsfw_level?: NSFWSeverity;
+  nsfwMatches?: string[];
+  nsfw_matches?: string[];
   links?: ArchiveDocLinks;
   thumbnail?: string;
   archive_url?: string;
@@ -121,6 +129,9 @@ export interface ScrapeItem {
   archive_url?: string;
   original_url?: string;
   wayback_url?: string;
+  nsfw?: boolean;
+  nsfwLevel?: NSFWSeverity;
+  nsfwMatches?: string[];
 }
 
 export interface ScrapeResponse {
@@ -149,6 +160,7 @@ export interface WaybackAvailabilityResponse {
 export interface StoredSettings {
   theme: "light" | "dark";
   filterNSFW: boolean;
+  nsfwMode: NSFWFilterMode;
   lastQuery: string;
   resultsPerPage: number;
   mediaType: string;

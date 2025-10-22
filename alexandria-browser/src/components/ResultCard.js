@@ -1,4 +1,5 @@
 import { checkUrlStatus } from '../utils/fetchStatus.js';
+import { NSFW_MODES } from '../utils/nsfwFilter.js';
 
 function formatMediaType(type) {
   if (!type) {
@@ -11,7 +12,7 @@ function formatMediaType(type) {
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
-export function createResultCard(result, { nsfwFiltering }) {
+export function createResultCard(result, { nsfwMode }) {
   const card = document.createElement('article');
   card.className = 'result-card';
 
@@ -64,17 +65,40 @@ export function createResultCard(result, { nsfwFiltering }) {
     typeof result.downloads === 'number' && Number.isFinite(result.downloads) ? result.downloads : 0;
   meta.textContent = `Type: ${mediaLabel} · Downloads: ${downloadCount}`;
 
+  const severity = typeof result.nsfwLevel === 'string'
+    ? result.nsfwLevel
+    : typeof result.nsfw_level === 'string'
+    ? result.nsfw_level
+    : null;
+  const isNSFW = result.nsfw === true || severity === 'explicit' || severity === 'mild';
+  const mode = typeof nsfwMode === 'string' ? nsfwMode : NSFW_MODES.SAFE;
+
+  if (isNSFW) {
+    card.classList.add('result-card-nsfw');
+    const labelSpan = document.createElement('span');
+    labelSpan.className = 'nsfw-label';
+    labelSpan.textContent = severity === 'explicit' ? '(Explicit NSFW)' : '(Sensitive content)';
+    meta.appendChild(document.createTextNode(' · '));
+    meta.appendChild(labelSpan);
+    card.dataset.nsfwLabel = severity === 'explicit' ? 'EXPLICIT' : 'SENSITIVE';
+    card.dataset.nsfwSeverity = severity || 'mild';
+  } else {
+    delete card.dataset.nsfwLabel;
+    delete card.dataset.nsfwSeverity;
+  }
+
   content.appendChild(title);
   content.appendChild(description);
   content.appendChild(linksWrapper);
   content.appendChild(meta);
   card.appendChild(content);
 
-  if (nsfwFiltering && result.nsfw) {
+  const shouldBlur = mode === NSFW_MODES.SAFE && isNSFW;
+  if (shouldBlur) {
     card.classList.add('nsfw-hidden');
     const overlay = document.createElement('div');
     overlay.className = 'nsfw-overlay';
-    overlay.textContent = 'NSFW content hidden';
+    overlay.textContent = 'NSFW content hidden in safe mode';
     card.appendChild(overlay);
   }
 
