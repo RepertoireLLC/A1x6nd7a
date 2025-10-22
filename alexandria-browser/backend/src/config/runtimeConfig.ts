@@ -15,9 +15,11 @@ export interface RuntimeConfig {
 
 const DEFAULT_CONFIG: RuntimeConfig = {
   ai: {
-    enabled: true,
+    enabled: false,
     autoInitialize: false,
     modelDirectory: path.resolve(process.cwd(), "models"),
+    modelName: "mistral-7b-instruct",
+    modelPath: path.resolve(process.cwd(), "models/mistral-7b-instruct.gguf"),
   },
 };
 

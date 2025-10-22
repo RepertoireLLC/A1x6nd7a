@@ -39,8 +39,23 @@ export interface AIQueryResponse {
   outcome?: AIQueryOutcome;
 }
 
-function buildApiUrl(): string {
+export interface AIStatusResponse {
+  enabled: boolean;
+  outcome: AIQueryOutcome;
+  models: string[];
+  modelPaths: string[];
+  modelDirectory: string;
+  directoryAccessible: boolean;
+  directoryError?: string;
+}
+
+function buildQueryUrl(): string {
   const url = new URL("/api/ai/query", `${API_BASE_URL}/`);
+  return url.toString();
+}
+
+function buildStatusUrl(): string {
+  const url = new URL("/api/ai/status", `${API_BASE_URL}/`);
   return url.toString();
 }
 
@@ -128,7 +143,7 @@ export async function submitAIQuery(request: AIQueryRequest): Promise<ApiResult<
   }
 
   try {
-    const response = await fetch(buildApiUrl(), {
+    const response = await fetch(buildQueryUrl(), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -169,6 +184,65 @@ export async function submitAIQuery(request: AIQueryRequest): Promise<ApiResult<
     const info: ApiErrorInfo = {
       message: "Unable to reach the Alexandria AI service.",
       details: error instanceof Error ? error.message : String(error),
+      type: "network",
+    };
+    return { ok: false, error: info };
+  }
+}
+
+export async function fetchAIStatus(): Promise<ApiResult<AIStatusResponse>> {
+  try {
+    const response = await fetch(buildStatusUrl(), {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    });
+
+    const status = response.status;
+    const contentType = response.headers.get("content-type") ?? "";
+
+    if (!response.ok) {
+      if (contentType.includes("application/json")) {
+        try {
+          const errorBody = (await response.json()) as { error?: unknown; details?: unknown };
+          const message = typeof errorBody.error === "string" ? errorBody.error : "AI status request failed.";
+          const details = typeof errorBody.details === "string" ? errorBody.details : undefined;
+          return {
+            ok: false,
+            error: { message, details, status },
+            status,
+          };
+        } catch (error) {
+          console.warn("Failed to parse AI status error response", error);
+        }
+      }
+
+      return {
+        ok: false,
+        error: { message: `AI status request failed with status ${status}.`, status },
+        status,
+      };
+    }
+
+    if (!contentType.includes("application/json")) {
+      const preview = (await response.text()).slice(0, 200).trim();
+      return {
+        ok: false,
+        error: {
+          message: "AI status response was not JSON.",
+          status,
+          details: preview,
+        },
+        status,
+      };
+    }
+
+    const data = (await response.json()) as AIStatusResponse;
+    return { ok: true, data, status };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const info: ApiErrorInfo = {
+      message: "Unable to reach the Alexandria AI status endpoint.",
+      details: message,
       type: "network",
     };
     return { ok: false, error: info };

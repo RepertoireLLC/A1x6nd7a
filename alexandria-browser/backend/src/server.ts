@@ -14,6 +14,8 @@
  * - Build Open and Forkable
  */
 
+import path from "node:path";
+
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
 import { ProxyAgent, setGlobalDispatcher } from "undici";
 
@@ -40,9 +42,12 @@ import {
   generateAIResponse,
   generateContextualResponse,
   getLastAIOutcome,
+  isLocalAIEnabled,
   initializeLocalAI,
+  listAvailableLocalAIModels,
   type LocalAIContextRequest,
   type LocalAIConversationTurn,
+  type LocalAIModelInventory,
   type LocalAIOutcome,
 } from "./ai/LocalAI";
 import { buildHeuristicAISummary, type HeuristicDocSummary } from "./ai/heuristicSummaries";
@@ -135,6 +140,16 @@ type AIQueryResponsePayload = {
   error?: string | null;
   mode: LocalAIContextRequest["mode"];
   outcome?: LocalAIOutcome;
+};
+
+type AIStatusResponsePayload = {
+  enabled: boolean;
+  outcome: LocalAIOutcome;
+  models: string[];
+  modelPaths: string[];
+  modelDirectory: string;
+  directoryAccessible: boolean;
+  directoryError?: string;
 };
 
 type LocalAIContextShape = NonNullable<LocalAIContextRequest["context"]>;
@@ -1339,6 +1354,7 @@ const routes: Record<string, Record<string, RouteHandler>> = {
     "/api/searchArchive": handleSearch,
     "/api/wayback": handleWayback,
     "/api/status": handleStatus,
+    "/api/ai/status": handleAIStatus,
     "/api/metadata": handleMetadata,
     "/api/cdx": handleCdx,
     "/api/scrape": handleScrape
@@ -1846,6 +1862,29 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     if ("ai_summary_source" in payload) {
       delete payload.ai_summary_source;
     }
+  }
+
+  sendJson(res, 200, payload);
+}
+
+async function handleAIStatus({ res }: HandlerContext): Promise<void> {
+  const enabled = isLocalAIEnabled();
+  const inventory: LocalAIModelInventory = await listAvailableLocalAIModels();
+  const outcome = getLastAIOutcome();
+  const modelPaths = inventory.modelPaths;
+  const models = modelPaths.map((modelPath) => path.basename(modelPath));
+
+  const payload: AIStatusResponsePayload = {
+    enabled,
+    outcome,
+    models,
+    modelPaths,
+    modelDirectory: inventory.modelDirectory,
+    directoryAccessible: inventory.directoryAccessible,
+  };
+
+  if (inventory.directoryError) {
+    payload.directoryError = inventory.directoryError;
   }
 
   sendJson(res, 200, payload);
