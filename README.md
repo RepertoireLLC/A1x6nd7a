@@ -87,6 +87,103 @@ The frontend expects the backend at `http://localhost:4000` by default. Override
 
 > **Tip:** The demo previously bundled mock datasets for offline browsing. Production builds now require the live API. Opt-in to the legacy behaviour locally by setting `VITE_ENABLE_OFFLINE_FALLBACK=true` for the frontend and `ENABLE_OFFLINE_FALLBACK=true` for the backend before starting the dev servers.
 
+### Configure the offline Mistral AI assistant
+
+Alexandria bundles optional support for the [Mistral 7B Instruct](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2) `gguf` model through the `node-llama-cpp` runtime. Follow the steps below to bring the assistant online without affecting the rest of the experience.
+
+#### Step-by-step (local llama.cpp runtime)
+
+1. **Install workspace dependencies** – run `npm install --workspaces`. The root post-install script detects whether `alexandria-browser/backend/models/mistral-7b-instruct.gguf` exists and automatically downloads `Mistral-7B-Instruct-v0.2.Q4_K_M.gguf` from Hugging Face when it is missing. Subsequent installs skip the transfer so you do not download the model twice. Set `ALEXANDRIA_SKIP_MODEL_DOWNLOAD=true` if you prefer to skip this automation (for example in CI or when you want to supply the file manually).
+2. **Manual download (optional)** – if you opted out of the automated download, grab the model directly from the [official Hugging Face release](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2) or with the CLI:
+   ```bash
+   huggingface-cli download mistralai/Mistral-7B-Instruct-v0.2 Mistral-7B-Instruct-v0.2.Q4_K_M.gguf \
+     --local-dir alexandria-browser/backend/models \
+     --local-dir-use-symlinks False
+   ```
+   Ensure the file name matches the `modelPath` value found in `alexandria-browser/backend/config/ai.json` (default: `models/mistral-7b-instruct.gguf`).
+3. **Review configuration** – open `alexandria-browser/backend/config/ai.json` and confirm the settings align with your environment:
+   ```json
+   {
+     "aiEnabled": false,
+     "defaultModel": "mistral-7b-instruct",
+     "modelPath": "./models/mistral-7b-instruct.gguf"
+   }
+   ```
+   Set `"aiEnabled"` to `true` once the file is present to allow Alexandria to load the local runtime. You can point `modelPath` at a different filename if you store multiple variants.
+4. **Override via environment (optional)** – instead of editing JSON, set `ALEXANDRIA_AI_MODEL_PATH`, `ALEXANDRIA_AI_MODEL_DIR`, `ALEXANDRIA_AI_MODEL`, or `ALEXANDRIA_DISABLE_LOCAL_AI` before launching the backend. These overrides are resolved during startup so deployments can toggle AI dynamically.
+5. **Launch and verify** – start the backend and frontend (`npm run dev --workspace alexandria-browser/backend` and `npm run dev --workspace alexandria-browser/frontend` or `npm run dev:alexandria`). In the browser, open **Settings → AI Mode** and flip the toggle on. Run a search (for example, “Apollo 11 mission”) and the AI panel should display a generated summary from Mistral. When the toggle is off—or when the model file is missing—the search flow behaves exactly as before, and the backend logs a warning instead of crashing.
+
+#### Run the Mistral assistant with vLLM (optional)
+
+Alexandria can also talk to a [vLLM](https://github.com/vllm-project/vllm) server that exposes the Mistral 7B Instruct model over an OpenAI-compatible API. This keeps the existing offline llama-cpp flow intact while enabling GPU-backed inference when available.
+
+1. **Install the Python tooling** (if you prefer a virtual environment, activate it first):
+
+   ```bash
+   pip install vllm
+   pip install --upgrade mistral-common
+   vllm serve "mistralai/Mistral-7B-Instruct-v0.2"
+   ```
+
+   The last command launches the server on port `8000`. Test it with:
+
+   ```bash
+   curl -X POST "http://localhost:8000/v1/chat/completions" \
+     -H "Content-Type: application/json" \
+     --data '{
+       "model": "mistralai/Mistral-7B-Instruct-v0.2",
+       "messages": [
+         { "role": "user", "content": "What is the capital of France?" }
+       ]
+     }'
+   ```
+
+2. **Or run the official Docker image** (handy on Linux with an NVIDIA GPU):
+
+   ```bash
+   docker run --runtime nvidia --gpus all \
+     --name my_vllm_container \
+     -v ~/.cache/huggingface:/root/.cache/huggingface \
+     --env "HUGGING_FACE_HUB_TOKEN=<secret>" \
+     -p 8000:8000 \
+     --ipc=host \
+     vllm/vllm-openai:latest \
+     --model mistralai/Mistral-7B-Instruct-v0.2
+
+   docker exec -it my_vllm_container bash -c "vllm serve mistralai/Mistral-7B-Instruct-v0.2 --tokenizer_mode mistral --config_format mistral --load_format mistral --tool-call-parser mistral --enable-auto-tool-choice"
+   ```
+
+   Re-run the `curl` probe above to confirm the container is serving requests.
+
+3. **Point Alexandria at the server** – set `remote.enabled` to `true` in `alexandria-browser/backend/config/ai.json` (or `config/default.json` if you prefer centralised config) and adjust the remote fields as needed:
+
+   ```json
+   {
+     "remote": {
+       "enabled": true,
+       "baseUrl": "http://127.0.0.1:8000/v1/chat/completions",
+       "model": "mistralai/Mistral-7B-Instruct-v0.2",
+       "timeoutMs": 20000,
+       "remoteOnly": false
+     }
+   }
+   ```
+
+   Alternatively, export environment variables before starting the backend to avoid editing JSON:
+
+   ```bash
+   export ALEXANDRIA_AI_ENABLED=true
+   export ALEXANDRIA_VLLM_ENABLED=true
+   export ALEXANDRIA_VLLM_BASE_URL="http://127.0.0.1:8000/v1/chat/completions"
+   export ALEXANDRIA_VLLM_MODEL="mistralai/Mistral-7B-Instruct-v0.2"
+   export ALEXANDRIA_VLLM_API_KEY="" # optional if your server enforces auth
+   # Optional tweaks
+   export ALEXANDRIA_VLLM_TIMEOUT_MS=30000
+   export ALEXANDRIA_VLLM_REMOTE_ONLY=false
+   ```
+
+   With **AI Mode** toggled on in the UI, Alexandria will contact vLLM first and fall back to the local llama-cpp runtime when `remoteOnly` is `false`.
+
 #### Production build
 
 ```bash

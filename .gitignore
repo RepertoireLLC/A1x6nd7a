@@ -3,6 +3,8 @@ dist/
 build/
 .env
 .DS_Store
+playwright-report/
+test-results/
 
 # Vite and frontend artifacts
 alexandria-browser/frontend/node_modules/
@@ -11,3 +13,4 @@ alexandria-browser/frontend/dist/
 # Backend artifacts
 alexandria-browser/backend/node_modules/
 alexandria-browser/backend/dist/
+alexandria-browser/backend/models/

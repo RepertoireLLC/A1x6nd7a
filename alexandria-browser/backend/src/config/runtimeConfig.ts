@@ -1,12 +1,22 @@
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 
+export interface RuntimeRemoteAIConfig {
+  enabled: boolean;
+  baseUrl?: string;
+  model?: string;
+  apiKey?: string;
+  timeoutMs?: number;
+  remoteOnly?: boolean;
+}
+
 export interface RuntimeAIConfig {
   enabled: boolean;
   autoInitialize: boolean;
   modelDirectory?: string;
   modelName?: string;
   modelPath?: string;
+  remote: RuntimeRemoteAIConfig;
 }
 
 export interface RuntimeConfig {
@@ -15,9 +25,19 @@ export interface RuntimeConfig {
 
 const DEFAULT_CONFIG: RuntimeConfig = {
   ai: {
-    enabled: true,
+    enabled: false,
     autoInitialize: false,
     modelDirectory: path.resolve(process.cwd(), "models"),
+    modelName: "mistral-7b-instruct",
+    modelPath: path.resolve(process.cwd(), "models/mistral-7b-instruct.gguf"),
+    remote: {
+      enabled: false,
+      baseUrl: "http://127.0.0.1:8000/v1/chat/completions",
+      model: "mistralai/Mistral-7B-Instruct-v0.2",
+      apiKey: "",
+      timeoutMs: 20_000,
+      remoteOnly: false,
+    },
   },
 };
 
@@ -58,6 +78,10 @@ export function loadRuntimeConfig(): RuntimeConfig {
     ai: {
       ...DEFAULT_CONFIG.ai,
       ...fileConfig.ai,
+      remote: {
+        ...DEFAULT_CONFIG.ai.remote,
+        ...(fileConfig.ai?.remote ?? {}),
+      } as RuntimeRemoteAIConfig,
     },
   };
 
@@ -66,6 +90,13 @@ export function loadRuntimeConfig(): RuntimeConfig {
   const envModelDir = process.env.ALEXANDRIA_AI_MODEL_DIR;
   const envModelName = process.env.ALEXANDRIA_AI_MODEL_NAME;
   const envModelPath = process.env.ALEXANDRIA_AI_MODEL_PATH;
+  const envRemoteEnabled = process.env.ALEXANDRIA_VLLM_ENABLED;
+  const envRemoteBaseUrl = process.env.ALEXANDRIA_VLLM_BASE_URL;
+  const envRemoteModel =
+    process.env.ALEXANDRIA_VLLM_MODEL ?? process.env.ALEXANDRIA_VLLM_MODEL_NAME;
+  const envRemoteApiKey = process.env.ALEXANDRIA_VLLM_API_KEY;
+  const envRemoteTimeout = process.env.ALEXANDRIA_VLLM_TIMEOUT_MS;
+  const envRemoteOnly = process.env.ALEXANDRIA_VLLM_REMOTE_ONLY;
 
   merged.ai.enabled = parseBoolean(envEnabled, merged.ai.enabled);
   merged.ai.autoInitialize = parseBoolean(envAutoInit, merged.ai.autoInitialize);
@@ -78,6 +109,26 @@ export function loadRuntimeConfig(): RuntimeConfig {
   }
   if (envModelPath && envModelPath.trim()) {
     merged.ai.modelPath = envModelPath.trim();
+  }
+
+  const remoteConfig = merged.ai.remote;
+  remoteConfig.enabled = parseBoolean(envRemoteEnabled, remoteConfig.enabled);
+  remoteConfig.remoteOnly = parseBoolean(envRemoteOnly, remoteConfig.remoteOnly ?? false);
+
+  if (envRemoteBaseUrl && envRemoteBaseUrl.trim()) {
+    remoteConfig.baseUrl = envRemoteBaseUrl.trim();
+  }
+  if (envRemoteModel && envRemoteModel.trim()) {
+    remoteConfig.model = envRemoteModel.trim();
+  }
+  if (typeof envRemoteApiKey === "string") {
+    remoteConfig.apiKey = envRemoteApiKey.trim();
+  }
+  if (envRemoteTimeout && envRemoteTimeout.trim()) {
+    const parsedTimeout = Number.parseInt(envRemoteTimeout.trim(), 10);
+    if (Number.isFinite(parsedTimeout) && parsedTimeout > 0) {
+      remoteConfig.timeoutMs = parsedTimeout;
+    }
   }
 
   return merged;

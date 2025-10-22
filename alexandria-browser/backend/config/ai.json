@@ -1,0 +1,13 @@
+{
+  "aiEnabled": false,
+  "defaultModel": "mistral-7b-instruct",
+  "modelPath": "./models/mistral-7b-instruct.gguf",
+  "remote": {
+    "enabled": false,
+    "baseUrl": "http://127.0.0.1:8000/v1/chat/completions",
+    "model": "mistralai/Mistral-7B-Instruct-v0.2",
+    "apiKey": "",
+    "timeoutMs": 20000,
+    "remoteOnly": false
+  }
+}
