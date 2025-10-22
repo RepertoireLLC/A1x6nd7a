@@ -14,6 +14,10 @@ export interface HeuristicDocSummary {
 export interface HeuristicSummaryResult {
   summary: string;
   notice: string;
+  interpretation: string | null;
+  keywordSuggestions: string[];
+  refinedQuery: string | null;
+  collectionHint: string | null;
 }
 
 interface KeywordScore {
@@ -279,6 +283,43 @@ function buildMediaParagraph(mediaSummary: string | null, mode: NSFWUserMode): s
   return `Notable media types: ${mediaSummary}. Apply the matching filter to surface the strongest material.`;
 }
 
+function buildRefinedQuery(originalQuery: string, keywords: string[]): string | null {
+  const trimmedOriginal = originalQuery.trim();
+  const lowerOriginalTokens = new Set(
+    trimmedOriginal.toLowerCase().split(/\s+/).filter((token) => token.length > 0)
+  );
+
+  const additions: string[] = [];
+  for (const keyword of keywords) {
+    const normalized = keyword.trim();
+    if (!normalized) {
+      continue;
+    }
+    if (lowerOriginalTokens.has(normalized.toLowerCase())) {
+      continue;
+    }
+    additions.push(normalized);
+    if (additions.length >= 3) {
+      break;
+    }
+  }
+
+  if (additions.length === 0) {
+    return trimmedOriginal || null;
+  }
+
+  const refined = `${trimmedOriginal} ${additions.join(" ")}`.trim();
+  if (!refined) {
+    return null;
+  }
+
+  if (refined.toLowerCase() === trimmedOriginal.toLowerCase()) {
+    return trimmedOriginal || null;
+  }
+
+  return refined;
+}
+
 export function buildHeuristicAISummary(
   query: string,
   docs: HeuristicDocSummary[],
@@ -316,8 +357,16 @@ export function buildHeuristicAISummary(
       ? " Suggestions are generated directly from NSFW-filtered results."
       : " Suggestions are synthesized from the current search results.";
 
+  const refinedQuery = buildRefinedQuery(sanitizedQuery, keywordSuggestions);
+  const interpretation = leadSentence || null;
+  const collectionHint = mediaParagraph || null;
+
   return {
     summary,
     notice: `${baseNotice} ${noticeTail}`.trim(),
+    interpretation,
+    keywordSuggestions,
+    refinedQuery,
+    collectionHint,
   };
 }

@@ -39,6 +39,10 @@ describe("buildHeuristicAISummary", () => {
     expect(result?.summary).toContain("Alexandria heuristics reviewed");
     expect(result?.summary).toContain("Keyword suggestions:");
     expect(result?.notice).toContain("No offline AI response");
+    expect(result?.interpretation).toMatch(/Apollo 11/i);
+    expect(result?.keywordSuggestions.length).toBeGreaterThan(0);
+    expect(result?.refinedQuery).toBeTruthy();
+    expect(result?.collectionHint).toBeTruthy();
   });
 
   it("honors safe mode by avoiding mild NSFW terms", () => {
@@ -54,6 +58,7 @@ describe("buildHeuristicAISummary", () => {
     const result = buildHeuristicAISummary("Classic", docs, "safe");
     expect(result).not.toBeNull();
     expect(result?.summary).not.toMatch(/adult|explicit/i);
+    expect(result?.keywordSuggestions.every((keyword) => !/adult|explicit/i.test(keyword))).toBe(true);
   });
 
   it("focuses on nsfw language when only-nsfw mode is active", () => {

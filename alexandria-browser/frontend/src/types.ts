@@ -110,6 +110,10 @@ export interface ArchiveSearchResponse {
   ai_summary_error?: string | null;
   ai_summary_source?: AISummarySource;
   ai_summary_notice?: string | null;
+  ai_search_interpretation?: string | null;
+  ai_search_keywords?: string[];
+  ai_search_refined_query?: string | null;
+  ai_search_collection_hint?: string | null;
 }
 
 export interface ArchiveSearchResultSummary {

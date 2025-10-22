@@ -415,6 +415,113 @@ html[data-theme="light"] datalist option {
   color: color-mix(in srgb, var(--harmonia-text) 80%, var(--harmonia-text-muted));
 }
 
+.ai-search-assist {
+  margin-top: 0.75rem;
+  padding: 1rem 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ai-search-assist-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.ai-search-assist-header h2 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+.ai-search-assist-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ai-search-assist-interpretation,
+.ai-search-assist-collection {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--harmonia-text);
+}
+
+.ai-search-assist-refine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ai-search-assist-label {
+  font-size: 0.85rem;
+  color: var(--harmonia-text-muted);
+}
+
+.ai-search-assist-refine-button {
+  border: none;
+  border-radius: var(--harmonia-radius-sm);
+  padding: 0.45rem 0.9rem;
+  font-size: 0.95rem;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--harmonia-accent) 18%, transparent);
+  color: var(--harmonia-accent);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.ai-search-assist-refine-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.ai-search-assist-refine-button:not(:disabled):hover,
+.ai-search-assist-refine-button:not(:disabled):focus-visible {
+  background: color-mix(in srgb, var(--harmonia-accent) 28%, transparent);
+  color: var(--harmonia-text-strong);
+}
+
+.ai-search-assist-keywords {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.ai-search-assist-keyword-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.ai-search-assist-keyword {
+  border: var(--harmonia-border-weight) solid color-mix(in srgb, var(--harmonia-border) 70%, transparent);
+  border-radius: 999px;
+  padding: 0.3rem 0.8rem;
+  background: transparent;
+  font-size: 0.9rem;
+  color: var(--harmonia-text);
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.ai-search-assist-keyword:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.ai-search-assist-keyword:not(:disabled):hover,
+.ai-search-assist-keyword:not(:disabled):focus-visible {
+  background: color-mix(in srgb, var(--harmonia-border) 25%, transparent);
+  border-color: color-mix(in srgb, var(--harmonia-border) 55%, transparent);
+}
+
+.ai-search-assist-muted {
+  margin: 0;
+  color: var(--harmonia-text-muted);
+  font-size: 0.9rem;
+}
+
 .ai-chat-panel {
   display: flex;
   flex-direction: column;

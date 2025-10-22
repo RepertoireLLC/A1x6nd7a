@@ -126,6 +126,10 @@ type ArchiveSearchResponse = Record<string, unknown> & {
   ai_summary_error?: string | null;
   ai_summary_source?: "model" | "heuristic";
   ai_summary_notice?: string | null;
+  ai_search_interpretation?: string | null;
+  ai_search_keywords?: string[];
+  ai_search_refined_query?: string | null;
+  ai_search_collection_hint?: string | null;
 };
 
 type AISummaryStatus = "success" | "unavailable" | "error";
@@ -1466,6 +1470,10 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
   let aiSummaryError: string | null = null;
   let aiSummaryNotice: string | null = null;
   let aiSummarySource: "model" | "heuristic" | null = null;
+  let aiSearchInterpretation: string | null = null;
+  let aiSearchKeywords: string[] = [];
+  let aiSearchRefinedQuery: string | null = null;
+  let aiSearchCollectionHint: string | null = null;
 
   const filterConfig: ArchiveSearchFiltersInput = {
     mediaType: mediaTypeParam,
@@ -1814,16 +1822,35 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
 
     if (aiOutcome?.status !== "blocked") {
       const reason = aiSummaryError ?? aiOutcome?.message ?? null;
-      if (!aiSummary || aiSummaryStatus !== "success") {
-        const heuristic = buildHeuristicAISummary(query, heuristicDocs, nsfwUserMode, reason);
-        if (heuristic) {
+      const heuristic = buildHeuristicAISummary(query, heuristicDocs, nsfwUserMode, reason);
+      if (heuristic) {
+        aiSearchInterpretation = heuristic.interpretation;
+        aiSearchKeywords = heuristic.keywordSuggestions.slice(0, 6);
+        const refinedCandidate = heuristic.refinedQuery?.trim() ?? "";
+        if (refinedCandidate) {
+          const normalizedOriginal = query.trim().toLowerCase();
+          aiSearchRefinedQuery =
+            refinedCandidate.toLowerCase() === normalizedOriginal ? null : refinedCandidate;
+        } else {
+          aiSearchRefinedQuery = null;
+        }
+        aiSearchCollectionHint = heuristic.collectionHint;
+
+        if (!aiSummary || aiSummaryStatus !== "success") {
           aiSummary = heuristic.summary;
           aiSummaryStatus = "success";
           aiSummaryError = null;
           aiSummaryNotice = heuristic.notice;
           aiSummarySource = "heuristic";
+        } else if (!aiSummaryNotice && heuristic.notice) {
+          aiSummaryNotice = heuristic.notice;
         }
       }
+    } else {
+      aiSearchInterpretation = null;
+      aiSearchKeywords = [];
+      aiSearchRefinedQuery = null;
+      aiSearchCollectionHint = null;
     }
 
     payload.ai_summary = aiSummary;
@@ -1843,6 +1870,36 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     } else if ("ai_summary_source" in payload) {
       delete payload.ai_summary_source;
     }
+
+    const normalizedInterpretation = aiSearchInterpretation?.trim() ?? "";
+    if (normalizedInterpretation) {
+      payload.ai_search_interpretation = normalizedInterpretation;
+    } else if ("ai_search_interpretation" in payload) {
+      delete payload.ai_search_interpretation;
+    }
+
+    const normalizedKeywords = Array.from(
+      new Set(aiSearchKeywords.map((keyword) => keyword.trim()).filter((keyword) => keyword.length > 0))
+    ).slice(0, 6);
+    if (normalizedKeywords.length > 0) {
+      payload.ai_search_keywords = normalizedKeywords;
+    } else if ("ai_search_keywords" in payload) {
+      delete payload.ai_search_keywords;
+    }
+
+    const normalizedRefinedQuery = aiSearchRefinedQuery?.trim() ?? "";
+    if (normalizedRefinedQuery) {
+      payload.ai_search_refined_query = normalizedRefinedQuery;
+    } else if ("ai_search_refined_query" in payload) {
+      delete payload.ai_search_refined_query;
+    }
+
+    const normalizedCollectionHint = aiSearchCollectionHint?.trim() ?? "";
+    if (normalizedCollectionHint) {
+      payload.ai_search_collection_hint = normalizedCollectionHint;
+    } else if ("ai_search_collection_hint" in payload) {
+      delete payload.ai_search_collection_hint;
+    }
   } else {
     if ("ai_summary" in payload) {
       delete payload.ai_summary;
@@ -1858,6 +1915,18 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     }
     if ("ai_summary_source" in payload) {
       delete payload.ai_summary_source;
+    }
+    if ("ai_search_interpretation" in payload) {
+      delete payload.ai_search_interpretation;
+    }
+    if ("ai_search_keywords" in payload) {
+      delete payload.ai_search_keywords;
+    }
+    if ("ai_search_refined_query" in payload) {
+      delete payload.ai_search_refined_query;
+    }
+    if ("ai_search_collection_hint" in payload) {
+      delete payload.ai_search_collection_hint;
     }
   }
 

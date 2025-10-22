@@ -17,6 +17,7 @@ import { LiveStatusCard } from "./components/LiveStatusCard";
 import { WaybackAvailabilityCard } from "./components/WaybackAvailabilityCard";
 import { AiAssistantPanel } from "./components/AiAssistantPanel";
 import { AiChatPanel } from "./components/AiChatPanel";
+import { AiSearchAssistPanel } from "./components/AiSearchAssistPanel";
 import {
   searchArchive,
   checkLinkStatus,
@@ -190,6 +191,10 @@ function App() {
   const [aiSummaryError, setAiSummaryError] = useState<string | null>(null);
   const [aiSummaryNotice, setAiSummaryNotice] = useState<string | null>(null);
   const [aiSummarySource, setAiSummarySource] = useState<AISummarySource | null>(null);
+  const [aiSearchInterpretation, setAiSearchInterpretation] = useState<string | null>(null);
+  const [aiSearchKeywords, setAiSearchKeywords] = useState<string[]>([]);
+  const [aiSearchRefinedQuery, setAiSearchRefinedQuery] = useState<string | null>(null);
+  const [aiSearchCollectionHint, setAiSearchCollectionHint] = useState<string | null>(null);
   const [aiPanelCollapsed, setAiPanelCollapsed] = useState(false);
   const [aiAvailability, setAiAvailability] = useState<AIAvailabilityStatus>(() =>
     settings.aiAssistantEnabled ? "unknown" : "disabled"
@@ -301,6 +306,10 @@ function App() {
       setAiSummaryNotice(null);
       setAiSummarySource(null);
       setAiPanelCollapsed(false);
+      setAiSearchInterpretation(null);
+      setAiSearchKeywords([]);
+      setAiSearchRefinedQuery(null);
+      setAiSearchCollectionHint(null);
     } else if (aiSummaryStatus === "disabled") {
       setAiSummaryStatus("unavailable");
       setAiSummaryNotice(null);
@@ -502,6 +511,10 @@ function App() {
       setAiDocHelperStatus(aiAssistantEnabled ? "idle" : "disabled");
       setAiDocHelperMessage(null);
       setAiDocHelperError(null);
+      setAiSearchInterpretation(null);
+      setAiSearchKeywords([]);
+      setAiSearchRefinedQuery(null);
+      setAiSearchCollectionHint(null);
 
       const normalizedYearFrom = normalizeYear(yearFrom);
       const normalizedYearTo = normalizeYear(yearTo);
@@ -564,6 +577,10 @@ function App() {
             setAiSummarySource(null);
             setAiAvailability("disabled");
           }
+          setAiSearchInterpretation(null);
+          setAiSearchKeywords([]);
+          setAiSearchRefinedQuery(null);
+          setAiSearchCollectionHint(null);
           return;
         }
 
@@ -625,6 +642,30 @@ function App() {
               setAiChatError(nextError);
             }
           }
+
+          const rawInterpretation =
+            typeof payload.ai_search_interpretation === "string"
+              ? payload.ai_search_interpretation.trim()
+              : "";
+          const rawRefinedQuery =
+            typeof payload.ai_search_refined_query === "string"
+              ? payload.ai_search_refined_query.trim()
+              : "";
+          const rawCollectionHint =
+            typeof payload.ai_search_collection_hint === "string"
+              ? payload.ai_search_collection_hint.trim()
+              : "";
+          const keywordList = Array.isArray(payload.ai_search_keywords)
+            ? payload.ai_search_keywords
+                .map((item) => (typeof item === "string" ? item.trim() : ""))
+                .filter((item, index, array) => item.length > 0 && array.indexOf(item) === index)
+                .slice(0, 6)
+            : [];
+
+          setAiSearchInterpretation(rawInterpretation || null);
+          setAiSearchRefinedQuery(rawRefinedQuery || null);
+          setAiSearchCollectionHint(rawCollectionHint || null);
+          setAiSearchKeywords(keywordList);
         } else {
           setAiSummary(null);
           setAiSummaryStatus("disabled");
@@ -632,6 +673,10 @@ function App() {
           setAiSummaryNotice(null);
           setAiSummarySource(null);
           setAiAvailability("disabled");
+          setAiSearchInterpretation(null);
+          setAiSearchRefinedQuery(null);
+          setAiSearchCollectionHint(null);
+          setAiSearchKeywords([]);
         }
 
         if (payload.fallback) {
@@ -854,6 +899,10 @@ function App() {
           setAiSummaryNotice(null);
           setAiSummarySource(null);
         }
+        setAiSearchInterpretation(null);
+        setAiSearchRefinedQuery(null);
+        setAiSearchCollectionHint(null);
+        setAiSearchKeywords([]);
       } finally {
         setIsLoading(false);
       }
@@ -1134,6 +1183,39 @@ function App() {
     await performSearch(trimmed, 1);
   };
 
+  const handleApplyAiRefinedQuery = useCallback(
+    (suggested: string) => {
+      const trimmed = suggested.trim();
+      if (!trimmed) {
+        return;
+      }
+      setQuery(trimmed);
+      setActiveQuery(trimmed);
+      void performSearch(trimmed, 1);
+    },
+    [performSearch]
+  );
+
+  const handleAppendAiKeyword = useCallback((keyword: string) => {
+    const trimmed = keyword.trim();
+    if (!trimmed) {
+      return;
+    }
+    setQuery((current) => {
+      if (!current.trim()) {
+        return trimmed;
+      }
+      const tokens = current
+        .split(/\s+/)
+        .map((token) => token.trim().toLowerCase())
+        .filter((token) => token.length > 0);
+      if (tokens.includes(trimmed.toLowerCase())) {
+        return current;
+      }
+      return `${current.trim()} ${trimmed}`;
+    });
+  }, []);
+
   const handlePageChange = async (direction: "previous" | "next") => {
     if (!activeQuery) {
       return;
@@ -1400,6 +1482,10 @@ function App() {
     setAiSummaryNotice(null);
     setAiSummarySource(null);
     setAiPanelCollapsed(false);
+    setAiSearchInterpretation(null);
+    setAiSearchRefinedQuery(null);
+    setAiSearchCollectionHint(null);
+    setAiSearchKeywords([]);
   };
 
   const clearHistory = () => {
@@ -1460,6 +1546,10 @@ function App() {
     setAiDocHelperStatus(defaults.aiAssistantEnabled ? "idle" : "disabled");
     setAiDocHelperMessage(null);
     setAiDocHelperError(null);
+    setAiSearchInterpretation(null);
+    setAiSearchRefinedQuery(null);
+    setAiSearchCollectionHint(null);
+    setAiSearchKeywords([]);
   };
 
   const handleToggleAiAssistant = (enabled: boolean) => {
@@ -1472,6 +1562,10 @@ function App() {
       setAiAvailability("unknown");
       setAiDocHelperStatus("idle");
       setSidebarTab("assistant");
+      setAiSearchInterpretation(null);
+      setAiSearchRefinedQuery(null);
+      setAiSearchCollectionHint(null);
+      setAiSearchKeywords([]);
     } else {
       setAiSummary(null);
       setAiSummaryError(null);
@@ -1486,6 +1580,10 @@ function App() {
       setAiDocHelperStatus("disabled");
       setAiDocHelperMessage(null);
       setAiDocHelperError(null);
+      setAiSearchInterpretation(null);
+      setAiSearchRefinedQuery(null);
+      setAiSearchCollectionHint(null);
+      setAiSearchKeywords([]);
     }
   };
 
@@ -1626,14 +1724,27 @@ function App() {
         onHome={goHome}
         onOpenLibrary={() => setSidebarOpen(true)}
       >
-        <SearchBar
-          value={query}
-          suggestions={suggestionList}
-          onChange={setQuery}
-          onSubmit={handleSubmit}
-          onSelectSuggestion={handleSuggestionClick}
-          isLoading={isLoading}
-        />
+        <>
+          <SearchBar
+            value={query}
+            suggestions={suggestionList}
+            onChange={setQuery}
+            onSubmit={handleSubmit}
+            onSelectSuggestion={handleSuggestionClick}
+            isLoading={isLoading}
+          />
+          <AiSearchAssistPanel
+            enabled={aiAssistantEnabled}
+            status={aiSummaryStatus}
+            error={aiSummaryError}
+            interpretation={aiSearchInterpretation}
+            refinedQuery={aiSearchRefinedQuery}
+            keywords={aiSearchKeywords}
+            collectionHint={aiSearchCollectionHint}
+            onApplyRefinedQuery={handleApplyAiRefinedQuery}
+            onAppendKeyword={handleAppendAiKeyword}
+          />
+        </>
       </BrowserNav>
 
       <div className="search-panel harmonia-card">
