@@ -10,6 +10,8 @@ interface SettingsPanelProps {
   onClearHistory: () => void;
   onClearBookmarks: () => void;
   onResetPreferences: () => void; // ADD: Handler to restore default preference values.
+  aiAssistantEnabled: boolean;
+  onToggleAI: (enabled: boolean) => void;
 }
 
 /**
@@ -22,7 +24,9 @@ export function SettingsPanel({
   onChangeNSFWMode,
   onClearHistory,
   onClearBookmarks,
-  onResetPreferences
+  onResetPreferences,
+  aiAssistantEnabled,
+  onToggleAI
 }: SettingsPanelProps) {
   const handleModeChange = (event: ChangeEvent<HTMLSelectElement>) => {
     const value = event.target.value as NSFWFilterMode;
@@ -42,10 +46,21 @@ export function SettingsPanel({
         <select className="settings-select" value={nsfwMode} onChange={handleModeChange}>
           <option value="safe">Safe — hide all NSFW</option>
           <option value="moderate">Moderate — allow mild</option>
-          <option value="off">No filter</option>
-          <option value="only">Only NSFW content</option>
+          <option value="off">Unrestricted — allow everything</option>
+          <option value="only">Only-NSFW — show adult-tagged results</option>
         </select>
       </label>
+      <label className="setting-row">
+        <span>AI Search Assistant</span>
+        <input
+          type="checkbox"
+          checked={aiAssistantEnabled}
+          onChange={(event) => onToggleAI(event.target.checked)}
+        />
+      </label>
+      <p className="setting-description">
+        When enabled, Alexandria will use a local model (if installed) to suggest improved queries.
+      </p>
       <button type="button" className="danger" onClick={onClearHistory}>
         Clear history
       </button>

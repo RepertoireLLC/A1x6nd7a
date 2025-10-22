@@ -2,7 +2,8 @@ import type {
   ArchiveMetadataResponse,
   ArchiveSearchDoc,
   CdxResponse,
-  ScrapeItem
+  ScrapeItem,
+  AIDocumentHelperStatus
 } from "../types";
 import { getDescription, getYearOrDate, mediaIcon } from "../utils/format";
 import { SnapshotTimeline } from "./SnapshotTimeline";
@@ -21,6 +22,11 @@ interface ItemDetailsPanelProps {
   relatedFallback: boolean;
   relatedError: string | null;
   onClose: () => void;
+  aiEnabled?: boolean;
+  aiHelperStatus?: AIDocumentHelperStatus;
+  aiHelperMessage?: string | null;
+  aiHelperError?: string | null;
+  onRequestAiHelper?: () => void;
 }
 
 function renderMetadataRows(metadata: Record<string, unknown> | undefined) {
@@ -86,7 +92,12 @@ export function ItemDetailsPanel({
   relatedItems,
   relatedFallback,
   relatedError,
-  onClose
+  onClose,
+  aiEnabled = false,
+  aiHelperStatus = "idle",
+  aiHelperMessage,
+  aiHelperError,
+  onRequestAiHelper
 }: ItemDetailsPanelProps) {
   const fallbackArchiveUrl = `https://archive.org/details/${encodeURIComponent(doc.identifier)}`;
   const archiveUrl = doc.archive_url ?? doc.links?.archive ?? fallbackArchiveUrl;
@@ -190,6 +201,37 @@ export function ItemDetailsPanel({
           </ul>
         )}
       </section>
+
+      {aiEnabled ? (
+        <section className="item-details-section ai-item-helper" aria-live="polite">
+          <h3>AI Quick Helper</h3>
+          {aiHelperStatus === "idle" ? (
+            <button type="button" onClick={onRequestAiHelper}>
+              Ask Alexandria about this item
+            </button>
+          ) : null}
+          {aiHelperStatus === "loading" ? <p>Generating a summary…</p> : null}
+          {aiHelperStatus === "success" && aiHelperMessage ? (
+            <p className="ai-item-helper-message">{aiHelperMessage}</p>
+          ) : null}
+          {aiHelperStatus === "error" && aiHelperError ? (
+            <p className="ai-item-helper-error" role="status">{aiHelperError}</p>
+          ) : null}
+          {aiHelperStatus === "unavailable" ? (
+            <p className="ai-item-helper-muted" role="status">
+              {aiHelperError || "Local AI model unavailable. Install a compatible model to enable quick help."}
+            </p>
+          ) : null}
+          {aiHelperStatus === "disabled" ? (
+            <p className="ai-item-helper-muted" role="status">
+              AI helper disabled by configuration.
+            </p>
+          ) : null}
+          {aiHelperStatus === "idle" && !onRequestAiHelper ? (
+            <p className="ai-item-helper-muted">AI helper is not available for this item.</p>
+          ) : null}
+        </section>
+      ) : null}
     </aside>
   );
 }

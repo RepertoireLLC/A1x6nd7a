@@ -264,6 +264,357 @@ html[data-theme="light"] datalist option {
   transition: border-color var(--harmonia-transition), box-shadow var(--harmonia-transition);
 }
 
+.ai-assistant-panel {
+  width: min(960px, 100%);
+  margin: 1rem auto 0;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ai-assistant-panel.collapsed {
+  padding-bottom: 0.9rem;
+}
+
+.ai-assistant-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.ai-assistant-header h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.ai-assistant-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.ai-assistant-status {
+  font-size: 0.75rem;
+  letter-spacing: 0.03em;
+  padding: 0.2rem 0.7rem;
+  border-radius: var(--harmonia-radius-pill);
+  border: 1px solid color-mix(in srgb, var(--harmonia-border) 65%, transparent);
+  background: color-mix(in srgb, var(--harmonia-surface-muted) 60%, transparent);
+  color: var(--harmonia-text-muted);
+  text-transform: uppercase;
+}
+
+.ai-assistant-source {
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
+  padding: 0.2rem 0.65rem;
+  border-radius: var(--harmonia-radius-pill);
+  border: 1px solid color-mix(in srgb, var(--harmonia-border) 55%, transparent);
+  background: color-mix(in srgb, var(--harmonia-surface-muted) 55%, transparent);
+  color: color-mix(in srgb, var(--harmonia-text-muted) 90%, #0000);
+  text-transform: uppercase;
+}
+
+.ai-assistant-source-model {
+  background: color-mix(in srgb, var(--harmonia-gold) 22%, transparent);
+  border-color: color-mix(in srgb, var(--harmonia-gold) 45%, transparent);
+  color: color-mix(in srgb, var(--harmonia-gold) 90%, #fff0);
+}
+
+.ai-assistant-source-heuristic {
+  background: color-mix(in srgb, var(--harmonia-accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--harmonia-accent) 38%, transparent);
+  color: var(--harmonia-accent);
+}
+
+.ai-assistant-source-unknown {
+  opacity: 0.65;
+}
+
+.ai-assistant-status-loading {
+  background: color-mix(in srgb, var(--harmonia-accent) 18%, transparent);
+  color: var(--harmonia-accent);
+  border-color: color-mix(in srgb, var(--harmonia-accent) 35%, transparent);
+}
+
+.ai-assistant-status-success {
+  background: color-mix(in srgb, var(--harmonia-gold) 16%, transparent);
+  color: color-mix(in srgb, var(--harmonia-gold) 85%, #fff0);
+  border-color: color-mix(in srgb, var(--harmonia-gold) 40%, transparent);
+}
+
+.ai-assistant-status-error {
+  background: color-mix(in srgb, var(--harmonia-accent-strong) 18%, transparent);
+  color: var(--harmonia-accent-strong);
+  border-color: color-mix(in srgb, var(--harmonia-accent-strong) 35%, transparent);
+}
+
+.ai-assistant-status-unavailable {
+  background: color-mix(in srgb, var(--harmonia-surface-alt) 55%, transparent);
+}
+
+.ai-assistant-status-disabled {
+  opacity: 0.6;
+}
+
+.ai-assistant-toggle {
+  border: var(--harmonia-border-weight) solid color-mix(in srgb, var(--harmonia-border) 60%, transparent);
+  border-radius: var(--harmonia-radius-pill);
+  background: color-mix(in srgb, var(--harmonia-surface-muted) 65%, transparent);
+  color: var(--harmonia-text);
+  padding: 0.35rem 0.85rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: transform var(--harmonia-transition), box-shadow var(--harmonia-transition);
+}
+
+.ai-assistant-toggle:hover,
+.ai-assistant-toggle:focus-visible {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 30px -24px var(--harmonia-glow-primary);
+}
+
+.ai-assistant-body {
+  background: color-mix(in srgb, var(--harmonia-surface) 80%, transparent);
+  border-radius: var(--harmonia-radius-md);
+  border: 1px solid color-mix(in srgb, var(--harmonia-border) 60%, transparent);
+  padding: 1rem 1.25rem;
+}
+
+.ai-assistant-summary,
+.ai-assistant-error,
+.ai-assistant-muted,
+.ai-assistant-loading {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.ai-assistant-loading {
+  color: var(--harmonia-accent);
+}
+
+.ai-assistant-error {
+  color: var(--harmonia-accent-strong);
+}
+
+.ai-assistant-muted {
+  color: var(--harmonia-text-muted);
+}
+
+.ai-assistant-notice {
+  margin-top: 0.75rem;
+  padding: 0.75rem 0.9rem;
+  border-left: 3px solid color-mix(in srgb, var(--harmonia-accent) 40%, transparent);
+  background: color-mix(in srgb, var(--harmonia-surface-muted) 60%, transparent);
+  border-radius: calc(var(--harmonia-radius) / 1.5);
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: color-mix(in srgb, var(--harmonia-text) 80%, var(--harmonia-text-muted));
+}
+
+.ai-chat-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.25rem 1rem;
+}
+
+.ai-chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.ai-chat-header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.ai-chat-subtitle {
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+  color: var(--harmonia-text-muted);
+}
+
+.ai-chat-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ai-chat-status {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--harmonia-radius-pill);
+  border: 1px solid color-mix(in srgb, var(--harmonia-border) 60%, transparent);
+  text-transform: uppercase;
+  color: var(--harmonia-text-muted);
+}
+
+.ai-chat-status-ready {
+  background: color-mix(in srgb, var(--harmonia-gold) 18%, transparent);
+  color: color-mix(in srgb, var(--harmonia-gold) 85%, #fff0);
+  border-color: color-mix(in srgb, var(--harmonia-gold) 40%, transparent);
+}
+
+.ai-chat-status-error {
+  background: color-mix(in srgb, var(--harmonia-accent-strong) 18%, transparent);
+  color: var(--harmonia-accent-strong);
+  border-color: color-mix(in srgb, var(--harmonia-accent-strong) 35%, transparent);
+}
+
+.ai-chat-status-disabled,
+.ai-chat-status-unavailable {
+  opacity: 0.65;
+}
+
+.ai-chat-body {
+  background: color-mix(in srgb, var(--harmonia-surface) 82%, transparent);
+  border-radius: var(--harmonia-radius-md);
+  border: 1px solid color-mix(in srgb, var(--harmonia-border) 55%, transparent);
+  padding: 0.85rem;
+  max-height: 18rem;
+  overflow-y: auto;
+}
+
+.ai-chat-placeholder {
+  margin: 0;
+  color: var(--harmonia-text-muted);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.ai-chat-messages {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ai-chat-message {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: var(--harmonia-radius-md);
+  background: color-mix(in srgb, var(--harmonia-surface-muted) 65%, transparent);
+  border: 1px solid color-mix(in srgb, var(--harmonia-border) 50%, transparent);
+}
+
+.ai-chat-message.ai-chat-role-assistant {
+  background: color-mix(in srgb, var(--harmonia-gold) 14%, transparent);
+  border-color: color-mix(in srgb, var(--harmonia-gold) 28%, transparent);
+}
+
+.ai-chat-message.ai-chat-role-user {
+  background: color-mix(in srgb, var(--harmonia-accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--harmonia-accent) 25%, transparent);
+}
+
+.ai-chat-message.ai-chat-message-error {
+  background: color-mix(in srgb, var(--harmonia-accent-strong) 12%, transparent);
+  border-color: color-mix(in srgb, var(--harmonia-accent-strong) 30%, transparent);
+}
+
+.ai-chat-message-role {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--harmonia-text-muted);
+}
+
+.ai-chat-message-content {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.ai-chat-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.ai-chat-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.ai-chat-form textarea {
+  resize: vertical;
+  min-height: 4.5rem;
+  border-radius: var(--harmonia-radius-md);
+  border: 1px solid color-mix(in srgb, var(--harmonia-border) 55%, transparent);
+  padding: 0.65rem 0.75rem;
+  background: color-mix(in srgb, var(--harmonia-surface) 90%, transparent);
+}
+
+.ai-chat-controls {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.ai-chat-controls button.secondary {
+  border: var(--harmonia-border-weight) solid color-mix(in srgb, var(--harmonia-border) 55%, transparent);
+  background: color-mix(in srgb, var(--harmonia-surface-muted) 70%, transparent);
+  color: var(--harmonia-text);
+}
+
+.ai-chat-error {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--harmonia-accent-strong);
+}
+
+.ai-item-helper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ai-item-helper button {
+  align-self: flex-start;
+  border-radius: var(--harmonia-radius-pill);
+  border: var(--harmonia-border-weight) solid color-mix(in srgb, var(--harmonia-border) 60%, transparent);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--harmonia-surface-muted) 65%, transparent),
+      color-mix(in srgb, var(--harmonia-surface-alt) 55%, transparent));
+  color: var(--harmonia-text);
+  padding: 0.45rem 1.1rem;
+  cursor: pointer;
+  transition: transform var(--harmonia-transition), box-shadow var(--harmonia-transition);
+}
+
+.ai-item-helper button:hover,
+.ai-item-helper button:focus-visible {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px -22px var(--harmonia-glow-primary);
+}
+
+.ai-item-helper-message {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.ai-item-helper-error {
+  margin: 0;
+  color: var(--harmonia-accent-strong);
+}
+
+.ai-item-helper-muted {
+  margin: 0;
+  color: var(--harmonia-text-muted);
+}
+
 .filter-row select:focus-visible,
 .filter-row input:focus-visible {
   border-color: color-mix(in srgb, var(--harmonia-border-strong) 70%, transparent);
@@ -1446,6 +1797,12 @@ html[data-theme="light"] datalist option {
 .setting-row button,
 .setting-row input[type="checkbox"] {
   cursor: pointer;
+}
+
+.setting-description {
+  margin: -0.35rem 0 0.35rem;
+  font-size: 0.85rem;
+  color: var(--harmonia-text-muted);
 }
 
 .danger {

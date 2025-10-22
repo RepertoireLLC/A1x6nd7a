@@ -76,7 +76,7 @@ export function normalizeNsfwMode(value: string | undefined): NSFWFilterMode | n
   if (normalized === "moderate") {
     return "moderate";
   }
-  if (normalized === "only" || normalized === "only_nsfw" || normalized === "nsfw") {
+  if (normalized === "only" || normalized === "only_nsfw" || normalized === "only-nsfw" || normalized === "nsfw") {
     return "only";
   }
   if (normalized === "unrestricted" || normalized === "off" || normalized === "none" || normalized === "disabled") {

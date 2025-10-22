@@ -35,6 +35,24 @@ import {
 } from "./services/filtering";
 import { getSpellCorrector, type SpellcheckResult } from "./services/spellCorrector";
 import { isValidReportReason, sendReportEmail, type ReportSubmission } from "./services/reporting";
+import {
+  configureLocalAI,
+  generateAIResponse,
+  generateContextualResponse,
+  getLastAIOutcome,
+  initializeLocalAI,
+  type LocalAIContextRequest,
+  type LocalAIConversationTurn,
+  type LocalAIOutcome,
+} from "./ai/LocalAI";
+import { buildHeuristicAISummary, type HeuristicDocSummary } from "./ai/heuristicSummaries";
+import { loadRuntimeConfig } from "./config/runtimeConfig";
+import {
+  filterByNSFWMode,
+  getNSFWMode as resolveUserNSFWMode,
+  mapUserModeToFilterMode,
+  type NSFWUserMode,
+} from "./utils/nsfwMode";
 
 const ARCHIVE_SEARCH_ENDPOINT = "https://archive.org/advancedsearch.php";
 const WAYBACK_AVAILABILITY_ENDPOINT = "https://archive.org/wayback/available";
@@ -100,7 +118,29 @@ type ArchiveSearchResponse = Record<string, unknown> & {
   alternate_queries?: string[];
   original_numFound?: number | null;
   filtered_count?: number | null;
+  page_original_count?: number | null;
+  page_filtered_count?: number | null;
+  page_hidden_count?: number | null;
+  ai_summary?: string | null;
+  ai_summary_status?: AISummaryStatus;
+  ai_summary_error?: string | null;
+  ai_summary_source?: "model" | "heuristic";
+  ai_summary_notice?: string | null;
 };
+
+type AISummaryStatus = "success" | "unavailable" | "error";
+
+type AIQueryStatus = "success" | "unavailable" | "error" | "disabled";
+
+type AIQueryResponsePayload = {
+  status: AIQueryStatus;
+  reply: string | null;
+  error?: string | null;
+  mode: LocalAIContextRequest["mode"];
+  outcome?: LocalAIOutcome;
+};
+
+type LocalAIContextShape = NonNullable<LocalAIContextRequest["context"]>;
 
 type ArchiveSearchAttempt = {
   description: string;
@@ -170,6 +210,35 @@ type RouteHandler = (context: HandlerContext) => Promise<void> | void;
 const HEAD_TIMEOUT_MS = 7000;
 const OFFLINE_FALLBACK_MESSAGE_BASE =
   "Working offline — showing a limited built-in dataset.";
+
+const runtimeConfig = loadRuntimeConfig();
+const runtimeAiConfig = runtimeConfig.ai;
+
+configureLocalAI({
+  enabled: runtimeAiConfig.enabled,
+  modelDirectory: runtimeAiConfig.modelDirectory,
+  modelName: runtimeAiConfig.modelName,
+  modelPath: runtimeAiConfig.modelPath,
+});
+
+if (runtimeAiConfig.enabled && runtimeAiConfig.autoInitialize) {
+  void initializeLocalAI().then((outcome) => {
+    if (outcome.status === "success" || outcome.status === "idle") {
+      console.info(
+        "Local AI initialized",
+        outcome.modelPath ? `using model ${outcome.modelPath}` : "without an explicit model path"
+      );
+    } else if (outcome.status === "missing-model") {
+      console.warn("Local AI auto-initialization skipped: no compatible model found.");
+    } else if (outcome.status === "disabled") {
+      console.info("Local AI auto-initialization skipped because the service is disabled.");
+    } else {
+      console.warn("Local AI auto-initialization encountered an issue.", outcome.message);
+    }
+  });
+} else if (!runtimeAiConfig.enabled) {
+  console.info("Local AI assistance disabled via server configuration.");
+}
 
 const spellCorrector = getSpellCorrector();
 
@@ -399,6 +468,95 @@ function parseRequestUrl(req: IncomingMessage): URL {
   const hostHeader = req.headers?.host ?? "localhost";
   const requestUrl = req.url ?? "/";
   return new URL(requestUrl, `http://${hostHeader}`);
+}
+
+function normalizeAIHistory(historyValue: unknown): LocalAIConversationTurn[] {
+  if (!Array.isArray(historyValue)) {
+    return [];
+  }
+
+  const normalized: LocalAIConversationTurn[] = [];
+  for (const entry of historyValue) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const contentValue = record.content;
+    if (typeof contentValue !== "string") {
+      continue;
+    }
+    const trimmedContent = contentValue.trim();
+    if (!trimmedContent) {
+      continue;
+    }
+    const roleValue = typeof record.role === "string" ? record.role.trim().toLowerCase() : "user";
+    const role: LocalAIConversationTurn["role"] = roleValue === "assistant" ? "assistant" : "user";
+    normalized.push({ role, content: trimmedContent });
+    if (normalized.length >= 6) {
+      // Maintain a short rolling window to avoid overwhelming the model.
+      normalized.splice(0, normalized.length - 6);
+    }
+  }
+
+  return normalized;
+}
+
+function normalizeAIContext(contextValue: unknown): LocalAIContextRequest["context"] | undefined {
+  if (!contextValue || typeof contextValue !== "object") {
+    return undefined;
+  }
+
+  const record = contextValue as Record<string, unknown>;
+  const context: LocalAIContextShape = {};
+
+  if (typeof record.activeQuery === "string" && record.activeQuery.trim()) {
+    context.activeQuery = record.activeQuery.trim();
+  }
+  if (typeof record.currentUrl === "string" && record.currentUrl.trim()) {
+    context.currentUrl = record.currentUrl.trim();
+  }
+  const titleValue = typeof record.documentTitle === "string" ? record.documentTitle : record.title;
+  if (typeof titleValue === "string" && titleValue.trim()) {
+    context.documentTitle = titleValue.trim();
+  }
+  const summaryValue =
+    typeof record.documentSummary === "string"
+      ? record.documentSummary
+      : typeof record.summary === "string"
+      ? record.summary
+      : typeof record.description === "string"
+      ? record.description
+      : undefined;
+  if (typeof summaryValue === "string" && summaryValue.trim()) {
+    context.documentSummary = summaryValue.trim();
+  }
+  const notesValue = typeof record.extraNotes === "string" ? record.extraNotes : record.notes;
+  if (typeof notesValue === "string" && notesValue.trim()) {
+    context.extraNotes = notesValue.trim();
+  }
+
+  const navigationValue = record.navigationTrail ?? record.trail ?? record.breadcrumbs;
+  if (Array.isArray(navigationValue)) {
+    const navigationTrail = navigationValue
+      .map((item) => (typeof item === "string" ? item.trim() : ""))
+      .filter((item) => Boolean(item));
+    if (navigationTrail.length > 0) {
+      context.navigationTrail = navigationTrail.slice(-5);
+    }
+  }
+
+  return Object.keys(context).length > 0 ? context : undefined;
+}
+
+function normalizeAIMode(modeValue: unknown): LocalAIContextRequest["mode"] {
+  if (typeof modeValue === "string") {
+    const normalized = modeValue.trim().toLowerCase();
+    if (normalized === "navigation" || normalized === "document" || normalized === "search" || normalized === "chat") {
+      return normalized;
+    }
+  }
+
+  return "chat";
 }
 
 function getEnv(name: string): string | undefined {
@@ -1189,6 +1347,7 @@ const routes: Record<string, Record<string, RouteHandler>> = {
     "/api/scrape": handleScrape
   },
   POST: {
+    "/api/ai/query": handleAIQuery,
     "/api/report": handleReport,
     "/api/save": handleSave
   }
@@ -1259,7 +1418,11 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
   const languageParam = url.searchParams.get("language")?.trim() ?? "";
   const sourceTrustParam = url.searchParams.get("sourceTrust")?.trim().toLowerCase() ?? "";
   const availabilityParam = url.searchParams.get("availability")?.trim().toLowerCase() ?? "";
-  const nsfwModeParam = url.searchParams.get("nsfwMode")?.trim().toLowerCase() ?? "";
+  const nsfwModeInput = url.searchParams.get("nsfwMode");
+  const nsfwUserMode: NSFWUserMode = resolveUserNSFWMode(nsfwModeInput ?? undefined);
+  const nsfwModeParam = mapUserModeToFilterMode(nsfwUserMode);
+  const aiModeParam = url.searchParams.get("ai")?.trim().toLowerCase() ?? "";
+  const aiModeEnabled = ["1", "true", "yes", "on", "enabled"].includes(aiModeParam);
 
   if (mediaTypeParam && !ALLOWED_MEDIA_TYPES.has(mediaTypeParam)) {
     sendJson(res, 400, {
@@ -1298,6 +1461,11 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
   let usedFallback = false;
   let lastSearchError: unknown = null;
   let lastAttempt: ArchiveSearchAttempt | null = null;
+  let aiSummary: string | null = null;
+  let aiSummaryStatus: AISummaryStatus | null = null;
+  let aiSummaryError: string | null = null;
+  let aiSummaryNotice: string | null = null;
+  let aiSummarySource: "model" | "heuristic" | null = null;
 
   const filterConfig: ArchiveSearchFiltersInput = {
     mediaType: mediaTypeParam,
@@ -1434,9 +1602,18 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     return matchesAdvancedFilters(doc as Record<string, unknown>, filterConfig);
   }) as Array<Record<string, unknown>>;
 
-  normalizedDocs = filteredDocs;
+  const nsfwAdjustedDocs = filterByNSFWMode(filteredDocs, nsfwUserMode);
 
-  const scoreValues = filteredDocs
+  const perPageOriginalCount = scoredDocs.length;
+  const perPageFilteredCount = nsfwAdjustedDocs.length;
+  const perPageHiddenCount =
+    perPageOriginalCount > perPageFilteredCount
+      ? perPageOriginalCount - perPageFilteredCount
+      : 0;
+
+  normalizedDocs = nsfwAdjustedDocs;
+
+  const scoreValues = nsfwAdjustedDocs
     .map((doc) => {
       const raw = doc.score;
       if (typeof raw === "number" && Number.isFinite(raw)) {
@@ -1514,6 +1691,17 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
 
   const filteredCount = normalizedDocs.length;
 
+  const heuristicDocs: HeuristicDocSummary[] = summaryResults.map((doc) => ({
+    identifier: doc.identifier,
+    title: doc.title,
+    description: doc.description,
+    mediatype: doc.mediatype,
+    year: doc.year,
+    creator: doc.creator,
+    language: doc.language ?? null,
+    downloads: doc.downloads ?? null,
+  }));
+
   if (data.response) {
     data.response = {
       ...data.response,
@@ -1564,6 +1752,9 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
 
   payload.original_numFound = originalNumFound;
   payload.filtered_count = filteredCount;
+  payload.page_original_count = perPageOriginalCount;
+  payload.page_filtered_count = perPageFilteredCount;
+  payload.page_hidden_count = perPageHiddenCount;
 
   if (usedFallback) {
     payload.fallback = true;
@@ -1579,7 +1770,208 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     }
   }
 
+  if (aiModeEnabled) {
+    let aiOutcome: LocalAIOutcome | null = null;
+
+    if (!runtimeAiConfig.enabled) {
+      aiSummaryStatus = "unavailable";
+      aiSummaryError = "Local AI assistance is disabled by the server configuration.";
+      aiOutcome = { status: "disabled", message: aiSummaryError, modelPath: null };
+    } else {
+      try {
+        const aiResponse = await generateAIResponse(query, { nsfwMode: nsfwUserMode });
+        aiOutcome = getLastAIOutcome();
+        const trimmed = typeof aiResponse === "string" ? aiResponse.trim() : "";
+        if (trimmed) {
+          aiSummary = trimmed;
+          aiSummaryStatus = "success";
+          aiSummaryError = null;
+          aiSummarySource = "model";
+        } else {
+          if (aiOutcome.status === "error") {
+            aiSummaryStatus = "error";
+            aiSummaryError = aiOutcome.message ?? "Local AI encountered an unexpected error.";
+          } else if (aiOutcome.status === "missing-model" || aiOutcome.status === "disabled") {
+            aiSummaryStatus = "unavailable";
+            aiSummaryError = aiOutcome.message ?? "Local AI model is not available on the server.";
+          } else if (aiOutcome.status === "blocked") {
+            aiSummaryStatus = "unavailable";
+            aiSummaryError =
+              aiOutcome.message ??
+              (nsfwUserMode === "safe"
+                ? "AI Mode: This content is hidden because Safe Search is enabled."
+                : "AI suggestions are hidden due to the active NSFW mode.");
+          } else {
+            aiSummaryStatus = "unavailable";
+            aiSummaryError = aiOutcome.message ?? null;
+          }
+        }
+      } catch (error) {
+        aiSummaryStatus = "error";
+        aiSummaryError = error instanceof Error ? error.message : "Local AI failed to generate a response.";
+      }
+    }
+
+    if (aiOutcome?.status !== "blocked") {
+      const reason = aiSummaryError ?? aiOutcome?.message ?? null;
+      if (!aiSummary || aiSummaryStatus !== "success") {
+        const heuristic = buildHeuristicAISummary(query, heuristicDocs, nsfwUserMode, reason);
+        if (heuristic) {
+          aiSummary = heuristic.summary;
+          aiSummaryStatus = "success";
+          aiSummaryError = null;
+          aiSummaryNotice = heuristic.notice;
+          aiSummarySource = "heuristic";
+        }
+      }
+    }
+
+    payload.ai_summary = aiSummary;
+    payload.ai_summary_status = aiSummaryStatus ?? "unavailable";
+    if (aiSummaryError && aiSummaryError.trim()) {
+      payload.ai_summary_error = aiSummaryError.trim();
+    } else if ("ai_summary_error" in payload) {
+      delete payload.ai_summary_error;
+    }
+    if (aiSummaryNotice && aiSummaryNotice.trim()) {
+      payload.ai_summary_notice = aiSummaryNotice.trim();
+    } else if ("ai_summary_notice" in payload) {
+      delete payload.ai_summary_notice;
+    }
+    if (aiSummarySource) {
+      payload.ai_summary_source = aiSummarySource;
+    } else if ("ai_summary_source" in payload) {
+      delete payload.ai_summary_source;
+    }
+  } else {
+    if ("ai_summary" in payload) {
+      delete payload.ai_summary;
+    }
+    if ("ai_summary_status" in payload) {
+      delete payload.ai_summary_status;
+    }
+    if ("ai_summary_error" in payload) {
+      delete payload.ai_summary_error;
+    }
+    if ("ai_summary_notice" in payload) {
+      delete payload.ai_summary_notice;
+    }
+    if ("ai_summary_source" in payload) {
+      delete payload.ai_summary_source;
+    }
+  }
+
   sendJson(res, 200, payload);
+}
+
+async function handleAIQuery({ req, res }: HandlerContext): Promise<void> {
+  let payload: unknown;
+  try {
+    payload = await readJsonBody(req);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      sendJson(res, error.statusCode, { error: error.message });
+      return;
+    }
+    console.error("Error reading AI request body", error);
+    sendJson(res, 400, { error: "Unable to read request body." });
+    return;
+  }
+
+  const data = (payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {}) ?? {};
+
+  const messageCandidateFields: unknown[] = [data.message, data.prompt, data.question, data.query];
+  let message = "";
+  for (const candidate of messageCandidateFields) {
+    if (typeof candidate === "string") {
+      const trimmed = candidate.trim();
+      if (trimmed) {
+        message = trimmed;
+        break;
+      }
+    }
+  }
+
+  if (!message) {
+    sendJson(res, 400, { error: "Missing required field 'message' in request body." });
+    return;
+  }
+
+  const queryValue = typeof data.query === "string" ? data.query.trim() : "";
+  const sanitizedQuery = queryValue || message;
+  const mode = normalizeAIMode(data.mode);
+  const history = normalizeAIHistory(data.history);
+  const context = normalizeAIContext(data.context);
+  const nsfwModeInput = typeof data.nsfwMode === "string" ? data.nsfwMode : undefined;
+  const nsfwUserMode = resolveUserNSFWMode(nsfwModeInput);
+
+  if (!runtimeAiConfig.enabled) {
+    const disabledOutcome = getLastAIOutcome();
+    const response: AIQueryResponsePayload = {
+      status: "disabled",
+      reply: null,
+      error: disabledOutcome.message ?? "Local AI assistance is disabled by the server configuration.",
+      mode,
+      outcome: disabledOutcome,
+    };
+    sendJson(res, 200, response);
+    return;
+  }
+
+  let reply: string | null = null;
+  if (mode === "search") {
+    reply = await generateAIResponse(sanitizedQuery, { nsfwMode: nsfwUserMode });
+  } else {
+    const request: LocalAIContextRequest = {
+      mode,
+      message,
+      query: sanitizedQuery,
+      context,
+      history,
+      nsfwMode: nsfwUserMode,
+    };
+    reply = await generateContextualResponse(request);
+  }
+
+  const outcome = getLastAIOutcome();
+  let status: AIQueryStatus = "success";
+  let errorMessage: string | null = null;
+
+  if (outcome.status === "disabled") {
+    status = "disabled";
+    errorMessage = outcome.message ?? "Local AI assistance is disabled.";
+  } else if (!reply) {
+    if (outcome.status === "missing-model") {
+      status = "unavailable";
+      errorMessage = outcome.message ?? "Local AI model is not available.";
+    } else if (outcome.status === "error") {
+      status = "error";
+      errorMessage = outcome.message ?? "Local AI failed to generate a response.";
+    } else if (outcome.status === "blocked") {
+      status = "unavailable";
+      errorMessage =
+        outcome.message ??
+        (nsfwUserMode === "safe"
+          ? "AI Mode: This content is hidden because Safe Search is enabled."
+          : "AI suggestions are hidden due to the active NSFW mode.");
+    } else {
+      status = "unavailable";
+      errorMessage = outcome.message ?? "Local AI response is unavailable.";
+    }
+  }
+
+  const responsePayload: AIQueryResponsePayload = {
+    status,
+    reply: reply ?? null,
+    mode,
+    outcome,
+  };
+
+  if (errorMessage) {
+    responsePayload.error = errorMessage;
+  }
+
+  sendJson(res, 200, responsePayload);
 }
 
 async function handleMetadata({ res, url }: HandlerContext): Promise<void> {
