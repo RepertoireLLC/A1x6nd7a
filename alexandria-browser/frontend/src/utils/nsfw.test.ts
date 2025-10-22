@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { ArchiveSearchDoc } from "../types";
-import { applyNSFWModeToDocs, countHiddenByMode, shouldIncludeDoc } from "./nsfw";
+import { annotateDocs, applyNSFWModeToDocs, countHiddenByMode, shouldIncludeDoc } from "./nsfw";
+import { getNSFWMode } from "./nsfwMode";
 
 const SAMPLE_DOCS: ArchiveSearchDoc[] = [
   {
@@ -55,6 +56,47 @@ describe("NSFW filtering helpers", () => {
     expect(shouldIncludeDoc(mildDoc, "moderate")).toBe(true);
     expect(shouldIncludeDoc(mildDoc, "only")).toBe(true);
     expect(shouldIncludeDoc(safeDoc, "only")).toBe(false);
+  });
+
+  it("maps stored NSFW filter modes to user-facing labels", () => {
+    expect(getNSFWMode("safe")).toBe("safe");
+    expect(getNSFWMode("moderate")).toBe("moderate");
+    expect(getNSFWMode("off")).toBe("unrestricted");
+    expect(getNSFWMode("only")).toBe("only-nsfw");
+  });
+
+  it("avoids false positives when annotating safe documents", () => {
+    const [doc] = annotateDocs([
+      {
+        identifier: "apollo11",
+        title: "Apollo 11 Mission Reports",
+        description:
+          "NASA mission reports, technical documents, and debriefings chronicling the Apollo 11 lunar landing.",
+      },
+    ]);
+
+    expect(doc.nsfw ?? false).toBe(false);
+    expect(doc.nsfwMatches ?? []).toEqual([]);
+  });
+
+  it("identifies explicit language while keeping scientific terms clear", () => {
+    const docs = annotateDocs([
+      {
+        identifier: "climate-analysis",
+        title: "Climate Data Rescue",
+        description: "Datasets digitized for long-term climate analysis and reconstruction studies.",
+      },
+      {
+        identifier: "explicit",
+        title: "Example",
+        description: "Compilation of classic cumshot scenes with explicit commentary.",
+      },
+    ]);
+
+    expect(docs[0].nsfw ?? false).toBe(false);
+    expect(docs[0].nsfwMatches ?? []).toEqual([]);
+    expect(docs[1].nsfw).toBe(true);
+    expect(docs[1].nsfwMatches ?? []).toContain("cum");
   });
 });
 
