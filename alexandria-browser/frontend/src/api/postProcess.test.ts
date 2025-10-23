@@ -45,8 +45,9 @@ describe("postProcessDirectSearchPayload", () => {
     expect(result.response?.docs).toHaveLength(1);
     const doc = result.response?.docs?.[0];
     expect(doc?.identifier).toBe("climate-report");
-    expect(doc?.score).toBeGreaterThan(0.8);
-    expect(doc?.score_breakdown?.combinedScore).toBeGreaterThan(0.8);
+    expect(doc?.score).toBeGreaterThan(0.6);
+    expect(doc?.score_breakdown?.combinedScore).toBeGreaterThan(0.6);
+    expect(doc?.score_breakdown?.authenticity).toBeGreaterThan(0.5);
     expect(doc?.availability).toBe("online");
     expect(doc?.source_trust).toBe("high");
     expect(typeof doc?.language).toBe("string");

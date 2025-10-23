@@ -1895,8 +1895,8 @@ function App() {
             <select value={nsfwMode} onChange={(event) => handleChangeNSFWMode(event.target.value as NSFWFilterMode)}>
               <option value="safe">Safe</option>
               <option value="moderate">Moderate</option>
-              <option value="off">Unrestricted</option>
-              <option value="only">Only-NSFW</option>
+              <option value="off">No Restriction</option>
+              <option value="only">NSFW Only</option>
             </select>
           </label>
           <div className="year-filters">
