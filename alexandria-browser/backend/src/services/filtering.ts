@@ -12,6 +12,9 @@ export interface ArchiveSearchFiltersInput {
   sourceTrust?: string;
   nsfwMode?: string;
   availability?: string;
+  collection?: string;
+  uploader?: string;
+  subject?: string;
 }
 
 const COMMUNITY_LABELS = new Set(["community", "experimental", "low"]);
@@ -163,6 +166,64 @@ export function matchesAdvancedFilters(
   const nsfwMode = normalizeNsfwMode(filters.nsfwMode);
   if (nsfwMode && !matchesNsfwMode(record, nsfwMode)) {
     return false;
+  }
+
+  const buildTokenList = (raw: string | undefined): string[] =>
+    raw
+      ?.split(/[,\n]+/)
+      .map((entry) => entry.trim().toLowerCase())
+      .filter((entry) => entry.length > 0) ?? [];
+
+  const collectionFilterValues = buildTokenList(filters.collection);
+  if (collectionFilterValues.length > 0) {
+    const collectionCandidate = record.collection;
+    const collectionValues = Array.isArray(collectionCandidate)
+      ? collectionCandidate
+      : typeof collectionCandidate === "string"
+      ? [collectionCandidate]
+      : [];
+    const normalizedCollections = collectionValues
+      .map((entry) => (typeof entry === "string" ? entry.trim().toLowerCase() : ""))
+      .filter((entry) => entry.length > 0);
+    if (!collectionFilterValues.some((value) => normalizedCollections.includes(value))) {
+      return false;
+    }
+  }
+
+  const subjectFilterValues = buildTokenList(filters.subject);
+  if (subjectFilterValues.length > 0) {
+    const subjectCandidate =
+      (record as Record<string, unknown>).subject ?? (record as Record<string, unknown>).subjects;
+    const subjectValues = Array.isArray(subjectCandidate)
+      ? subjectCandidate
+      : typeof subjectCandidate === "string"
+      ? subjectCandidate.split(/[,;]+/)
+      : [];
+    const normalizedSubjects = subjectValues
+      .map((entry) => (typeof entry === "string" ? entry.trim().toLowerCase() : ""))
+      .filter((entry) => entry.length > 0);
+    if (!subjectFilterValues.some((value) => normalizedSubjects.includes(value))) {
+      return false;
+    }
+  }
+
+  const uploaderFilter = filters.uploader?.trim().toLowerCase();
+  if (uploaderFilter) {
+    const uploaderCandidate =
+      (record as Record<string, unknown>).uploader ??
+      (record as Record<string, unknown>).submitter ??
+      record.creator;
+    const uploaderValues = Array.isArray(uploaderCandidate)
+      ? uploaderCandidate
+      : uploaderCandidate
+      ? [uploaderCandidate]
+      : [];
+    const normalizedUploaders = uploaderValues
+      .map((entry) => (typeof entry === "string" ? entry.trim().toLowerCase() : ""))
+      .filter((entry) => entry.length > 0);
+    if (!normalizedUploaders.some((value) => value.includes(uploaderFilter))) {
+      return false;
+    }
   }
 
   return true;

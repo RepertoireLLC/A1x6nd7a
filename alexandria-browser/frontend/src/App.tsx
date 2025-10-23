@@ -39,6 +39,7 @@ import {
   loadBlacklist,
   saveBlacklist
 } from "./utils/storage";
+import { useDebouncedValue } from "./utils/hooks";
 import { isLikelyUrl, isYearValid, normalizeYear } from "./utils/validators";
 import type {
   ArchiveMetadataResponse,
@@ -154,6 +155,9 @@ interface NormalizedSearchFilters {
   language: string;
   sourceTrust: string;
   availability: string;
+  collection: string;
+  uploader: string;
+  subject: string;
   nsfwMode: NSFWFilterMode;
 }
 
@@ -164,9 +168,60 @@ interface SearchSessionCache {
   filters: NormalizedSearchFilters;
   aiEnabled: boolean;
   pages: Map<number, ArchiveSearchResponse>;
+  lastAccessed: number;
 }
 
 const MAX_CACHED_PAGES = 6;
+const MAX_SESSION_CACHE = 6;
+const DETAIL_CACHE_LIMIT = 24;
+const STATUS_CACHE_LIMIT = 120;
+const WAYBACK_CACHE_LIMIT = 80;
+
+const METADATA_CACHE_TTL = 10 * 60 * 1000;
+const TIMELINE_CACHE_TTL = 10 * 60 * 1000;
+const RELATED_CACHE_TTL = 5 * 60 * 1000;
+const STATUS_CACHE_TTL = 2 * 60 * 1000;
+const WAYBACK_CACHE_TTL = 5 * 60 * 1000;
+
+interface CachedMetadataEntry {
+  payload: ArchiveMetadataResponse;
+  timestamp: number;
+}
+
+interface CachedTimelineEntry {
+  payload: CdxResponse;
+  timestamp: number;
+}
+
+interface CachedRelatedEntry {
+  items: ScrapeItem[];
+  fallback: boolean;
+  timestamp: number;
+}
+
+interface CachedStatusEntry {
+  status: LinkStatus;
+  timestamp: number;
+}
+
+interface CachedWaybackEntry {
+  payload: WaybackAvailabilityResponse | null;
+  timestamp: number;
+}
+
+function pruneTimedCache<T extends { timestamp: number }>(cache: Map<string, T>, limit: number) {
+  if (cache.size <= limit) {
+    return;
+  }
+
+  const entries = Array.from(cache.entries()).sort((a, b) => a[1].timestamp - b[1].timestamp);
+  for (const [key] of entries) {
+    if (cache.size <= limit) {
+      break;
+    }
+    cache.delete(key);
+  }
+}
 
 function buildSearchCacheKey(
   query: string,
@@ -183,6 +238,9 @@ function buildSearchCacheKey(
     filters.language,
     filters.sourceTrust,
     filters.availability,
+    filters.collection,
+    filters.uploader,
+    filters.subject,
     filters.nsfwMode,
     aiEnabled ? "1" : "0"
   ].join("|");
@@ -225,6 +283,9 @@ function App() {
   const [language, setLanguage] = useState(() => settings.language);
   const [sourceTrust, setSourceTrust] = useState(() => settings.sourceTrust);
   const [availability, setAvailability] = useState(() => settings.availability);
+  const [collection, setCollection] = useState(() => settings.collection ?? "");
+  const [uploader, setUploader] = useState(() => settings.uploader ?? "");
+  const [subject, setSubject] = useState(() => settings.subject ?? "");
   const [statuses, setStatuses] = useState<Record<string, LinkStatus>>({});
   const [saveMeta, setSaveMeta] = useState<Record<string, SaveMeta>>({});
   const [suggestedQuery, setSuggestedQuery] = useState<string | null>(null);
@@ -292,6 +353,16 @@ function App() {
   const bootstrapped = useRef(false);
   const blacklistRef = useRef<string[]>(initialBlacklist.current);
   const searchSessionRef = useRef<SearchSessionCache | null>(null);
+  const searchCacheRef = useRef<Map<string, SearchSessionCache>>(new Map());
+  const metadataCacheRef = useRef<Map<string, CachedMetadataEntry>>(new Map());
+  const timelineCacheRef = useRef<Map<string, CachedTimelineEntry>>(new Map());
+  const relatedCacheRef = useRef<Map<string, CachedRelatedEntry>>(new Map());
+  const statusCacheRef = useRef<Map<string, CachedStatusEntry>>(new Map());
+  const waybackCacheRef = useRef<Map<string, CachedWaybackEntry>>(new Map());
+  const searchAbortRef = useRef<AbortController | null>(null);
+  const autoSearchReadyRef = useRef(settings.lastQuery ? false : true);
+  const lastAutoQueryRef = useRef<string | null>(null);
+  const debouncedQuery = useDebouncedValue(query, 350);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -311,6 +382,9 @@ function App() {
       language,
       sourceTrust,
       availability,
+      collection,
+      uploader,
+      subject,
       aiAssistantEnabled
     };
     saveSettings(settingsPayload);
@@ -326,8 +400,36 @@ function App() {
     language,
     sourceTrust,
     availability,
+    collection,
+    uploader,
+    subject,
     aiAssistantEnabled
   ]);
+
+  useEffect(() => {
+    const trimmed = debouncedQuery.trim();
+    if (!autoSearchReadyRef.current || isLoading || isLoadingMore) {
+      return;
+    }
+    if (!trimmed) {
+      lastAutoQueryRef.current = null;
+      return;
+    }
+    if (trimmed === (activeQuery ?? "")) {
+      lastAutoQueryRef.current = trimmed;
+      return;
+    }
+    if (trimmed === lastAutoQueryRef.current) {
+      return;
+    }
+
+    lastAutoQueryRef.current = trimmed;
+    void performSearch(trimmed, 1, {
+      recordHistory: false,
+      preferCache: true,
+      cancelOngoing: true,
+    });
+  }, [debouncedQuery, activeQuery, performSearch, isLoading, isLoadingMore]);
 
   useEffect(() => {
     saveHistory(history);
@@ -459,35 +561,69 @@ function App() {
     }
 
     let cancelled = false;
+    const now = Date.now();
+    const identifier = selectedDoc.identifier;
 
-    setMetadataState((previous) => ({ ...previous, loading: true, error: null }));
-    void fetchArchiveMetadata(selectedDoc.identifier).then((result) => {
-      if (cancelled) {
-        return;
-      }
-      if (result.ok) {
-        setMetadataState({ data: result.data, loading: false, error: null });
-      } else {
-        setMetadataState({ data: null, loading: false, error: result.error.message });
-      }
-    });
+    const cachedMetadata = metadataCacheRef.current.get(identifier);
+    const metadataFresh = cachedMetadata ? now - cachedMetadata.timestamp < METADATA_CACHE_TTL : false;
+    if (cachedMetadata) {
+      setMetadataState({ data: cachedMetadata.payload, loading: !metadataFresh, error: null });
+    } else {
+      setMetadataState({ data: null, loading: true, error: null });
+    }
+
+    if (!metadataFresh) {
+      void fetchArchiveMetadata(identifier).then((result) => {
+        if (cancelled) {
+          return;
+        }
+        if (result.ok) {
+          const entry: CachedMetadataEntry = { payload: result.data, timestamp: Date.now() };
+          metadataCacheRef.current.set(identifier, entry);
+          pruneTimedCache(metadataCacheRef.current, DETAIL_CACHE_LIMIT);
+          setMetadataState({ data: entry.payload, loading: false, error: null });
+        } else {
+          setMetadataState((previous) => ({
+            data: previous.data,
+            loading: false,
+            error: result.error.message,
+          }));
+        }
+      });
+    }
 
     const archiveUrl =
       selectedDoc.archive_url ??
       selectedDoc.links?.archive ??
-      `https://archive.org/details/${encodeURIComponent(selectedDoc.identifier)}`;
+      `https://archive.org/details/${encodeURIComponent(identifier)}`;
+    const timelineKey = archiveUrl;
+    const cachedTimeline = timelineCacheRef.current.get(timelineKey);
+    const timelineFresh = cachedTimeline ? now - cachedTimeline.timestamp < TIMELINE_CACHE_TTL : false;
+    if (cachedTimeline) {
+      setTimelineState({ data: cachedTimeline.payload, loading: !timelineFresh, error: null });
+    } else {
+      setTimelineState({ data: null, loading: true, error: null });
+    }
 
-    setTimelineState((previous) => ({ ...previous, loading: true, error: null }));
-    void fetchCdxSnapshots(archiveUrl, 80).then((result) => {
-      if (cancelled) {
-        return;
-      }
-      if (result.ok) {
-        setTimelineState({ data: result.data, loading: false, error: null });
-      } else {
-        setTimelineState({ data: null, loading: false, error: result.error.message });
-      }
-    });
+    if (!timelineFresh) {
+      void fetchCdxSnapshots(archiveUrl, 80).then((result) => {
+        if (cancelled) {
+          return;
+        }
+        if (result.ok) {
+          const entry: CachedTimelineEntry = { payload: result.data, timestamp: Date.now() };
+          timelineCacheRef.current.set(timelineKey, entry);
+          pruneTimedCache(timelineCacheRef.current, DETAIL_CACHE_LIMIT);
+          setTimelineState({ data: entry.payload, loading: false, error: null });
+        } else {
+          setTimelineState((previous) => ({
+            data: previous.data,
+            loading: false,
+            error: result.error.message,
+          }));
+        }
+      });
+    }
 
     const collections = Array.isArray(selectedDoc.collection)
       ? selectedDoc.collection
@@ -499,25 +635,47 @@ function App() {
       ? `collection:${primaryCollection}`
       : selectedDoc.mediatype
       ? `mediatype:(${selectedDoc.mediatype})`
-      : selectedDoc.title ?? selectedDoc.identifier;
+      : selectedDoc.title ?? identifier;
 
-    setRelatedError(null);
-    setRelatedFallback(false);
-    void scrapeArchive(query, 6).then((result) => {
-      if (cancelled) {
-        return;
-      }
-      if (result.ok) {
-        const filtered = result.data.items.filter((item) => item.identifier !== selectedDoc.identifier);
-        setRelatedItems(annotateScrapeItems(filtered));
-        setRelatedFallback(Boolean(result.data.fallback));
-        setRelatedError(null);
-      } else {
-        setRelatedItems([]);
-        setRelatedFallback(false);
-        setRelatedError(result.error.message);
-      }
-    });
+    const cachedRelated = relatedCacheRef.current.get(identifier);
+    const relatedFresh = cachedRelated ? now - cachedRelated.timestamp < RELATED_CACHE_TTL : false;
+    if (cachedRelated) {
+      setRelatedItems(cachedRelated.items);
+      setRelatedFallback(cachedRelated.fallback);
+      setRelatedError(null);
+    } else {
+      setRelatedItems([]);
+      setRelatedFallback(false);
+      setRelatedError(null);
+    }
+
+    if (!relatedFresh) {
+      void scrapeArchive(query, 6).then((result) => {
+        if (cancelled) {
+          return;
+        }
+        if (result.ok) {
+          const filtered = result.data.items.filter((item) => item.identifier !== identifier);
+          const annotated = annotateScrapeItems(filtered);
+          setRelatedItems(annotated);
+          const fallbackFlag = Boolean(result.data.fallback);
+          setRelatedFallback(fallbackFlag);
+          setRelatedError(null);
+          const entry: CachedRelatedEntry = { items: annotated, fallback: fallbackFlag, timestamp: Date.now() };
+          relatedCacheRef.current.set(identifier, entry);
+          pruneTimedCache(relatedCacheRef.current, DETAIL_CACHE_LIMIT);
+        } else {
+          if (cachedRelated) {
+            setRelatedItems(cachedRelated.items);
+            setRelatedFallback(cachedRelated.fallback);
+          } else {
+            setRelatedItems([]);
+            setRelatedFallback(false);
+          }
+          setRelatedError(result.error.message);
+        }
+      });
+    }
 
     return () => {
       cancelled = true;
@@ -615,7 +773,7 @@ function App() {
     async (
       searchQuery: string,
       pageNumber: number,
-      options?: { recordHistory?: boolean; rowsOverride?: number; preferCache?: boolean }
+      options?: { recordHistory?: boolean; rowsOverride?: number; preferCache?: boolean; cancelOngoing?: boolean }
     ): Promise<boolean> => {
       const rows = options?.rowsOverride ?? resultsPerPage;
       const safeQuery = searchQuery.trim();
@@ -640,6 +798,9 @@ function App() {
       const normalizedLanguage = language.trim();
       const normalizedSourceTrust = sourceTrust.trim();
       const normalizedAvailability = availability.trim();
+      const normalizedCollection = collection.trim();
+      const normalizedUploader = uploader.trim();
+      const normalizedSubject = subject.trim();
 
       const normalizedFilters: NormalizedSearchFilters = {
         mediaType,
@@ -648,17 +809,60 @@ function App() {
         language: normalizedLanguage,
         sourceTrust: normalizedSourceTrust,
         availability: normalizedAvailability,
+        collection: normalizedCollection,
+        uploader: normalizedUploader,
+        subject: normalizedSubject,
         nsfwMode
       };
 
       const cacheKey = buildSearchCacheKey(safeQuery, rows, normalizedFilters, aiAssistantEnabled);
-      const existingSession = searchSessionRef.current;
-      const sessionMatches = existingSession?.key === cacheKey;
-      const cachedPayload = sessionMatches ? existingSession.pages.get(pageNumber) : undefined;
+      const cacheMap = searchCacheRef.current;
+      const now = Date.now();
+      let session = cacheMap.get(cacheKey) ?? null;
+      const sessionMatches = session?.key === cacheKey;
+      const cachedPayload = sessionMatches ? session?.pages.get(pageNumber) : undefined;
+      const useCachedPayload = Boolean(preferCache && cachedPayload);
+      const shouldCancelOngoing = options?.cancelOngoing ?? isFirstPage;
+
+      const pruneSearchCache = () => {
+        if (cacheMap.size <= MAX_SESSION_CACHE) {
+          return;
+        }
+        const entries = [...cacheMap.values()].sort((a, b) => a.lastAccessed - b.lastAccessed);
+        while (cacheMap.size > MAX_SESSION_CACHE && entries.length > 0) {
+          const entry = entries.shift();
+          if (entry && entry.key !== cacheKey) {
+            cacheMap.delete(entry.key);
+          }
+        }
+      };
+
+      if (!sessionMatches || !session) {
+        session = {
+          key: cacheKey,
+          query: safeQuery,
+          rows,
+          filters: normalizedFilters,
+          aiEnabled: aiAssistantEnabled,
+          pages: session?.pages ?? new Map(),
+          lastAccessed: now
+        };
+      } else {
+        session.query = safeQuery;
+        session.rows = rows;
+        session.filters = normalizedFilters;
+        session.aiEnabled = aiAssistantEnabled;
+        session.lastAccessed = now;
+      }
+
+      searchSessionRef.current = session;
+      cacheMap.set(cacheKey, session);
+      pruneSearchCache();
 
       const handleFailure = (message: string) => {
         if (isFirstPage) {
           searchSessionRef.current = null;
+          cacheMap.delete(cacheKey);
           setError(message);
           setFallbackNotice(null);
           setResults([]);
@@ -694,42 +898,6 @@ function App() {
           setLoadMoreError(message);
         }
       };
-
-      if (preferCache && cachedPayload) {
-        setError(null);
-        setLoadMoreError(null);
-        setPage(pageNumber);
-        setHasSearched(true);
-        setLoadedPages((previous) => {
-          if (previous.includes(pageNumber)) {
-            return previous;
-          }
-          return [...previous, pageNumber].sort((a, b) => a - b);
-        });
-        const cachedDocs = cachedPayload.response?.docs;
-        const docCount = Array.isArray(cachedDocs) ? cachedDocs.length : 0;
-        const numFound = cachedPayload.response?.numFound ?? null;
-        const reachedLastPage =
-          docCount === 0 || (numFound !== null ? pageNumber * rows >= numFound : docCount < rows);
-        setReachedEnd(reachedLastPage);
-        return true;
-      }
-
-      if (!sessionMatches) {
-        searchSessionRef.current = {
-          key: cacheKey,
-          query: safeQuery,
-          rows,
-          filters: normalizedFilters,
-          aiEnabled: aiAssistantEnabled,
-          pages: new Map()
-        };
-      } else if (existingSession) {
-        existingSession.query = safeQuery;
-        existingSession.rows = rows;
-        existingSession.filters = normalizedFilters;
-        existingSession.aiEnabled = aiAssistantEnabled;
-      }
 
       if (isFirstPage) {
         setIsLoading(true);
@@ -789,6 +957,9 @@ function App() {
         language: normalizedLanguage,
         sourceTrust: normalizedSourceTrust,
         availability: normalizedAvailability,
+        collection: normalizedCollection,
+        uploader: normalizedUploader,
+        subject: normalizedSubject,
         nsfwMode
       };
 
@@ -800,15 +971,25 @@ function App() {
           throw new Error("The start year cannot be later than the end year.");
         }
 
-        const result = await searchArchive(
-          safeQuery,
-          pageNumber,
-          rows,
-          fetchFilters,
-          { aiMode: aiAssistantEnabled }
-        );
+        const abortController = useCachedPayload ? null : new AbortController();
+        if (!useCachedPayload && shouldCancelOngoing && searchAbortRef.current) {
+          searchAbortRef.current.abort();
+        }
+        if (!useCachedPayload && abortController) {
+          searchAbortRef.current = abortController;
+        }
+
+        const result = useCachedPayload
+          ? { ok: true as const, data: cachedPayload!, status: 200 }
+          : await searchArchive(safeQuery, pageNumber, rows, fetchFilters, {
+              aiMode: aiAssistantEnabled,
+              signal: abortController?.signal,
+            });
 
         if (!result.ok) {
+          if (result.error.type === "abort") {
+            return false;
+          }
           console.warn("Archive search failed", result.error);
           const message = result.error.message?.trim() || "Search request failed. Please try again later.";
           handleFailure(message);
@@ -819,18 +1000,22 @@ function App() {
 
         const session = searchSessionRef.current;
         if (session) {
-          session.pages.set(pageNumber, payload);
-          if (session.pages.size > MAX_CACHED_PAGES) {
-            const keys = [...session.pages.keys()].sort((a, b) => a - b);
-            for (const key of keys) {
-              if (session.pages.size <= MAX_CACHED_PAGES) {
-                break;
-              }
-              if (key !== pageNumber) {
-                session.pages.delete(key);
+          if (!useCachedPayload) {
+            session.pages.set(pageNumber, payload);
+            if (session.pages.size > MAX_CACHED_PAGES) {
+              const keys = [...session.pages.keys()].sort((a, b) => a - b);
+              for (const key of keys) {
+                if (session.pages.size <= MAX_CACHED_PAGES) {
+                  break;
+                }
+                if (key !== pageNumber) {
+                  session.pages.delete(key);
+                }
               }
             }
           }
+          session.lastAccessed = Date.now();
+          cacheMap.set(cacheKey, session);
         }
 
         if (aiAssistantEnabled) {
@@ -1047,33 +1232,74 @@ function App() {
           setWaybackDetails(null);
           setWaybackError(null);
         } else if (isFirstPage && isLikelyUrl(safeQuery)) {
-          setLiveStatus("checking");
-          setWaybackDetails(null);
-          setWaybackError(null);
-          const [statusResult, availabilityResult] = await Promise.all([
-            checkLinkStatus(safeQuery),
-            getWaybackAvailability(safeQuery)
-          ]);
+          const now = Date.now();
+          const statusEntry = statusCacheRef.current.get(safeQuery);
+          const statusFresh = statusEntry ? now - statusEntry.timestamp < STATUS_CACHE_TTL : false;
+          const availabilityEntry = waybackCacheRef.current.get(safeQuery);
+          const availabilityFresh = availabilityEntry ? now - availabilityEntry.timestamp < WAYBACK_CACHE_TTL : false;
 
-          let combinedError: string | null = null;
-
-          if (statusResult.ok) {
-            setLiveStatus(statusResult.data);
+          if (statusFresh) {
+            setLiveStatus(statusEntry.status);
           } else {
-            console.warn("Failed to check live status", statusResult.error);
-            setLiveStatus("offline");
-            combinedError = statusResult.error.message;
+            setLiveStatus("checking");
           }
 
-          if (availabilityResult.ok) {
-            setWaybackDetails(availabilityResult.data);
+          if (availabilityFresh) {
+            setWaybackDetails(availabilityEntry.payload);
           } else {
-            console.warn("Failed to load Wayback availability", availabilityResult.error);
             setWaybackDetails(null);
-            combinedError = combinedError ?? availabilityResult.error.message;
+          }
+          setWaybackError(null);
+
+          const errors: string[] = [];
+          const fetchTasks: Promise<void>[] = [];
+
+          if (!statusFresh) {
+            fetchTasks.push(
+              (async () => {
+                const statusResult = await checkLinkStatus(safeQuery);
+                if (statusResult.ok) {
+                  const entry: CachedStatusEntry = { status: statusResult.data, timestamp: Date.now() };
+                  statusCacheRef.current.set(safeQuery, entry);
+                  pruneTimedCache(statusCacheRef.current, STATUS_CACHE_LIMIT);
+                  setLiveStatus(entry.status);
+                } else {
+                  console.warn("Failed to check live status", statusResult.error);
+                  setLiveStatus("offline");
+                  if (statusResult.error.message) {
+                    errors.push(statusResult.error.message);
+                  }
+                }
+              })()
+            );
           }
 
-          setWaybackError(combinedError);
+          if (!availabilityFresh) {
+            fetchTasks.push(
+              (async () => {
+                const availabilityResult = await getWaybackAvailability(safeQuery);
+                if (availabilityResult.ok) {
+                  const entry: CachedWaybackEntry = { payload: availabilityResult.data, timestamp: Date.now() };
+                  waybackCacheRef.current.set(safeQuery, entry);
+                  pruneTimedCache(waybackCacheRef.current, WAYBACK_CACHE_LIMIT);
+                  setWaybackDetails(entry.payload);
+                } else {
+                  console.warn("Failed to load Wayback availability", availabilityResult.error);
+                  setWaybackDetails(null);
+                  if (availabilityResult.error.message) {
+                    errors.push(availabilityResult.error.message);
+                  }
+                }
+              })()
+            );
+          }
+
+          if (fetchTasks.length > 0) {
+            await Promise.all(fetchTasks);
+            setWaybackError(errors.length > 0 ? errors.join(" · ") : null);
+          } else {
+            setWaybackError(null);
+          }
         } else if (isFirstPage) {
           setLiveStatus(null);
           setWaybackDetails(null);
@@ -1103,6 +1329,9 @@ function App() {
         }
         handleFailure(message);
       } finally {
+        if (!useCachedPayload && searchAbortRef.current === abortController) {
+          searchAbortRef.current = null;
+        }
         if (isFirstPage) {
           setIsLoading(false);
         } else {
@@ -1110,7 +1339,7 @@ function App() {
         }
       }
 
-      return false;
+      return useCachedPayload;
     },
     [
       resultsPerPage,
@@ -1120,6 +1349,9 @@ function App() {
       language,
       sourceTrust,
       availability,
+      collection,
+      uploader,
+      subject,
       nsfwMode,
       aiAssistantEnabled
     ]
@@ -1341,43 +1573,107 @@ function App() {
 
   useEffect(() => {
     if (bootstrapped.current || !settings.lastQuery) {
+      if (!settings.lastQuery) {
+        autoSearchReadyRef.current = true;
+      }
       return;
     }
     bootstrapped.current = true;
     setActiveQuery(settings.lastQuery);
-    void performSearch(settings.lastQuery, 1, { recordHistory: false, rowsOverride: settings.resultsPerPage });
+    void performSearch(settings.lastQuery, 1, {
+      recordHistory: false,
+      rowsOverride: settings.resultsPerPage,
+    }).finally(() => {
+      autoSearchReadyRef.current = true;
+    });
   }, [performSearch, settings.lastQuery, settings.resultsPerPage]);
 
   useEffect(() => {
     if (filteredResults.length === 0 || fallbackNotice) {
       return;
     }
+
     let cancelled = false;
+    const now = Date.now();
+    const cachedUpdates: Array<[string, LinkStatus]> = [];
+    const pendingByUrl = new Map<string, string[]>();
+
+    for (const doc of filteredResults) {
+      const targetUrl =
+        doc.archive_url ??
+        doc.links?.archive ??
+        `https://archive.org/details/${encodeURIComponent(doc.identifier)}`;
+      const cacheEntry = statusCacheRef.current.get(targetUrl);
+      const fresh = cacheEntry ? now - cacheEntry.timestamp < STATUS_CACHE_TTL : false;
+
+      if (cacheEntry && fresh) {
+        cachedUpdates.push([doc.identifier, cacheEntry.status]);
+        continue;
+      }
+
+      const identifiers = pendingByUrl.get(targetUrl);
+      if (identifiers) {
+        identifiers.push(doc.identifier);
+      } else {
+        pendingByUrl.set(targetUrl, [doc.identifier]);
+      }
+    }
+
+    if (cachedUpdates.length > 0) {
+      setStatuses((previous) => {
+        const next = { ...previous };
+        for (const [identifier, status] of cachedUpdates) {
+          next[identifier] = status;
+        }
+        return next;
+      });
+    }
+
+    if (pendingByUrl.size === 0) {
+      return () => {
+        cancelled = true;
+      };
+    }
 
     const loadStatuses = async () => {
-      const pairs = await Promise.all(
-        filteredResults.map(async (doc) => {
-          const targetUrl =
-            doc.archive_url ??
-            doc.links?.archive ??
-            `https://archive.org/details/${encodeURIComponent(doc.identifier)}`;
+      const entries = Array.from(pendingByUrl.entries());
+      const results = await Promise.all(
+        entries.map(async ([targetUrl, identifiers]) => {
           const statusResult = await checkLinkStatus(targetUrl);
           if (statusResult.ok) {
-            return [doc.identifier, statusResult.data] as const;
+            const entry: CachedStatusEntry = { status: statusResult.data, timestamp: Date.now() };
+            statusCacheRef.current.set(targetUrl, entry);
+            pruneTimedCache(statusCacheRef.current, STATUS_CACHE_LIMIT);
+            return { identifiers, status: entry.status };
           }
+
           console.warn("Status check failed", statusResult.error);
-          return [doc.identifier, "offline"] as const;
+          return { identifiers, status: "offline" as LinkStatus };
         })
       );
-      if (!cancelled) {
-        setStatuses((previous) => {
-          const next = { ...previous };
-          for (const [identifier, status] of pairs) {
-            next[identifier] = status;
-          }
-          return next;
-        });
+
+      if (cancelled) {
+        return;
       }
+
+      const updates: Array<[string, LinkStatus]> = [];
+      for (const { identifiers, status } of results) {
+        for (const identifier of identifiers) {
+          updates.push([identifier, status]);
+        }
+      }
+
+      if (updates.length === 0) {
+        return;
+      }
+
+      setStatuses((previous) => {
+        const next = { ...previous };
+        for (const [identifier, status] of updates) {
+          next[identifier] = status;
+        }
+        return next;
+      });
     };
 
     void loadStatuses();
@@ -1493,6 +1789,18 @@ function App() {
 
   const handleYearToChange = (event: ChangeEvent<HTMLInputElement>) => {
     setYearTo(event.target.value);
+  };
+
+  const handleCollectionChange = (event: ChangeEvent<HTMLInputElement>) => {
+    setCollection(event.target.value);
+  };
+
+  const handleUploaderChange = (event: ChangeEvent<HTMLInputElement>) => {
+    setUploader(event.target.value);
+  };
+
+  const handleSubjectChange = (event: ChangeEvent<HTMLInputElement>) => {
+    setSubject(event.target.value);
   };
 
   const applyFilters = () => {
@@ -1738,6 +2046,9 @@ function App() {
     setLanguage(defaults.language);
     setSourceTrust(defaults.sourceTrust);
     setAvailability(defaults.availability);
+    setCollection(defaults.collection ?? "");
+    setUploader(defaults.uploader ?? "");
+    setSubject(defaults.subject ?? "");
     setPage(1);
     setError(null);
     setIsLoading(false);
@@ -1758,6 +2069,7 @@ function App() {
     setActiveQuery(null);
     setHasSearched(false);
     setHistoryIndex(-1);
+    autoSearchReadyRef.current = trimmedQuery ? false : true;
     setAiAssistantEnabled(Boolean(defaults.aiAssistantEnabled));
     setAiSummary(null);
     setAiSummaryStatus(defaults.aiAssistantEnabled ? "unavailable" : "disabled");
@@ -2003,6 +2315,33 @@ function App() {
             </select>
           </label>
           <label>
+            <span>Collection</span>
+            <input
+              type="text"
+              value={collection}
+              onChange={handleCollectionChange}
+              placeholder="e.g. nasa"
+            />
+          </label>
+          <label>
+            <span>Uploader</span>
+            <input
+              type="text"
+              value={uploader}
+              onChange={handleUploaderChange}
+              placeholder="Uploader handle"
+            />
+          </label>
+          <label>
+            <span>Subject tags</span>
+            <input
+              type="text"
+              value={subject}
+              onChange={handleSubjectChange}
+              placeholder="Comma-separated"
+            />
+          </label>
+          <label>
             <span>NSFW mode</span>
             <select value={nsfwMode} onChange={(event) => handleChangeNSFWMode(event.target.value as NSFWFilterMode)}>
               <option value="safe">Safe</option>
@@ -2055,7 +2394,9 @@ function App() {
         onToggleCollapse={() => setAiPanelCollapsed((previous) => !previous)}
       />
 
-      {liveStatus ? <LiveStatusCard url={activeQuery ?? query} status={liveStatus} /> : null}
+      {liveStatus ? (
+        <LiveStatusCard url={activeQuery ?? query} status={liveStatus} wayback={waybackDetails} />
+      ) : null}
       {waybackDetails || waybackError ? (
         <WaybackAvailabilityCard url={activeQuery ?? query} payload={waybackDetails} error={waybackError} />
       ) : null}

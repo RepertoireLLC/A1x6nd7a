@@ -46,6 +46,9 @@ export const DEFAULT_SETTINGS: StoredSettings = {
   language: "",
   sourceTrust: "any",
   availability: "any",
+  collection: "",
+  uploader: "",
+  subject: "",
   aiAssistantEnabled: false
 };
 
@@ -114,7 +117,10 @@ export function saveSettings(settings: StoredSettings) {
     nsfwMode,
     filterNSFW: nsfwMode !== "off",
     nsfwAcknowledged,
-    aiAssistantEnabled: Boolean(settings.aiAssistantEnabled)
+    aiAssistantEnabled: Boolean(settings.aiAssistantEnabled),
+    collection: settings.collection ?? "",
+    uploader: settings.uploader ?? "",
+    subject: settings.subject ?? ""
   });
 }
 
