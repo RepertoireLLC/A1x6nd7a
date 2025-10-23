@@ -43,6 +43,7 @@ import { isLikelyUrl, isYearValid, normalizeYear } from "./utils/validators";
 import type {
   ArchiveMetadataResponse,
   ArchiveSearchDoc,
+  ArchiveSearchResponse,
   BookmarkEntry,
   CdxResponse,
   LinkStatus,
@@ -145,6 +146,47 @@ const DEFAULT_SAVE_META: SaveMeta = {
   message: null,
   tone: "info"
 };
+
+interface NormalizedSearchFilters {
+  mediaType: string;
+  yearFrom: string;
+  yearTo: string;
+  language: string;
+  sourceTrust: string;
+  availability: string;
+  nsfwMode: NSFWFilterMode;
+}
+
+interface SearchSessionCache {
+  key: string;
+  query: string;
+  rows: number;
+  filters: NormalizedSearchFilters;
+  aiEnabled: boolean;
+  pages: Map<number, ArchiveSearchResponse>;
+}
+
+const MAX_CACHED_PAGES = 6;
+
+function buildSearchCacheKey(
+  query: string,
+  rows: number,
+  filters: NormalizedSearchFilters,
+  aiEnabled: boolean
+): string {
+  return [
+    query.toLowerCase(),
+    rows,
+    filters.mediaType,
+    filters.yearFrom,
+    filters.yearTo,
+    filters.language,
+    filters.sourceTrust,
+    filters.availability,
+    filters.nsfwMode,
+    aiEnabled ? "1" : "0"
+  ].join("|");
+}
 
 /**
  * Alexandria Browser root application component orchestrating layout and data fetching.
@@ -249,6 +291,7 @@ function App() {
   const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
   const bootstrapped = useRef(false);
   const blacklistRef = useRef<string[]>(initialBlacklist.current);
+  const searchSessionRef = useRef<SearchSessionCache | null>(null);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -531,29 +574,56 @@ function App() {
       if (!container) {
         return;
       }
-      const targetIndex = (pageNumber - 1) * resultsPerPage;
-      if (targetIndex <= 0) {
-        container.scrollTo({ top: 0, behavior: "smooth" });
-        return;
-      }
-      const targetElement = container.querySelector<HTMLElement>(`[data-result-index="${targetIndex}"]`);
-      if (targetElement) {
-        const containerRect = container.getBoundingClientRect();
-        const elementRect = targetElement.getBoundingClientRect();
-        const offset = elementRect.top - containerRect.top + container.scrollTop;
-        container.scrollTo({ top: offset, behavior: "smooth" });
-      } else {
+
+      const targetIndex = Math.max(0, (pageNumber - 1) * resultsPerPage);
+
+      const attemptScroll = (attempt = 0) => {
+        if (targetIndex === 0) {
+          container.scrollTo({ top: 0, behavior: "smooth" });
+          return;
+        }
+
+        const targetElement = container.querySelector<HTMLElement>(
+          `[data-result-index="${targetIndex}"]`
+        );
+
+        if (targetElement) {
+          const containerRect = container.getBoundingClientRect();
+          const elementRect = targetElement.getBoundingClientRect();
+          const offset = elementRect.top - containerRect.top + container.scrollTop;
+          container.scrollTo({ top: offset, behavior: "smooth" });
+          return;
+        }
+
+        if (attempt < 3) {
+          if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+            window.requestAnimationFrame(() => attemptScroll(attempt + 1));
+          } else {
+            setTimeout(() => attemptScroll(attempt + 1), 16);
+          }
+          return;
+        }
+
         container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
-      }
+      };
+
+      attemptScroll();
     },
     [resultsPerPage]
   );
 
   const performSearch = useCallback(
-    async (searchQuery: string, pageNumber: number, options?: { recordHistory?: boolean; rowsOverride?: number }) => {
+    async (
+      searchQuery: string,
+      pageNumber: number,
+      options?: { recordHistory?: boolean; rowsOverride?: number; preferCache?: boolean }
+    ): Promise<boolean> => {
       const rows = options?.rowsOverride ?? resultsPerPage;
       const safeQuery = searchQuery.trim();
       const isFirstPage = pageNumber === 1;
+      const shouldRecordHistory = options?.recordHistory ?? true;
+      const preferCache = options?.preferCache ?? false;
+
       if (!safeQuery) {
         if (isFirstPage) {
           setError("Please enter a search query.");
@@ -563,7 +633,103 @@ function App() {
         } else {
           setLoadMoreError("Please enter a search query.");
         }
-        return;
+        return false;
+      }
+
+      const normalizedYearFrom = normalizeYear(yearFrom);
+      const normalizedYearTo = normalizeYear(yearTo);
+      const normalizedLanguage = language.trim();
+      const normalizedSourceTrust = sourceTrust.trim();
+      const normalizedAvailability = availability.trim();
+
+      const normalizedFilters: NormalizedSearchFilters = {
+        mediaType,
+        yearFrom: normalizedYearFrom,
+        yearTo: normalizedYearTo,
+        language: normalizedLanguage,
+        sourceTrust: normalizedSourceTrust,
+        availability: normalizedAvailability,
+        nsfwMode
+      };
+
+      const cacheKey = buildSearchCacheKey(safeQuery, rows, normalizedFilters, aiAssistantEnabled);
+      const existingSession = searchSessionRef.current;
+      const sessionMatches = existingSession?.key === cacheKey;
+      const cachedPayload = sessionMatches ? existingSession.pages.get(pageNumber) : undefined;
+
+      const handleFailure = (message: string) => {
+        if (isFirstPage) {
+          searchSessionRef.current = null;
+          setError(message);
+          setFallbackNotice(null);
+          setResults([]);
+          setTotalResults(null);
+          setTotalPages(null);
+          setPage(1);
+          setStatuses({});
+          setSaveMeta({});
+          setSuggestedQuery(null);
+          setSuggestionCorrections([]);
+          setLiveStatus(null);
+          setAlternateSuggestions([]);
+          setFilterNotice(null);
+          setLoadedPages([]);
+          setReachedEnd(true);
+          if (aiAssistantEnabled) {
+            setAiSummary(null);
+            setAiSummaryStatus("error");
+            setAiSummaryError(message);
+            setAiSummaryNotice(null);
+            setAiSummarySource(null);
+            setAiAvailability("error");
+            setAiChatError(message);
+          } else {
+            setAiSummary(null);
+            setAiSummaryStatus("disabled");
+            setAiSummaryError(null);
+            setAiSummaryNotice(null);
+            setAiSummarySource(null);
+            setAiAvailability("disabled");
+          }
+        } else {
+          setLoadMoreError(message);
+        }
+      };
+
+      if (preferCache && cachedPayload) {
+        setError(null);
+        setLoadMoreError(null);
+        setPage(pageNumber);
+        setHasSearched(true);
+        setLoadedPages((previous) => {
+          if (previous.includes(pageNumber)) {
+            return previous;
+          }
+          return [...previous, pageNumber].sort((a, b) => a - b);
+        });
+        const cachedDocs = cachedPayload.response?.docs;
+        const docCount = Array.isArray(cachedDocs) ? cachedDocs.length : 0;
+        const numFound = cachedPayload.response?.numFound ?? null;
+        const reachedLastPage =
+          docCount === 0 || (numFound !== null ? pageNumber * rows >= numFound : docCount < rows);
+        setReachedEnd(reachedLastPage);
+        return true;
+      }
+
+      if (!sessionMatches) {
+        searchSessionRef.current = {
+          key: cacheKey,
+          query: safeQuery,
+          rows,
+          filters: normalizedFilters,
+          aiEnabled: aiAssistantEnabled,
+          pages: new Map()
+        };
+      } else if (existingSession) {
+        existingSession.query = safeQuery;
+        existingSession.rows = rows;
+        existingSession.filters = normalizedFilters;
+        existingSession.aiEnabled = aiAssistantEnabled;
       }
 
       if (isFirstPage) {
@@ -617,11 +783,15 @@ function App() {
       setAiDocHelperMessage(null);
       setAiDocHelperError(null);
 
-      const normalizedYearFrom = normalizeYear(yearFrom);
-      const normalizedYearTo = normalizeYear(yearTo);
-      const normalizedLanguage = language.trim();
-      const normalizedSourceTrust = sourceTrust.trim();
-      const normalizedAvailability = availability.trim();
+      const fetchFilters = {
+        mediaType,
+        yearFrom: normalizedYearFrom,
+        yearTo: normalizedYearTo,
+        language: normalizedLanguage,
+        sourceTrust: normalizedSourceTrust,
+        availability: normalizedAvailability,
+        nsfwMode
+      };
 
       try {
         if (!isYearValid(yearFrom) || !isYearValid(yearTo)) {
@@ -635,60 +805,34 @@ function App() {
           safeQuery,
           pageNumber,
           rows,
-          {
-            mediaType,
-            yearFrom: normalizedYearFrom,
-            yearTo: normalizedYearTo,
-            language: normalizedLanguage,
-            sourceTrust: normalizedSourceTrust,
-            availability: normalizedAvailability,
-            nsfwMode
-          },
+          fetchFilters,
           { aiMode: aiAssistantEnabled }
         );
 
         if (!result.ok) {
           console.warn("Archive search failed", result.error);
           const message = result.error.message?.trim() || "Search request failed. Please try again later.";
-          if (isFirstPage) {
-            setError(message);
-            setFallbackNotice(null);
-            setResults([]);
-            setTotalResults(null);
-            setTotalPages(null);
-            setPage(1);
-            setStatuses({});
-            setSaveMeta({});
-            setSuggestedQuery(null);
-            setSuggestionCorrections([]);
-            setAlternateSuggestions([]);
-            setFilterNotice(null);
-            setLiveStatus(null);
-            setLoadedPages([]);
-            setReachedEnd(true);
-            if (aiAssistantEnabled) {
-              setAiSummary(null);
-              setAiSummaryStatus("error");
-              setAiSummaryError(message);
-              setAiSummaryNotice(null);
-              setAiSummarySource(null);
-              setAiAvailability("error");
-              setAiChatError(message);
-            } else {
-              setAiSummary(null);
-              setAiSummaryStatus("disabled");
-              setAiSummaryError(null);
-              setAiSummaryNotice(null);
-              setAiSummarySource(null);
-              setAiAvailability("disabled");
-            }
-          } else {
-            setLoadMoreError(message);
-          }
-          return;
+          handleFailure(message);
+          return false;
         }
 
         const payload = result.data;
+
+        const session = searchSessionRef.current;
+        if (session) {
+          session.pages.set(pageNumber, payload);
+          if (session.pages.size > MAX_CACHED_PAGES) {
+            const keys = [...session.pages.keys()].sort((a, b) => a - b);
+            for (const key of keys) {
+              if (session.pages.size <= MAX_CACHED_PAGES) {
+                break;
+              }
+              if (key !== pageNumber) {
+                session.pages.delete(key);
+              }
+            }
+          }
+        }
 
         if (aiAssistantEnabled) {
           const hasStatusField = Object.prototype.hasOwnProperty.call(payload, "ai_summary_status");
@@ -887,7 +1031,7 @@ function App() {
           setSuggestionCorrections([]);
         }
 
-        if (options?.recordHistory ?? true) {
+        if (shouldRecordHistory) {
           setHistory((previous) => {
             const entry: SearchHistoryEntry = { query: safeQuery, timestamp: Date.now() };
             return [entry, ...previous.filter((item) => item.query !== safeQuery)].slice(0, 50);
@@ -958,38 +1102,7 @@ function App() {
         if (!message || !message.trim()) {
           message = fallbackMessage;
         }
-        if (isFirstPage) {
-          setError(message);
-          setFallbackNotice(null);
-          setResults([]);
-          setTotalResults(null);
-          setTotalPages(null);
-          setPage(1);
-          setStatuses({});
-          setSaveMeta({});
-          setSuggestedQuery(null);
-          setSuggestionCorrections([]);
-          setLiveStatus(null);
-          setAlternateSuggestions([]);
-          setFilterNotice(null);
-          setLoadedPages([]);
-          setReachedEnd(true);
-          if (aiAssistantEnabled) {
-            setAiSummary(null);
-            setAiSummaryStatus("error");
-            setAiSummaryError(message);
-            setAiSummaryNotice(null);
-            setAiSummarySource(null);
-          } else {
-            setAiSummary(null);
-            setAiSummaryStatus("disabled");
-            setAiSummaryError(null);
-            setAiSummaryNotice(null);
-            setAiSummarySource(null);
-          }
-        } else {
-          setLoadMoreError(message);
-        }
+        handleFailure(message);
       } finally {
         if (isFirstPage) {
           setIsLoading(false);
@@ -997,6 +1110,8 @@ function App() {
           setIsLoadingMore(false);
         }
       }
+
+      return false;
     },
     [
       resultsPerPage,
@@ -1299,12 +1414,8 @@ function App() {
     if (totalPages !== null && nextPage > totalPages) {
       return;
     }
-    if (direction === "next" && nextPage > highestLoadedPage) {
-      await performSearch(activeQuery, nextPage, { recordHistory: false });
-      scrollToPage(nextPage);
-      return;
-    }
-    setPage(nextPage);
+
+    await performSearch(activeQuery, nextPage, { recordHistory: false, preferCache: true });
     scrollToPage(nextPage);
   };
 
@@ -1602,6 +1713,7 @@ function App() {
     setAiSummaryNotice(null);
     setAiSummarySource(null);
     setAiPanelCollapsed(false);
+    searchSessionRef.current = null;
   };
 
   const clearHistory = () => {
@@ -1662,6 +1774,7 @@ function App() {
     setAiDocHelperStatus(defaults.aiAssistantEnabled ? "idle" : "disabled");
     setAiDocHelperMessage(null);
     setAiDocHelperError(null);
+    searchSessionRef.current = null;
   };
 
   const handleToggleAiAssistant = (enabled: boolean) => {
