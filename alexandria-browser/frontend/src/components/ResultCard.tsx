@@ -17,6 +17,7 @@ interface ResultCardProps {
   saveState: string | null;
   saveTone?: "success" | "error" | "info";
   snapshotUrl?: string;
+  position?: number;
 }
 
 /**
@@ -35,7 +36,8 @@ export function ResultCard({
   saveDisabled,
   saveState,
   saveTone,
-  snapshotUrl
+  snapshotUrl,
+  position
 }: ResultCardProps) {
   const { archiveUrl, waybackUrl, originalUrl } = resolveDocLinks(doc);
   const description = getDescription(doc.description);
@@ -74,6 +76,7 @@ export function ResultCard({
       className={cardClasses.join(" ")}
       data-nsfw-label={nsfwBadge}
       data-nsfw-severity={severity ?? undefined}
+      data-result-index={typeof position === "number" ? position : undefined}
     >
       <div className={`result-body${shouldBlur ? " result-body-blurred" : ""}`}>
         <div className="result-header">
