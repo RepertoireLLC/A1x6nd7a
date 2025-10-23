@@ -526,25 +526,39 @@ function App() {
   );
 
   const scrollToPage = useCallback(
-    (pageNumber: number) => {
+    (pageNumber: number, attempt = 0) => {
       const container = resultsContainerRef.current;
       if (!container) {
         return;
       }
+
       const targetIndex = (pageNumber - 1) * resultsPerPage;
       if (targetIndex <= 0) {
         container.scrollTo({ top: 0, behavior: "smooth" });
         return;
       }
+
       const targetElement = container.querySelector<HTMLElement>(`[data-result-index="${targetIndex}"]`);
       if (targetElement) {
         const containerRect = container.getBoundingClientRect();
         const elementRect = targetElement.getBoundingClientRect();
         const offset = elementRect.top - containerRect.top + container.scrollTop;
         container.scrollTo({ top: offset, behavior: "smooth" });
-      } else {
-        container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+        return;
       }
+
+      if (attempt < 5) {
+        const schedule =
+          typeof window !== "undefined" && typeof window.setTimeout === "function"
+            ? window.setTimeout.bind(window)
+            : setTimeout;
+        schedule(() => {
+          scrollToPage(pageNumber, attempt + 1);
+        }, 50);
+        return;
+      }
+
+      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
     },
     [resultsPerPage]
   );
