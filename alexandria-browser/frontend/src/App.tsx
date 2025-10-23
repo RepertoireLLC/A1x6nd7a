@@ -1240,6 +1240,25 @@ function App() {
     void performSearch(settings.lastQuery, 1, { recordHistory: false, rowsOverride: settings.resultsPerPage });
   }, [performSearch, settings.lastQuery, settings.resultsPerPage]);
 
+  const handleLoadMore = useCallback(async () => {
+    if (!activeQuery || isLoading || isLoadingMore || !hasMoreResults) {
+      return;
+    }
+    const nextPage = highestLoadedPage > 0 ? highestLoadedPage + 1 : 1;
+    if (totalPages !== null && nextPage > totalPages) {
+      return;
+    }
+    await performSearch(activeQuery, nextPage, { recordHistory: false });
+  }, [
+    activeQuery,
+    isLoading,
+    isLoadingMore,
+    hasMoreResults,
+    highestLoadedPage,
+    totalPages,
+    performSearch
+  ]);
+
   useEffect(() => {
     const sentinel = loadMoreSentinelRef.current;
     const container = resultsContainerRef.current;
@@ -1336,25 +1355,6 @@ function App() {
     setPage(nextPage);
     scrollToPage(nextPage);
   };
-
-  const handleLoadMore = useCallback(async () => {
-    if (!activeQuery || isLoading || isLoadingMore || !hasMoreResults) {
-      return;
-    }
-    const nextPage = highestLoadedPage > 0 ? highestLoadedPage + 1 : 1;
-    if (totalPages !== null && nextPage > totalPages) {
-      return;
-    }
-    await performSearch(activeQuery, nextPage, { recordHistory: false });
-  }, [
-    activeQuery,
-    isLoading,
-    isLoadingMore,
-    hasMoreResults,
-    highestLoadedPage,
-    totalPages,
-    performSearch
-  ]);
 
   const handleResultsPerPageChange = (event: ChangeEvent<HTMLSelectElement>) => {
     const value = Number(event.target.value);
