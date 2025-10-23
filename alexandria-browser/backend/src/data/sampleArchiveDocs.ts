@@ -6,7 +6,9 @@ export interface SampleArchiveDoc {
   year?: string;
   date?: string;
   publicdate?: string;
+  subject?: string | string[];
   creator?: string | string[];
+  uploader?: string | string[];
   collection?: string | string[];
   links?: {
     archive: string;

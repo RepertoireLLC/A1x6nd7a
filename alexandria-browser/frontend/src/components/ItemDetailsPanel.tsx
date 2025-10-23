@@ -1,7 +1,10 @@
+import { useEffect, useMemo, useState } from "react";
+
 import type {
   ArchiveMetadataResponse,
   ArchiveSearchDoc,
   CdxResponse,
+  CdxSnapshot,
   ScrapeItem,
   AIDocumentHelperStatus
 } from "../types";
@@ -9,6 +12,7 @@ import { getDescription, getYearOrDate, mediaIcon } from "../utils/format";
 import { SnapshotTimeline } from "./SnapshotTimeline";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { StatusBanner } from "./StatusBanner";
+import { WaybackPreview } from "./WaybackPreview";
 
 interface ItemDetailsPanelProps {
   doc: ArchiveSearchDoc;
@@ -106,6 +110,25 @@ export function ItemDetailsPanel({
   const originalUrl = rawOriginal && rawOriginal !== archiveUrl ? rawOriginal : null;
   const description = getDescription(doc.description);
   const yearOrDate = getYearOrDate(doc);
+  const snapshots = useMemo(() => timeline?.snapshots ?? [], [timeline]);
+  const sortedSnapshots = useMemo(
+    () => snapshots.slice().sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1)),
+    [snapshots]
+  );
+  const [activeSnapshot, setActiveSnapshot] = useState<CdxSnapshot | null>(null);
+
+  useEffect(() => {
+    if (sortedSnapshots.length === 0) {
+      setActiveSnapshot(null);
+      return;
+    }
+    setActiveSnapshot((previous) => {
+      if (previous && sortedSnapshots.some((snapshot) => snapshot.timestamp === previous.timestamp)) {
+        return previous;
+      }
+      return sortedSnapshots[sortedSnapshots.length - 1];
+    });
+  }, [sortedSnapshots]);
 
   return (
     <aside className="item-details" aria-live="polite">
@@ -159,10 +182,21 @@ export function ItemDetailsPanel({
       <section className="item-details-section">
         <h3>Snapshot Timeline</h3>
         <SnapshotTimeline
-          snapshots={timeline?.snapshots ?? []}
+          snapshots={snapshots}
           isLoading={timelineLoading}
           error={timelineError}
           isFallback={Boolean(timeline?.fallback)}
+          selectedTimestamp={activeSnapshot?.timestamp ?? null}
+          onSelectSnapshot={(snapshot) => setActiveSnapshot(snapshot)}
+        />
+      </section>
+
+      <section className="item-details-section">
+        <h3>Archived Preview</h3>
+        <WaybackPreview
+          snapshot={activeSnapshot}
+          loading={timelineLoading}
+          fallbackUrl={waybackUrl}
         />
       </section>
 

@@ -142,7 +142,7 @@ export interface ApiErrorInfo {
   message: string;
   status?: number;
   details?: string;
-  type?: "network" | "invalid-response" | "server";
+  type?: "network" | "invalid-response" | "server" | "abort";
 }
 
 export type ApiResult<T> =
@@ -219,6 +219,13 @@ async function safeJsonFetch<T>(
   try {
     response = await fetch(input, init);
   } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      return createApiError("Request cancelled.", {
+        details: "The request was aborted before completion.",
+        type: "abort",
+      });
+    }
+
     const details = error instanceof Error ? error.message : String(error);
     return createApiError("Unable to reach the Alexandria service. Please check your connection and try again.", {
       details,
@@ -353,6 +360,9 @@ function buildFilterExpressions(filters: SearchFilters, includeFilters: boolean)
   const yearFromValue = filters.yearFrom?.trim() ?? "";
   const yearToValue = filters.yearTo?.trim() ?? "";
   const languageValue = filters.language?.trim() ?? "";
+  const collectionValue = filters.collection?.trim() ?? "";
+  const uploaderValue = filters.uploader?.trim() ?? "";
+  const subjectValue = filters.subject?.trim() ?? "";
 
   if (mediaTypeValue && mediaTypeValue !== "all") {
     expressions.push(`mediatype:(${mediaTypeValue})`);
@@ -373,6 +383,39 @@ function buildFilterExpressions(filters: SearchFilters, includeFilters: boolean)
       const clause = tokens.map((token) => `"${token.replace(/"/g, '\\"')}"`).join(" OR ");
       expressions.push(`language:(${clause})`);
     }
+  }
+
+  const buildClause = (rawValue: string, field: string): string | null => {
+    if (!rawValue) {
+      return null;
+    }
+    const tokens = rawValue
+      .split(/[,\n]+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length > 0)
+      .map((token) => `"${token.replace(/"/g, '\\"')}"`);
+    if (tokens.length === 0) {
+      return null;
+    }
+    if (tokens.length === 1) {
+      return `${field}:(${tokens[0]})`;
+    }
+    return `${field}:(` + tokens.join(" OR ") + ")";
+  };
+
+  const collectionClause = buildClause(collectionValue, "collection");
+  if (collectionClause) {
+    expressions.push(collectionClause);
+  }
+
+  const uploaderClause = buildClause(uploaderValue, "uploader");
+  if (uploaderClause) {
+    expressions.push(uploaderClause);
+  }
+
+  const subjectClause = buildClause(subjectValue, "subject");
+  if (subjectClause) {
+    expressions.push(subjectClause);
   }
 
   return expressions;
@@ -430,6 +473,9 @@ function buildDirectArchiveSearchAttempts(
     sourceTrust: filters.sourceTrust.trim(),
     availability: filters.availability.trim(),
     nsfwMode: filters.nsfwMode,
+    collection: filters.collection?.trim() ?? "",
+    uploader: filters.uploader?.trim() ?? "",
+    subject: filters.subject?.trim() ?? "",
   };
 
   const createAttempt = (
@@ -451,6 +497,9 @@ function buildDirectArchiveSearchAttempts(
     sourceTrust: "",
     availability: "",
     nsfwMode: filters.nsfwMode,
+    collection: "",
+    uploader: "",
+    subject: "",
   };
 
   const attempts: DirectArchiveSearchAttempt[] = [
@@ -610,7 +659,7 @@ export async function searchArchive(
   page: number,
   rows: number,
   filters: SearchFilters,
-  options?: { aiMode?: boolean }
+  options?: { aiMode?: boolean; signal?: AbortSignal }
 ): Promise<ApiResult<ArchiveSearchResponse>> {
   const sanitizedQuery = query.trim();
   if (!sanitizedQuery) {
@@ -645,6 +694,15 @@ export async function searchArchive(
   if (filters.nsfwMode) {
     url.searchParams.set("nsfwMode", filters.nsfwMode);
   }
+  if (filters.collection?.trim()) {
+    url.searchParams.set("collection", filters.collection.trim());
+  }
+  if (filters.uploader?.trim()) {
+    url.searchParams.set("uploader", filters.uploader.trim());
+  }
+  if (filters.subject?.trim()) {
+    url.searchParams.set("subject", filters.subject.trim());
+  }
   if (options?.aiMode) {
     url.searchParams.set("ai", "1");
   }
@@ -653,9 +711,13 @@ export async function searchArchive(
 
   const requestResult = await safeJsonFetch<ArchiveSearchResponse>(
     url.toString(),
-    { headers: { Accept: "application/json" } },
+    { headers: { Accept: "application/json" }, signal: options?.signal },
     "Search request failed."
   );
+
+  if (!requestResult.ok && requestResult.error.type === "abort") {
+    return requestResult;
+  }
 
   if (requestResult.ok) {
     const payload = requestResult.data;
@@ -698,6 +760,9 @@ export async function searchArchive(
       sourceTrust: filters.sourceTrust.trim(),
       availability: filters.availability.trim(),
       nsfwMode: filters.nsfwMode,
+      collection: filters.collection?.trim(),
+      uploader: filters.uploader?.trim(),
+      subject: filters.subject?.trim(),
     };
     const { payload } = await executeDirectArchiveSearch(sanitizedQuery, page, rows, directFilters);
     return { ok: true, data: payload, status: 200 };

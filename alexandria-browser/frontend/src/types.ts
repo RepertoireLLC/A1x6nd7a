@@ -222,6 +222,9 @@ export interface StoredSettings {
   language: string;
   sourceTrust: string;
   availability: string;
+  collection?: string;
+  uploader?: string;
+  subject?: string;
   aiAssistantEnabled?: boolean;
 }
 
@@ -232,6 +235,9 @@ export interface SearchFilters {
   language: string;
   sourceTrust: string;
   availability: string;
+  collection?: string;
+  uploader?: string;
+  subject?: string;
   nsfwMode: NSFWFilterMode;
 }
 
