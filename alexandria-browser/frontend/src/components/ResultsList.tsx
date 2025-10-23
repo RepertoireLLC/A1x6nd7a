@@ -90,8 +90,12 @@ export function ResultsList({
     );
   }
 
-  const startIndex = results.length === 0 ? 0 : 1;
-  const endIndex = results.length;
+  const availableCount = results.length;
+  const pageStartIndex = Math.max(0, (page - 1) * resultsPerPage);
+  const startIndex = availableCount === 0 ? 0 : Math.min(pageStartIndex + 1, availableCount);
+  const endIndex = availableCount === 0
+    ? 0
+    : Math.min(pageStartIndex + resultsPerPage, availableCount);
   const loadedSummary = loadedPages && loadedPages > 0 ? `Loaded ${loadedPages} page${loadedPages === 1 ? "" : "s"}` : null;
 
   return (
