@@ -18,11 +18,9 @@ describe("resultScoring", () => {
 
     const analysis = scoreArchiveRecord(record, "climate change research");
 
-    expect(analysis.breakdown.keywordRelevance).toBe(1);
-    expect(analysis.breakdown.semanticRelevance).toBe(1);
-    expect(analysis.breakdown.documentQuality).toBe(1);
-    expect(analysis.breakdown.popularityScore).toBe(1);
-    expect(analysis.breakdown.combinedScore).toBe(1);
+    expect(analysis.breakdown.authenticity).toBeGreaterThan(0.6);
+    expect(analysis.breakdown.relevance).toBeGreaterThan(0.7);
+    expect(analysis.breakdown.combinedScore).toBeGreaterThan(0.65);
     expect(analysis.availability).toBe("online");
     expect(analysis.trustLevel).toBe("high");
   });
@@ -37,9 +35,31 @@ describe("resultScoring", () => {
 
     const analysis = scoreArchiveRecord(record, "climate change research");
 
-    expect(analysis.breakdown.keywordRelevance).toBeLessThan(1);
-    expect(analysis.breakdown.semanticRelevance).toBeLessThan(1);
+    expect(analysis.breakdown.relevance).toBeLessThan(0.6);
     expect(analysis.breakdown.combinedScore).toBeLessThan(0.6);
     expect(analysis.trustLevel).toBe("low");
+  });
+
+  it("boosts metadata relevance for media-type specific queries", () => {
+    const imageRecord: Record<string, unknown> = {
+      identifier: "observatory_plate_42",
+      title: "Plate 42",
+      mediatype: "image",
+      subject: ["observatory", "nebula", "telescope"],
+      collection: ["smithsonian"],
+    };
+
+    const textRecord: Record<string, unknown> = {
+      identifier: "observatory_notes",
+      title: "Plate 42 notes",
+      mediatype: "texts",
+      subject: ["observatory", "nebula", "telescope"],
+    };
+
+    const imageScore = scoreArchiveRecord(imageRecord, "observatory nebula image");
+    const textScore = scoreArchiveRecord(textRecord, "observatory nebula image");
+
+    expect(imageScore.breakdown.relevance).toBeGreaterThan(textScore.breakdown.relevance);
+    expect(imageScore.breakdown.relevance).toBeGreaterThan(0.45);
   });
 });

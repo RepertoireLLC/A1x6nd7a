@@ -1,3 +1,5 @@
+import { extractMediaType, normalizeMediaTypeFilter } from "../utils/mediaType";
+
 export type LinkStatus = "online" | "archived-only" | "offline";
 
 export type NSFWFilterMode = "safe" | "moderate" | "off" | "only";
@@ -130,6 +132,14 @@ export function matchesAdvancedFilters(
   record: Record<string, unknown>,
   filters: ArchiveSearchFiltersInput
 ): boolean {
+  const mediaTypeFilter = normalizeMediaTypeFilter(filters.mediaType ?? null);
+  if (mediaTypeFilter) {
+    const mediaType = extractMediaType(record);
+    if (!mediaType || mediaType !== mediaTypeFilter) {
+      return false;
+    }
+  }
+
   const languageFilter = filters.language?.trim().toLowerCase() ?? "";
   if (languageFilter) {
     const languages = extractLanguageList(record);

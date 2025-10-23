@@ -32,11 +32,12 @@ export interface AIChatMessage {
 export type AIDocumentHelperStatus = "idle" | "loading" | "success" | "error" | "unavailable" | "disabled";
 
 export interface SearchScoreBreakdown {
-  keywordRelevance: number;
-  semanticRelevance: number;
-  documentQuality: number;
-  popularityScore: number;
+  authenticity: number;
+  historicalValue: number;
+  transparency: number;
+  relevance: number;
   combinedScore: number;
+  trustLevel: SourceTrustLevel;
 }
 
 export interface ArchiveSearchDoc {

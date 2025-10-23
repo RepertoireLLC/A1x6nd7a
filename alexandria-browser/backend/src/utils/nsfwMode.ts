@@ -140,7 +140,7 @@ export function shouldSuppressAIResponse(
       return {
         suppressed: true,
         severity: analysis.hasExplicit ? "explicit" : "mild",
-        message: "AI Mode: This content is hidden because Safe Search is enabled.",
+        message: "AI Mode: This content is hidden because Safe mode is enabled for universal audiences.",
       };
     }
     return { suppressed: false };
@@ -151,7 +151,7 @@ export function shouldSuppressAIResponse(
       return {
         suppressed: true,
         severity: "explicit",
-        message: "AI Mode: Explicit requests are blocked while Moderate NSFW mode is active.",
+        message: "AI Mode: Explicit requests are blocked while Moderate mode is active.",
       };
     }
     return { suppressed: false };
@@ -162,7 +162,7 @@ export function shouldSuppressAIResponse(
       return {
         suppressed: true,
         severity: null,
-        message: "AI Mode: Only-NSFW mode requires adult keywords before suggestions can be generated.",
+        message: "AI Mode: NSFW Only mode requires adult keywords before suggestions can be generated.",
       };
     }
     return { suppressed: false };

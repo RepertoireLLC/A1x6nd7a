@@ -45,8 +45,9 @@ describe("postProcessDirectSearchPayload", () => {
     expect(result.response?.docs).toHaveLength(1);
     const doc = result.response?.docs?.[0];
     expect(doc?.identifier).toBe("climate-report");
-    expect(doc?.score).toBeGreaterThan(0.8);
-    expect(doc?.score_breakdown?.combinedScore).toBeGreaterThan(0.8);
+    expect(doc?.score).toBeGreaterThan(0.6);
+    expect(doc?.score_breakdown?.combinedScore).toBeGreaterThan(0.6);
+    expect(doc?.score_breakdown?.authenticity).toBeGreaterThan(0.5);
     expect(doc?.availability).toBe("online");
     expect(doc?.source_trust).toBe("high");
     expect(typeof doc?.language).toBe("string");
@@ -83,5 +84,45 @@ describe("postProcessDirectSearchPayload", () => {
 
     expect(result.response?.docs).toHaveLength(1);
     expect(result.response?.docs?.[0]?.availability).toBe("archived-only");
+  });
+
+  it("applies media type filters consistently before scoring", () => {
+    const imageDoc: ArchiveSearchDoc = {
+      identifier: "image-doc",
+      title: "Historic photograph of the observatory",
+      mediatype: "image",
+      description: "An archival photograph from 1910 showing the observatory equipment.",
+      language: ["English"],
+    };
+
+    const textDoc: ArchiveSearchDoc = {
+      identifier: "text-doc",
+      title: "Observatory maintenance log",
+      mediatype: "texts",
+      description: "Log entries covering routine observations.",
+      language: ["English"],
+    };
+
+    const payload: ArchiveSearchResponse = {
+      response: {
+        docs: [imageDoc, textDoc],
+        numFound: 2,
+      },
+    };
+
+    const filters: SearchFilters = {
+      ...baseFilters,
+      mediaType: "image",
+      language: "",
+      sourceTrust: "any",
+      availability: "any",
+      nsfwMode: "off",
+    };
+
+    const result = postProcessDirectSearchPayload(payload, "historic observatory", filters);
+
+    expect(result.response?.docs).toHaveLength(1);
+    expect(result.response?.docs?.[0]?.identifier).toBe("image-doc");
+    expect(result.filtered_count).toBe(1);
   });
 });

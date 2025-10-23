@@ -268,7 +268,7 @@ function buildSuggestionParagraph(keywords: string[]): string {
 function buildMediaParagraph(mediaSummary: string | null, mode: NSFWUserMode): string {
   if (mode === "only-nsfw") {
     return (
-      "Only-NSFW mode is active. Focus on adult-tagged collections or creators and consider adding specific site names or years."
+      "NSFW Only mode is active. Focus on adult-tagged collections or creators and consider adding specific site names or years."
     );
   }
 
