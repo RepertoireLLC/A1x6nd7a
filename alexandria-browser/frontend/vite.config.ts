@@ -17,11 +17,17 @@ const proxy: Record<string, string | ProxyOptions> = proxyPaths.reduce(
   {} as Record<string, string | ProxyOptions>
 );
 
+const preferredPort = Number.parseInt(
+  process.env.VITE_DEV_SERVER_PORT ?? process.env.PORT ?? "4173",
+  10
+);
+
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 5173,
+    port: Number.isFinite(preferredPort) ? preferredPort : 4173,
     host: "0.0.0.0",
+    strictPort: true,
     proxy,
     fs: {
       allow: [".."],
