@@ -16,11 +16,16 @@ const state = {
   rawResults: [],
   results: [],
   loading: false,
+  loadingMore: false,
   error: null,
+  loadMoreError: null,
   suggestion: null,
   nsfwMode: storedSettings.nsfwMode ?? (storedSettings.nsfwFiltering ? NSFW_MODES.SAFE : NSFW_MODES.OFF),
   nsfwAcknowledged: Boolean(storedSettings.nsfwAcknowledged),
-  keywords: []
+  keywords: [],
+  hasMore: false,
+  pageCache: new Map(),
+  loadedPages: new Set()
 };
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50];
@@ -64,6 +69,30 @@ app.appendChild(resultsContainer);
 
 const paginationContainer = document.createElement('div');
 app.appendChild(paginationContainer);
+
+const loadMoreSentinel = document.createElement('div');
+loadMoreSentinel.className = 'load-more-sentinel';
+loadMoreSentinel.setAttribute('aria-hidden', 'true');
+
+let loadMoreObserver = null;
+if (typeof window !== 'undefined' && 'IntersectionObserver' in window) {
+  loadMoreObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (
+          entry.isIntersecting &&
+          state.hasMore &&
+          !state.loading &&
+          !state.loadingMore &&
+          !state.loadMoreError
+        ) {
+          runSearch({ append: true, page: state.page + 1, showLoader: false });
+        }
+      }
+    },
+    { root: null, rootMargin: '200px 0px 200px 0px' }
+  );
+}
 
 function persistSettings() {
   saveSettings({
@@ -138,38 +167,164 @@ function renderResults() {
 
 function renderPagination() {
   paginationContainer.innerHTML = '';
-  if (state.total <= state.pageSize || state.error) return;
+  if (state.error) {
+    if (loadMoreObserver) {
+      loadMoreObserver.disconnect();
+    }
+    return;
+  }
+
+  const shouldRenderControls =
+    state.rawResults.length > 0 ||
+    state.loading ||
+    state.loadingMore ||
+    Boolean(state.loadMoreError);
+
+  if (!shouldRenderControls) {
+    if (loadMoreObserver) {
+      loadMoreObserver.disconnect();
+    }
+    return;
+  }
+
   const controls = createPaginationControls({
     currentPage: state.page,
     pageSize: state.pageSize,
     totalResults: state.total,
-    onPageChange: (page) => {
-      state.page = page;
-      runSearch(false);
+    loadedCount: state.rawResults.length,
+    hasMore: state.hasMore,
+    loadingMore: state.loadingMore,
+    loadMoreError: state.loadMoreError,
+    onLoadMore: () => {
+      if (!state.hasMore || state.loadingMore) {
+        return;
+      }
+      state.loadMoreError = null;
+      runSearch({ append: true, page: state.page + 1, showLoader: false });
     }
   });
+
   paginationContainer.appendChild(controls);
+  paginationContainer.appendChild(loadMoreSentinel);
+
+  if (loadMoreObserver) {
+    loadMoreObserver.disconnect();
+    if (state.hasMore && !state.loadMoreError) {
+      loadMoreObserver.observe(loadMoreSentinel);
+    }
+  }
 }
 
-async function runSearch(showLoader = true) {
+async function runSearch(options = {}) {
   if (!state.query) return;
-  if (showLoader) setLoading(true);
-  state.error = null;
-  try {
-    const { results, total, suggestion } = await searchArchive(state.query, state.page, state.pageSize);
-    state.total = total;
-    state.suggestion = suggestion;
-    state.rawResults = results;
-    const processed = await applyNSFWFilter(results, state.nsfwMode);
-    state.results = processed;
-  } catch (error) {
-    console.error(error);
-    state.error = 'Unable to fetch results right now. Check your internet connection or try again later.';
+
+  const append = Boolean(options.append);
+  const pageCandidate = options.page ?? state.page ?? 1;
+  const parsedPage = Number.parseInt(pageCandidate, 10);
+  const targetPageNumber = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+  const showLoader = options.showLoader ?? !append;
+
+  if (append && (state.loadingMore || state.loading || !state.hasMore)) {
+    return;
+  }
+
+  if (!append) {
+    state.error = null;
+  }
+  state.loadMoreError = null;
+
+  if (!append && targetPageNumber === 1) {
+    state.pageCache = new Map();
+    state.loadedPages = new Set();
+    state.hasMore = false;
     state.rawResults = [];
     state.results = [];
     state.total = 0;
+  }
+
+  state.loadingMore = append;
+
+  if (showLoader) {
+    setLoading(true);
+  }
+
+  try {
+    let pageData = state.pageCache.get(targetPageNumber);
+    if (!pageData) {
+      pageData = await searchArchive(state.query, targetPageNumber, state.pageSize);
+      state.pageCache.set(targetPageNumber, pageData);
+    }
+
+    state.total = pageData.total ?? state.total;
+    if (!append || targetPageNumber === 1) {
+      state.suggestion = pageData.suggestion || null;
+    } else if (!state.suggestion && pageData.suggestion) {
+      state.suggestion = pageData.suggestion;
+    }
+
+    state.loadedPages.add(targetPageNumber);
+
+    const seen = new Set();
+    const aggregated = [];
+    const sortedEntries = Array.from(state.pageCache.entries())
+      .filter(([pageNumber]) => state.loadedPages.has(pageNumber))
+      .sort((a, b) => a[0] - b[0]);
+
+    for (const [, cachedPayload] of sortedEntries) {
+      const pageResults = Array.isArray(cachedPayload.results) ? cachedPayload.results : [];
+      for (const entry of pageResults) {
+        if (!entry || typeof entry !== 'object') continue;
+        const identifier = typeof entry.identifier === 'string' ? entry.identifier : null;
+        if (identifier && seen.has(identifier)) {
+          continue;
+        }
+        if (identifier) {
+          seen.add(identifier);
+        }
+        aggregated.push(entry);
+      }
+    }
+
+    aggregated.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+
+    state.rawResults = aggregated;
+    if (state.loadedPages.size > 0) {
+      const maxPage = Math.max(...state.loadedPages);
+      state.page = Number.isFinite(maxPage) ? maxPage : targetPageNumber;
+    } else {
+      state.page = targetPageNumber;
+    }
+
+    const loadedCountFromPages = sortedEntries.reduce((sum, [, cached]) => {
+      const pageResults = Array.isArray(cached.results) ? cached.results.length : 0;
+      return sum + pageResults;
+    }, 0);
+
+    const hasAdditionalPages =
+      typeof pageData.hasMore === 'boolean'
+        ? pageData.hasMore
+        : loadedCountFromPages < state.total;
+
+    state.hasMore = Boolean(hasAdditionalPages && state.rawResults.length < state.total);
+
+    const processed = await applyNSFWFilter(state.rawResults, state.nsfwMode);
+    state.results = processed;
+  } catch (error) {
+    console.error(error);
+    if (append) {
+      state.loadMoreError = 'Unable to load more results. Please try again.';
+    } else {
+      state.error = 'Unable to fetch results right now. Check your internet connection or try again later.';
+      state.rawResults = [];
+      state.results = [];
+      state.total = 0;
+      state.hasMore = false;
+      state.pageCache = new Map();
+      state.loadedPages = new Set();
+    }
   } finally {
     if (showLoader) setLoading(false);
+    state.loadingMore = false;
     renderSuggestion();
     renderResults();
     renderPagination();

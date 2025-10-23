@@ -44,10 +44,10 @@ export function createSettingsModal({
   nsfwModeSelect.className = 'settings-select';
 
   const modeOptions = [
-    { value: 'safe', label: 'Safe — hide all NSFW content' },
-    { value: 'moderate', label: 'Moderate — allow mild, block explicit' },
-    { value: 'off', label: 'No filter — show everything' },
-    { value: 'only', label: 'Only NSFW — show tagged content only' }
+    { value: 'safe', label: 'Safe — Truthful content for all ages' },
+    { value: 'moderate', label: 'Moderate — Truthful content with mature context' },
+    { value: 'off', label: 'No Restriction — All truthful content visible' },
+    { value: 'only', label: 'NSFW Only — Explicit truth-focused material only' }
   ];
 
   modeOptions.forEach((option) => {
