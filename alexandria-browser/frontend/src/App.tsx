@@ -1235,29 +1235,6 @@ function App() {
   }, [performSearch, settings.lastQuery, settings.resultsPerPage]);
 
   useEffect(() => {
-    const sentinel = loadMoreSentinelRef.current;
-    const container = resultsContainerRef.current;
-    if (!sentinel || !container) {
-      return;
-    }
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          if (!hasMoreResults || isLoading || isLoadingMore) {
-            return;
-          }
-          void handleLoadMore();
-        }
-      },
-      { root: container, rootMargin: "200px" }
-    );
-    observer.observe(sentinel);
-    return () => {
-      observer.disconnect();
-    };
-  }, [handleLoadMore, hasMoreResults, isLoading, isLoadingMore]);
-
-  useEffect(() => {
     if (filteredResults.length === 0 || fallbackNotice) {
       return;
     }
@@ -1349,6 +1326,29 @@ function App() {
     totalPages,
     performSearch
   ]);
+
+  useEffect(() => {
+    const sentinel = loadMoreSentinelRef.current;
+    const container = resultsContainerRef.current;
+    if (!sentinel || !container) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          if (!hasMoreResults || isLoading || isLoadingMore) {
+            return;
+          }
+          void handleLoadMore();
+        }
+      },
+      { root: container, rootMargin: "200px" }
+    );
+    observer.observe(sentinel);
+    return () => {
+      observer.disconnect();
+    };
+  }, [handleLoadMore, hasMoreResults, isLoading, isLoadingMore]);
 
   const handleResultsPerPageChange = (event: ChangeEvent<HTMLSelectElement>) => {
     const value = Number(event.target.value);

@@ -35,7 +35,8 @@ alexandria-browser/
 To install dependencies and build both workspaces in one go:
 
 ```bash
-npm install --workspaces
+# Skip the optional Mistral download when you only need core search features
+ALEXANDRIA_SKIP_MODEL_DOWNLOAD=true npm install --workspaces
 npm run build:alexandria
 ```
 
