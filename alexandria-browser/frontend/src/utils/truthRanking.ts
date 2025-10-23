@@ -1,24 +1,4 @@
-import { stripDiacritics } from "./textNormalization";
-
-type Availability = "online" | "archived-only" | "offline";
-
-type TrustLevel = "high" | "medium" | "low";
-
-export interface SearchScoreBreakdown {
-  authenticity: number;
-  historicalValue: number;
-  transparency: number;
-  relevance: number;
-  combinedScore: number;
-  trustLevel: TrustLevel;
-}
-
-export interface ResultAnalysis {
-  breakdown: SearchScoreBreakdown;
-  availability: Availability;
-  trustLevel: TrustLevel;
-  language: string | null;
-}
+import type { ArchiveSearchDoc, SearchScoreBreakdown } from "../types";
 
 interface FieldTexts {
   title: string;
@@ -27,23 +7,16 @@ interface FieldTexts {
   fulltext: string;
 }
 
-interface TruthScoringContext {
-  normalizedQuery: string;
-  keywords: string[];
+export interface TruthScoringContext {
+  readonly originalQuery: string;
+  readonly normalizedQuery: string;
+  readonly keywords: string[];
 }
 
-const FIELD_CONFIG = {
-  title: { weight: 1, keywordBase: 0.7, fuzzyBase: 0.3 },
-  description: { weight: 0.85, keywordBase: 0.55, fuzzyBase: 0.25 },
-  metadata: { weight: 0.6, keywordBase: 0.45, fuzzyBase: 0.22 },
-  fulltext: { weight: 0.4, keywordBase: 0.3, fuzzyBase: 0.18 },
-} as const;
-
-const PROXIMITY_BONUS = [
-  { distance: 3, bonus: 0.2 },
-  { distance: 6, bonus: 0.12 },
-  { distance: 10, bonus: 0.08 },
-] as const;
+export interface TruthScoreResult {
+  score: number;
+  breakdown: SearchScoreBreakdown;
+}
 
 const STOP_WORDS = new Set<string>([
   "a",
@@ -173,6 +146,19 @@ const STOP_WORDS = new Set<string>([
   "yourselves",
 ]);
 
+const FIELD_CONFIG = {
+  title: { weight: 1, keywordBase: 0.7, fuzzyBase: 0.3 },
+  description: { weight: 0.85, keywordBase: 0.55, fuzzyBase: 0.25 },
+  metadata: { weight: 0.6, keywordBase: 0.45, fuzzyBase: 0.22 },
+  fulltext: { weight: 0.4, keywordBase: 0.3, fuzzyBase: 0.18 },
+} as const;
+
+const PROXIMITY_BONUS = [
+  { distance: 3, bonus: 0.2 },
+  { distance: 6, bonus: 0.12 },
+  { distance: 10, bonus: 0.08 },
+] as const;
+
 const TRUSTED_COLLECTIONS = new Set([
   "smithsonian",
   "library_of_congress",
@@ -216,6 +202,7 @@ const INSTITUTION_KEYWORDS = [
   "official",
   "academy",
   "research",
+  "library",
 ];
 
 const PRIMARY_SOURCE_HINTS = [
@@ -251,78 +238,24 @@ const TRUSTED_TLDS = [
   ".int",
 ];
 
-export function scoreArchiveRecord(record: Record<string, unknown>, query: string): ResultAnalysis {
-  const context = createTruthScoringContext(query);
-  const fieldTexts = buildFieldTexts(record);
-  const relevance = computeRelevance(fieldTexts, context);
-  const authenticity = scoreAuthenticity(record, fieldTexts);
-  const historicalValue = scoreHistoricalValue(record, fieldTexts);
-  const transparency = scoreTransparency(record, fieldTexts);
+const MAX_KEYWORDS = 24;
 
-  const combined = clamp(
-    relevance * 0.4 + authenticity * 0.3 + historicalValue * 0.15 + transparency * 0.15,
-    0,
-    1,
-  );
-  const normalizedScore = combined > 0 ? combined : relevance;
-
-  const trustLevel = determineTrustLevel(authenticity);
-
-  return {
-    breakdown: {
-      authenticity: formatScore(authenticity),
-      historicalValue: formatScore(historicalValue),
-      transparency: formatScore(transparency),
-      relevance: formatScore(relevance),
-      combinedScore: formatScore(normalizedScore),
-      trustLevel,
-    },
-    availability: determineAvailability(record),
-    trustLevel,
-    language: extractLanguage(record),
-  };
+function clamp(value: number, min: number, max: number): number {
+  if (value < min) return min;
+  if (value > max) return max;
+  return value;
 }
 
-function createTruthScoringContext(query: string): TruthScoringContext {
-  const normalizedQuery = normalizeForScoring(query);
-  const keywords = extractKeywords(normalizedQuery);
-  return { normalizedQuery, keywords };
+function stripHtml(input: string): string {
+  return input.replace(/<[^>]+>/g, " ");
 }
 
-function buildFieldTexts(record: Record<string, unknown>): FieldTexts {
-  const titleParts: string[] = [];
-  appendValue(titleParts, record.title ?? record.identifier);
-  if (titleParts.length === 0) {
-    appendValue(titleParts, record.identifier);
-  }
+function normalizeWhitespace(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
 
-  const descriptionParts: string[] = [];
-  appendValue(descriptionParts, record.description);
-
-  const metadataParts: string[] = [];
-  appendValue(metadataParts, record.creator);
-  appendValue(metadataParts, record.collection);
-  appendValue(metadataParts, record.language);
-  appendValue(metadataParts, record.subject);
-  appendValue(metadataParts, record.tags);
-  appendValue(metadataParts, record.keywords);
-  appendValue(metadataParts, record.topic);
-  appendValue(metadataParts, record.topics);
-  appendValue(metadataParts, record.publisher);
-  appendValue(metadataParts, record.contributor);
-  appendValue(metadataParts, record.series);
-  appendValue(metadataParts, record.identifier);
-
-  const fullTextParts: string[] = [];
-  appendValue(fullTextParts, record.fulltext);
-  appendValue(fullTextParts, record.text);
-
-  return {
-    title: normalizeWhitespace(titleParts.join(" ")),
-    description: normalizeWhitespace(descriptionParts.join(" ")),
-    metadata: normalizeWhitespace(metadataParts.join(" ")),
-    fulltext: normalizeWhitespace(fullTextParts.join(" ")),
-  };
+function normalizeForScoring(text: string): string {
+  return normalizeWhitespace(stripHtml(text).toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu, " "));
 }
 
 function appendValue(target: string[], value: unknown): void {
@@ -353,39 +286,74 @@ function appendValue(target: string[], value: unknown): void {
   }
 }
 
-function normalizeWhitespace(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
+function buildFieldTexts(doc: ArchiveSearchDoc): FieldTexts {
+  const titleParts: string[] = [];
+  appendValue(titleParts, doc.title ?? doc.identifier);
+  if (titleParts.length === 0 && doc.identifier) {
+    appendValue(titleParts, doc.identifier);
+  }
+
+  const descriptionParts: string[] = [];
+  appendValue(descriptionParts, doc.description);
+
+  const metadataParts: string[] = [];
+  appendValue(metadataParts, doc.creator);
+  appendValue(metadataParts, doc.collection);
+  appendValue(metadataParts, doc.language);
+
+  const docExtras = doc as Record<string, unknown>;
+  appendValue(metadataParts, docExtras.subject);
+  appendValue(metadataParts, docExtras.tags);
+  appendValue(metadataParts, docExtras.keywords);
+  appendValue(metadataParts, docExtras.topic);
+  appendValue(metadataParts, docExtras.topics);
+  appendValue(metadataParts, docExtras.publisher);
+  appendValue(metadataParts, docExtras.contributor);
+  appendValue(metadataParts, docExtras.series);
+  appendValue(metadataParts, doc.identifier);
+
+  const fullTextParts: string[] = [];
+  appendValue(fullTextParts, docExtras.fulltext);
+  appendValue(fullTextParts, docExtras.text);
+
+  return {
+    title: normalizeWhitespace(titleParts.join(" ")),
+    description: normalizeWhitespace(descriptionParts.join(" ")),
+    metadata: normalizeWhitespace(metadataParts.join(" ")),
+    fulltext: normalizeWhitespace(fullTextParts.join(" ")),
+  };
 }
 
-function stripHtml(input: string): string {
-  return input.replace(/<[^>]+>/g, " ");
+function normalizeQueryString(query: string): string {
+  return normalizeForScoring(query);
 }
 
-function normalizeForScoring(text: string): string {
-  return normalizeWhitespace(stripDiacritics(stripHtml(text)).toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu, " "));
-}
-
-function extractKeywords(normalizedQuery: string): string[] {
-  if (!normalizedQuery) {
+function extractKeywords(query: string): string[] {
+  const normalized = normalizeQueryString(query);
+  if (!normalized) {
     return [];
   }
-  const tokens = normalizedQuery.split(" ").filter(Boolean);
+
+  const tokens = normalized.split(" ").filter(Boolean);
   if (tokens.length === 0) {
     return [];
   }
+
   const filtered = tokens.filter((token) => token.length > 2 && !STOP_WORDS.has(token));
   const source = filtered.length > 0 ? filtered : tokens;
   const keywords: string[] = [];
   const seen = new Set<string>();
+
   for (const token of source) {
     if (!seen.has(token)) {
       seen.add(token);
       keywords.push(token);
-      if (keywords.length >= 24) {
+      if (keywords.length >= MAX_KEYWORDS) {
         break;
       }
     }
   }
+
   return keywords;
 }
 
@@ -518,11 +486,7 @@ function computeProximityBonus(words: string[], keywords: string[], weight: numb
   return 0;
 }
 
-function computeRelevance(fieldTexts: FieldTexts, context: TruthScoringContext): number {
-  if (!context.normalizedQuery && context.keywords.length === 0) {
-    return 0.2;
-  }
-
+function computeRelevance(fieldTexts: FieldTexts, normalizedQuery: string, keywords: string[]): number {
   let rawScore = 0;
 
   for (const [field, text] of Object.entries(fieldTexts) as Array<[keyof FieldTexts, string]>) {
@@ -539,11 +503,11 @@ function computeRelevance(fieldTexts: FieldTexts, context: TruthScoringContext):
     }
     const words = tokenize(normalizedField);
 
-    if (context.normalizedQuery && normalizedField.includes(context.normalizedQuery)) {
+    if (normalizedQuery && normalizedField.includes(normalizedQuery)) {
       rawScore += 1 * config.weight;
     }
 
-    for (const keyword of context.keywords) {
+    for (const keyword of keywords) {
       const occurrences = countOccurrences(normalizedField, keyword);
       if (occurrences > 0) {
         rawScore += occurrences * config.keywordBase * config.weight;
@@ -555,7 +519,7 @@ function computeRelevance(fieldTexts: FieldTexts, context: TruthScoringContext):
       }
     }
 
-    rawScore += computeProximityBonus(words, context.keywords, config.weight);
+    rawScore += computeProximityBonus(words, keywords, config.weight);
   }
 
   return clamp(1 - Math.exp(-rawScore), 0, 1);
@@ -566,21 +530,35 @@ function toArray(value: unknown): string[] {
     return [];
   }
   if (Array.isArray(value)) {
-    return value.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean);
+    return value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean);
   }
   if (typeof value === "string") {
     return value
       .split(/[,;\n]+/)
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0);
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
   }
   return [];
 }
 
-function scoreAuthenticity(record: Record<string, unknown>, fieldTexts: FieldTexts): number {
+function includesKeyword(source: string | string[] | undefined, keywords: string[]): boolean {
+  if (!source) {
+    return false;
+  }
+  const values = Array.isArray(source) ? source : [source];
+  for (const value of values) {
+    const lowered = value.toLowerCase();
+    if (keywords.some((keyword) => lowered.includes(keyword))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function scoreAuthenticity(doc: ArchiveSearchDoc, fieldTexts: FieldTexts): number {
   let score = 0;
-  const collections = toArray(record.collection).map((value) => value.toLowerCase());
-  const uniqueCollections = new Set(collections);
+  const collectionValues = toArray(doc.collection).map((value) => value.toLowerCase());
+  const uniqueCollections = new Set(collectionValues);
 
   uniqueCollections.forEach((entry) => {
     if (TRUSTED_COLLECTIONS.has(entry)) {
@@ -591,30 +569,35 @@ function scoreAuthenticity(record: Record<string, unknown>, fieldTexts: FieldTex
     }
   });
 
-  const creatorText = Array.isArray(record.creator)
-    ? (record.creator as string[]).join(" ")
-    : (typeof record.creator === "string" ? record.creator : "");
-  if (creatorText) {
+  const creatorText = Array.isArray(doc.creator) ? doc.creator.join(" ") : doc.creator ?? "";
+  const publisherText = (doc as Record<string, unknown>).publisher;
+  if (typeof creatorText === "string" && creatorText) {
     const lowered = creatorText.toLowerCase();
     if (INSTITUTION_KEYWORDS.some((keyword) => lowered.includes(keyword))) {
       score += 0.18;
     }
   }
-
-  const publisherValue = typeof record.publisher === "string" ? record.publisher : "";
-  if (publisherValue) {
-    const lowered = publisherValue.toLowerCase();
+  if (typeof publisherText === "string" && publisherText.trim()) {
+    const lowered = publisherText.toLowerCase();
     if (INSTITUTION_KEYWORDS.some((keyword) => lowered.includes(keyword))) {
       score += 0.15;
     }
   }
 
-  const originalUrl = typeof record.original_url === "string"
-    ? record.original_url
-    : typeof record.originalurl === "string"
-    ? record.originalurl
-    : null;
-  if (originalUrl) {
+  const docExtras = doc as Record<string, unknown>;
+  const metadata = docExtras.metadata as Record<string, unknown> | undefined;
+  if (metadata) {
+    const metadataPublisher = metadata.publisher;
+    if (typeof metadataPublisher === "string" && metadataPublisher.trim()) {
+      const lowered = metadataPublisher.toLowerCase();
+      if (INSTITUTION_KEYWORDS.some((keyword) => lowered.includes(keyword))) {
+        score += 0.12;
+      }
+    }
+  }
+
+  const originalUrl = doc.original_url ?? (doc as Record<string, unknown>).originalurl;
+  if (typeof originalUrl === "string" && originalUrl.trim()) {
     try {
       const url = new URL(originalUrl);
       const host = url.hostname.toLowerCase();
@@ -656,9 +639,10 @@ function extractYear(value: unknown): number | null {
   return null;
 }
 
-function scoreHistoricalValue(record: Record<string, unknown>, fieldTexts: FieldTexts): number {
+function scoreHistoricalValue(doc: ArchiveSearchDoc, fieldTexts: FieldTexts): number {
   const candidates: number[] = [];
-  const yearValues = [record.year, record.date, record.publicdate, record.public_date, record.publicDate];
+  const extras = doc as Record<string, unknown>;
+  const yearValues = [doc.year, doc.date, doc.publicdate, extras.public_date, extras.publicDate];
   for (const value of yearValues) {
     const year = extractYear(value);
     if (year !== null) {
@@ -666,7 +650,7 @@ function scoreHistoricalValue(record: Record<string, unknown>, fieldTexts: Field
     }
   }
   if (candidates.length === 0) {
-    const identifierYear = extractYear(record.identifier);
+    const identifierYear = extractYear(doc.identifier);
     if (identifierYear !== null) {
       candidates.push(identifierYear);
     }
@@ -715,21 +699,23 @@ function hasMeaningfulText(value: unknown): boolean {
   return false;
 }
 
-function scoreTransparency(record: Record<string, unknown>, fieldTexts: FieldTexts): number {
+function scoreTransparency(doc: ArchiveSearchDoc, fieldTexts: FieldTexts): number {
   let signals = 0;
   let total = 0;
 
+  const extras = doc as Record<string, unknown>;
+
   const transparencyChecks: Array<[unknown, number]> = [
-    [record.creator, 1],
-    [record.description, 1],
-    [record.publisher, 1],
-    [record.contributor, 1],
-    [record.language, 1],
-    [record.subject, 1],
-    [record.tags, 1],
-    [record.keywords, 1],
-    [(record as Record<string, unknown>).source, 1],
-    [(record as Record<string, unknown>).references, 1],
+    [doc.creator, 1],
+    [doc.description, 1],
+    [extras.publisher, 1],
+    [extras.contributor, 1],
+    [doc.language, 1],
+    [extras.subject, 1],
+    [extras.tags, 1],
+    [extras.keywords, 1],
+    [extras.source, 1],
+    [extras.references, 1],
   ];
 
   for (const [value, weight] of transparencyChecks) {
@@ -747,7 +733,7 @@ function scoreTransparency(record: Record<string, unknown>, fieldTexts: FieldTex
     total += 1;
   }
 
-  if (record.links && typeof record.links === "object") {
+  if (doc.links && typeof doc.links === "object") {
     signals += 0.5;
     total += 0.5;
   }
@@ -762,26 +748,7 @@ function scoreTransparency(record: Record<string, unknown>, fieldTexts: FieldTex
   return clamp(score, 0, 1);
 }
 
-function determineAvailability(record: Record<string, unknown>): Availability {
-  const originalUrl = coerceString(record.original_url) ?? coerceString(record.originalurl);
-  if (originalUrl) {
-    return "online";
-  }
-  const links = record.links && typeof record.links === "object" ? (record.links as Record<string, unknown>) : null;
-  if (links) {
-    const linkOriginal = coerceString(links.original);
-    if (linkOriginal) {
-      return "online";
-    }
-    const wayback = coerceString(links.wayback);
-    if (wayback) {
-      return "archived-only";
-    }
-  }
-  return "archived-only";
-}
-
-function determineTrustLevel(authenticity: number): TrustLevel {
+function determineTrustLevel(authenticity: number): "high" | "medium" | "low" {
   if (authenticity >= 0.6) {
     return "high";
   }
@@ -791,41 +758,42 @@ function determineTrustLevel(authenticity: number): TrustLevel {
   return "low";
 }
 
-function extractLanguage(record: Record<string, unknown>): string | null {
-  const languageField = record.language ?? record.languages ?? record.lang;
-  if (!languageField) {
-    return null;
-  }
-  if (typeof languageField === "string" && languageField.trim()) {
-    return languageField;
-  }
-  if (Array.isArray(languageField)) {
-    for (const entry of languageField) {
-      if (typeof entry === "string" && entry.trim()) {
-        return entry;
-      }
-    }
-  }
-  return null;
+export function createTruthScoringContext(query: string): TruthScoringContext {
+  const trimmed = query.trim();
+  return {
+    originalQuery: trimmed,
+    normalizedQuery: normalizeQueryString(trimmed),
+    keywords: extractKeywords(trimmed),
+  };
 }
 
-function coerceString(value: unknown): string | null {
-  if (typeof value === "string" && value.trim()) {
-    return value.trim();
-  }
-  return null;
+export function scoreArchiveDocTruth(doc: ArchiveSearchDoc, context: TruthScoringContext): TruthScoreResult {
+  const fieldTexts = buildFieldTexts(doc);
+  const relevance = context.originalQuery ? computeRelevance(fieldTexts, context.normalizedQuery, context.keywords) : 0.2;
+  const authenticity = scoreAuthenticity(doc, fieldTexts);
+  const historicalValue = scoreHistoricalValue(doc, fieldTexts);
+  const transparency = scoreTransparency(doc, fieldTexts);
+
+  const combined = clamp(
+    relevance * 0.4 +
+      authenticity * 0.3 +
+      historicalValue * 0.15 +
+      transparency * 0.15,
+    0,
+    1,
+  );
+
+  const normalizedScore = combined > 0 ? combined : relevance;
+
+  const breakdown: SearchScoreBreakdown = {
+    authenticity: Math.round(authenticity * 1000) / 1000,
+    historicalValue: Math.round(historicalValue * 1000) / 1000,
+    transparency: Math.round(transparency * 1000) / 1000,
+    relevance: Math.round(relevance * 1000) / 1000,
+    combinedScore: Math.round(normalizedScore * 1000) / 1000,
+    trustLevel: determineTrustLevel(authenticity),
+  };
+
+  return { score: breakdown.combinedScore, breakdown };
 }
 
-function clamp(value: number, min: number, max: number): number {
-  if (value < min) {
-    return min;
-  }
-  if (value > max) {
-    return max;
-  }
-  return value;
-}
-
-function formatScore(value: number): number {
-  return Math.round(value * 1000) / 1000;
-}
