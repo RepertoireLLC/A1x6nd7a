@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type MutableRefObject, type ReactNode, type RefObject } from "react";
 import type { ArchiveSearchDoc, LinkStatus, NSFWFilterMode } from "../types";
 import type { ReportSubmitHandler } from "../reporting";
 import { ResultCard } from "./ResultCard";
@@ -6,6 +6,7 @@ import { PaginationControls } from "./PaginationControls";
 import { ImageResultGrid } from "./ImageResultGrid";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { StatusBanner } from "./StatusBanner";
+import { resolveDocLinks } from "../utils/resultPresentation";
 
 interface ResultsListProps {
   results: ArchiveSearchDoc[];
@@ -29,6 +30,13 @@ interface ResultsListProps {
   notice?: string | null;
   viewMode?: "default" | "images";
   hiddenCount?: number;
+  hiddenDocs?: ArchiveSearchDoc[];
+  isLoadingMore?: boolean;
+  loadMoreError?: string | null;
+  onLoadMore?: () => void;
+  hasMore?: boolean;
+  loadedPages?: number;
+  loadMoreRef?: RefObject<HTMLDivElement> | MutableRefObject<HTMLDivElement | null>;
 }
 
 /**
@@ -55,8 +63,23 @@ export function ResultsList({
   suggestionNode,
   notice,
   viewMode = "default",
-  hiddenCount = 0
+  hiddenCount = 0,
+  hiddenDocs = [],
+  isLoadingMore = false,
+  loadMoreError = null,
+  onLoadMore,
+  hasMore = false,
+  loadedPages,
+  loadMoreRef
 }: ResultsListProps) {
+  const [showHiddenResults, setShowHiddenResults] = useState(false);
+
+  useEffect(() => {
+    if (hiddenDocs.length === 0) {
+      setShowHiddenResults(false);
+    }
+  }, [hiddenDocs]);
+
   if (isLoading) {
     return <LoadingIndicator label="Searching the archives…" />;
   }
@@ -78,8 +101,9 @@ export function ResultsList({
     );
   }
 
-  const startIndex = (page - 1) * resultsPerPage + 1;
-  const endIndex = (page - 1) * resultsPerPage + results.length;
+  const startIndex = results.length === 0 ? 0 : 1;
+  const endIndex = results.length;
+  const loadedSummary = loadedPages && loadedPages > 0 ? `Loaded ${loadedPages} page${loadedPages === 1 ? "" : "s"}` : null;
 
   return (
     <>
@@ -87,12 +111,65 @@ export function ResultsList({
       {notice ? <StatusBanner tone="warning" message={notice} /> : null}
       <div className="results-summary">
         Showing {startIndex} – {endIndex} of {totalResults ?? "?"} preserved records
+        {loadedSummary ? ` · ${loadedSummary}` : ""}
       </div>
       {hiddenCount > 0 ? (
         <div className="results-filter-note">
-          {hiddenCount === 1
-            ? "1 result hidden by the current NSFW mode."
-            : `${hiddenCount} results hidden by the current NSFW mode.`}
+          <span>
+            {hiddenCount === 1
+              ? "1 result hidden by the current NSFW mode."
+              : `${hiddenCount} results hidden by the current NSFW mode.`}
+          </span>
+          {hiddenDocs.length > 0 ? (
+            <button
+              type="button"
+              className="hidden-results-toggle"
+              onClick={() => setShowHiddenResults((previous) => !previous)}
+              aria-expanded={showHiddenResults}
+            >
+              {showHiddenResults ? "Hide list" : "View hidden results"}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {showHiddenResults && hiddenDocs.length > 0 ? (
+        <div className="hidden-results-panel">
+          <p className="hidden-results-intro">
+            These entries are filtered out by the current NSFW setting. They remain in your search history so you can review
+            them later if you adjust the filter.
+          </p>
+          <ul className="hidden-results-list">
+            {hiddenDocs.map((doc) => {
+              const { archiveUrl } = resolveDocLinks(doc);
+              const severity = doc.nsfwLevel ?? doc.nsfw_level ?? null;
+              const isFlagged = doc.nsfw === true || severity === "mild" || severity === "explicit";
+              const modeReason = nsfwMode === "only"
+                ? "Hidden because NSFW-only mode is enabled."
+                : severity === "explicit"
+                ? "Hidden because it is classified as explicit."
+                : severity === "mild"
+                ? "Hidden because it is marked as sensitive."
+                : isFlagged
+                ? "Hidden because it is flagged as NSFW."
+                : "Hidden because it is not flagged as NSFW.";
+              const matches = Array.isArray(doc.nsfwMatches)
+                ? doc.nsfwMatches
+                : Array.isArray((doc as Record<string, unknown>).nsfw_matches)
+                ? ((doc as Record<string, unknown>).nsfw_matches as string[])
+                : [];
+              return (
+                <li key={doc.identifier}>
+                  <a href={archiveUrl} target="_blank" rel="noreferrer" className="hidden-result-title">
+                    {doc.title || doc.identifier}
+                  </a>
+                  <span className="hidden-result-reason">{modeReason}</span>
+                  {matches.length > 0 ? (
+                    <span className="hidden-result-keywords">Keywords: {matches.join(", ")}</span>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
         </div>
       ) : null}
       {viewMode === "images" ? (
@@ -109,7 +186,7 @@ export function ResultsList({
         />
       ) : (
         <ol className="results-list">
-          {results.map((doc) => {
+          {results.map((doc, index) => {
             const status = statuses[doc.identifier] ?? "checking";
             const meta = saveMeta[doc.identifier] ?? {
               label: "Save to Archive",
@@ -133,6 +210,7 @@ export function ResultsList({
                 saveState={meta.message}
                 saveTone={meta.tone}
                 snapshotUrl={meta.snapshotUrl}
+                position={index}
               />
             );
           })}
@@ -143,7 +221,18 @@ export function ResultsList({
         totalPages={totalPages}
         isLoading={isLoading}
         onPageChange={onPageChange}
+        onLoadMore={onLoadMore}
+        isLoadingMore={isLoadingMore}
+        hasMore={hasMore}
+        loadedPages={loadedPages}
       />
+      {isLoadingMore ? (
+        <div className="load-more-status" role="status" aria-live="polite">
+          Loading additional archive results…
+        </div>
+      ) : null}
+      {loadMoreError ? <StatusBanner tone="error" message={loadMoreError} /> : null}
+      {loadMoreRef ? <div ref={loadMoreRef} className="load-more-sentinel" aria-hidden="true" /> : null}
     </>
   );
 }

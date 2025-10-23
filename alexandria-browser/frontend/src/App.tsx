@@ -61,8 +61,9 @@ import type {
 } from "./types";
 import { ItemDetailsPanel } from "./components/ItemDetailsPanel";
 import type { ReportSubmissionPayload } from "./reporting";
-import { annotateDocs, annotateScrapeItems, applyNSFWModeToScrape, countHiddenByMode, shouldIncludeDoc } from "./utils/nsfw";
+import { annotateDocs, annotateScrapeItems, applyNSFWModeToScrape, shouldIncludeDoc } from "./utils/nsfw";
 import { filterByNSFWMode as filterDocsByNSFWMode, getNSFWMode as resolveUserNSFWMode } from "./utils/nsfwMode";
+import { mergeRankedResults } from "./utils/relevance";
 
 function parseBackendAIStatus(value: unknown): BackendAISummaryStatus | null {
   if (value === "success" || value === "unavailable" || value === "error") {
@@ -169,6 +170,10 @@ function App() {
   const [totalResults, setTotalResults] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+  const [loadedPages, setLoadedPages] = useState<number[]>([]);
+  const [reachedEnd, setReachedEnd] = useState(false);
   const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
   const [hasSearched, setHasSearched] = useState(() => Boolean(settings.lastQuery));
   const [resultsPerPage, setResultsPerPage] = useState(() => settings.resultsPerPage);
@@ -241,6 +246,7 @@ function App() {
   const [filterNotice, setFilterNotice] = useState<string | null>(null);
 
   const resultsContainerRef = useRef<HTMLDivElement | null>(null);
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
   const bootstrapped = useRef(false);
   const blacklistRef = useRef<string[]>(initialBlacklist.current);
 
@@ -513,44 +519,99 @@ function App() {
   }, [history, bookmarks]);
 
   const filteredResults = useMemo(() => filterDocsByNSFWMode(results, nsfwMode), [results, nsfwMode]);
-  const hiddenResultCount = useMemo(() => countHiddenByMode(results, nsfwMode), [results, nsfwMode]);
+  const hiddenResults = useMemo(() => {
+    if (results.length === 0) {
+      return [] as ArchiveSearchDoc[];
+    }
+    return results.filter((doc) => !shouldIncludeDoc(doc, nsfwMode));
+  }, [results, nsfwMode]);
+  const hiddenResultCount = hiddenResults.length;
   const filteredRelatedItems = useMemo(
     () => applyNSFWModeToScrape(relatedItems, nsfwMode),
     [relatedItems, nsfwMode]
+  );
+
+  const scrollToPage = useCallback(
+    (pageNumber: number) => {
+      const container = resultsContainerRef.current;
+      if (!container) {
+        return;
+      }
+      const targetIndex = (pageNumber - 1) * resultsPerPage;
+      if (targetIndex <= 0) {
+        container.scrollTo({ top: 0, behavior: "smooth" });
+        return;
+      }
+      const targetElement = container.querySelector<HTMLElement>(`[data-result-index="${targetIndex}"]`);
+      if (targetElement) {
+        const containerRect = container.getBoundingClientRect();
+        const elementRect = targetElement.getBoundingClientRect();
+        const offset = elementRect.top - containerRect.top + container.scrollTop;
+        container.scrollTo({ top: offset, behavior: "smooth" });
+      } else {
+        container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+      }
+    },
+    [resultsPerPage]
   );
 
   const performSearch = useCallback(
     async (searchQuery: string, pageNumber: number, options?: { recordHistory?: boolean; rowsOverride?: number }) => {
       const rows = options?.rowsOverride ?? resultsPerPage;
       const safeQuery = searchQuery.trim();
+      const isFirstPage = pageNumber === 1;
       if (!safeQuery) {
-        setError("Please enter a search query.");
-        setFallbackNotice(null);
-        setAlternateSuggestions([]);
-        setFilterNotice(null);
+        if (isFirstPage) {
+          setError("Please enter a search query.");
+          setFallbackNotice(null);
+          setAlternateSuggestions([]);
+          setFilterNotice(null);
+        } else {
+          setLoadMoreError("Please enter a search query.");
+        }
         return;
       }
 
-      setIsLoading(true);
-      setError(null);
-      setFallbackNotice(null);
+      if (isFirstPage) {
+        setIsLoading(true);
+        setError(null);
+        setFallbackNotice(null);
+        setAlternateSuggestions([]);
+        setFilterNotice(null);
+        setResults([]);
+        setTotalResults(null);
+        setTotalPages(null);
+        setStatuses({});
+        setSaveMeta({});
+        setLoadMoreError(null);
+        setLoadedPages([]);
+        setReachedEnd(false);
+      } else {
+        setIsLoadingMore(true);
+        setLoadMoreError(null);
+      }
+
       setSelectedDoc(null);
       setMetadataState({ data: null, loading: false, error: null });
       setTimelineState({ data: null, loading: false, error: null });
       setRelatedItems([]);
       setRelatedFallback(false);
       setRelatedError(null);
-      setAlternateSuggestions([]);
       setFilterNotice(null);
+      if (isFirstPage) {
+        setAlternateSuggestions([]);
+      }
       if (aiAssistantEnabled) {
-        setAiSummaryStatus("loading");
-        setAiSummary(null);
-        setAiSummaryError(null);
-        setAiSummaryNotice(null);
-        setAiSummarySource(null);
-        setAiAvailability("unknown");
-        setAiChatError(null);
-      } else {
+        if (isFirstPage) {
+          setAiSummaryStatus("loading");
+          setAiSummary(null);
+          setAiSummaryError(null);
+          setAiSummaryNotice(null);
+          setAiSummarySource(null);
+          setAiAvailability("unknown");
+          setAiChatError(null);
+        }
+      } else if (isFirstPage) {
         setAiSummaryStatus("disabled");
         setAiSummary(null);
         setAiSummaryError(null);
@@ -595,33 +656,40 @@ function App() {
         if (!result.ok) {
           console.warn("Archive search failed", result.error);
           const message = result.error.message?.trim() || "Search request failed. Please try again later.";
-          setError(message);
-          setFallbackNotice(null);
-          setResults([]);
-          setTotalResults(null);
-          setTotalPages(null);
-          setStatuses({});
-          setSaveMeta({});
-          setSuggestedQuery(null);
-          setSuggestionCorrections([]);
-          setAlternateSuggestions([]);
-          setFilterNotice(null);
-          setLiveStatus(null);
-          if (aiAssistantEnabled) {
-            setAiSummary(null);
-            setAiSummaryStatus("error");
-            setAiSummaryError(message);
-            setAiSummaryNotice(null);
-            setAiSummarySource(null);
-            setAiAvailability("error");
-            setAiChatError(message);
+          if (isFirstPage) {
+            setError(message);
+            setFallbackNotice(null);
+            setResults([]);
+            setTotalResults(null);
+            setTotalPages(null);
+            setPage(1);
+            setStatuses({});
+            setSaveMeta({});
+            setSuggestedQuery(null);
+            setSuggestionCorrections([]);
+            setAlternateSuggestions([]);
+            setFilterNotice(null);
+            setLiveStatus(null);
+            setLoadedPages([]);
+            setReachedEnd(true);
+            if (aiAssistantEnabled) {
+              setAiSummary(null);
+              setAiSummaryStatus("error");
+              setAiSummaryError(message);
+              setAiSummaryNotice(null);
+              setAiSummarySource(null);
+              setAiAvailability("error");
+              setAiChatError(message);
+            } else {
+              setAiSummary(null);
+              setAiSummaryStatus("disabled");
+              setAiSummaryError(null);
+              setAiSummaryNotice(null);
+              setAiSummarySource(null);
+              setAiAvailability("disabled");
+            }
           } else {
-            setAiSummary(null);
-            setAiSummaryStatus("disabled");
-            setAiSummaryError(null);
-            setAiSummaryNotice(null);
-            setAiSummarySource(null);
-            setAiAvailability("disabled");
+            setLoadMoreError(message);
           }
           return;
         }
@@ -715,6 +783,8 @@ function App() {
             ? `Recovered from an unexpected Internet Archive response by retrying with the simplified query "${simplifiedQuery}". Results may be broader than usual.`
             : "Recovered from an unexpected Internet Archive response by retrying with a simplified query. Results may be broader than usual.";
           setFallbackNotice(strategyMessage);
+        } else if (isFirstPage) {
+          setFallbackNotice(null);
         }
 
         const docs = payload.response?.docs ?? [];
@@ -748,7 +818,7 @@ function App() {
               ? "1 result hidden by the current filters."
               : `${hiddenByFilters} results hidden by the current filters.`
           );
-        } else {
+        } else if (isFirstPage) {
           setFilterNotice(null);
         }
         const hiddenIdentifiers =
@@ -758,26 +828,56 @@ function App() {
           : docs;
 
         const annotatedDocs = annotateDocs(visibleDocs);
-        setResults(annotatedDocs);
+        setResults((previous) => mergeRankedResults(isFirstPage ? [] : previous, annotatedDocs, safeQuery));
         setTotalResults(numFound);
         setTotalPages(numFound !== null ? Math.max(1, Math.ceil(numFound / rows)) : null);
         setPage(pageNumber);
         setHasSearched(true);
-        setStatuses(() => {
-          const next: Record<string, LinkStatus> = {};
-          const defaultStatus: LinkStatus = payload.fallback ? "offline" : "checking";
-          for (const doc of annotatedDocs) {
-            next[doc.identifier] = defaultStatus;
+        setLoadedPages((previous) => {
+          if (isFirstPage) {
+            return [pageNumber];
           }
-          return next;
-        });
-        setSaveMeta(() => {
-          const next: Record<string, SaveMeta> = {};
-          for (const doc of annotatedDocs) {
-            next[doc.identifier] = { ...DEFAULT_SAVE_META };
+          if (previous.includes(pageNumber)) {
+            return previous;
           }
-          return next;
+          return [...previous, pageNumber].sort((a, b) => a - b);
         });
+        const defaultStatus: LinkStatus = payload.fallback ? "offline" : "checking";
+        if (isFirstPage) {
+          setStatuses(() => {
+            const next: Record<string, LinkStatus> = {};
+            for (const doc of annotatedDocs) {
+              next[doc.identifier] = defaultStatus;
+            }
+            return next;
+          });
+          setSaveMeta(() => {
+            const next: Record<string, SaveMeta> = {};
+            for (const doc of annotatedDocs) {
+              next[doc.identifier] = { ...DEFAULT_SAVE_META };
+            }
+            return next;
+          });
+        } else {
+          setStatuses((previous) => {
+            const next = { ...previous };
+            for (const doc of annotatedDocs) {
+              if (!next[doc.identifier]) {
+                next[doc.identifier] = defaultStatus;
+              }
+            }
+            return next;
+          });
+          setSaveMeta((previous) => {
+            const next = { ...previous };
+            for (const doc of annotatedDocs) {
+              if (!next[doc.identifier]) {
+                next[doc.identifier] = { ...DEFAULT_SAVE_META };
+              }
+            }
+            return next;
+          });
+        }
 
         const suggestion = payload.spellcheck;
         if (
@@ -788,7 +888,7 @@ function App() {
         ) {
           setSuggestedQuery(suggestion.correctedQuery.trim());
           setSuggestionCorrections(suggestion.corrections ?? []);
-        } else {
+        } else if (isFirstPage) {
           setSuggestedQuery(null);
           setSuggestionCorrections([]);
         }
@@ -801,7 +901,7 @@ function App() {
           setHistoryIndex(0);
         }
 
-        if (resultsContainerRef.current) {
+        if (isFirstPage && resultsContainerRef.current) {
           resultsContainerRef.current.scrollTo({ top: 0, behavior: "smooth" });
         }
 
@@ -809,7 +909,7 @@ function App() {
           setLiveStatus(null);
           setWaybackDetails(null);
           setWaybackError(null);
-        } else if (isLikelyUrl(safeQuery)) {
+        } else if (isFirstPage && isLikelyUrl(safeQuery)) {
           setLiveStatus("checking");
           setWaybackDetails(null);
           setWaybackError(null);
@@ -837,10 +937,19 @@ function App() {
           }
 
           setWaybackError(combinedError);
-        } else {
+        } else if (isFirstPage) {
           setLiveStatus(null);
           setWaybackDetails(null);
           setWaybackError(null);
+        }
+
+        const reachedLastPage =
+          annotatedDocs.length === 0 ||
+          (numFound !== null ? pageNumber * rows >= numFound : annotatedDocs.length < rows);
+        if (reachedLastPage) {
+          setReachedEnd(true);
+        } else {
+          setReachedEnd(false);
         }
       } catch (fetchError) {
         console.error(fetchError);
@@ -855,33 +964,44 @@ function App() {
         if (!message || !message.trim()) {
           message = fallbackMessage;
         }
-        setError(message);
-        setFallbackNotice(null);
-        setResults([]);
-        setTotalResults(null);
-        setTotalPages(null);
-        setStatuses({});
-        setSaveMeta({});
-        setSuggestedQuery(null);
-        setSuggestionCorrections([]);
-        setLiveStatus(null);
-        setAlternateSuggestions([]);
-        setFilterNotice(null);
-        if (aiAssistantEnabled) {
-          setAiSummary(null);
-          setAiSummaryStatus("error");
-          setAiSummaryError(message);
-          setAiSummaryNotice(null);
-          setAiSummarySource(null);
+        if (isFirstPage) {
+          setError(message);
+          setFallbackNotice(null);
+          setResults([]);
+          setTotalResults(null);
+          setTotalPages(null);
+          setPage(1);
+          setStatuses({});
+          setSaveMeta({});
+          setSuggestedQuery(null);
+          setSuggestionCorrections([]);
+          setLiveStatus(null);
+          setAlternateSuggestions([]);
+          setFilterNotice(null);
+          setLoadedPages([]);
+          setReachedEnd(true);
+          if (aiAssistantEnabled) {
+            setAiSummary(null);
+            setAiSummaryStatus("error");
+            setAiSummaryError(message);
+            setAiSummaryNotice(null);
+            setAiSummarySource(null);
+          } else {
+            setAiSummary(null);
+            setAiSummaryStatus("disabled");
+            setAiSummaryError(null);
+            setAiSummaryNotice(null);
+            setAiSummarySource(null);
+          }
         } else {
-          setAiSummary(null);
-          setAiSummaryStatus("disabled");
-          setAiSummaryError(null);
-          setAiSummaryNotice(null);
-          setAiSummarySource(null);
+          setLoadMoreError(message);
         }
       } finally {
-        setIsLoading(false);
+        if (isFirstPage) {
+          setIsLoading(false);
+        } else {
+          setIsLoadingMore(false);
+        }
       }
     },
     [
@@ -895,6 +1015,20 @@ function App() {
       nsfwMode,
       aiAssistantEnabled
     ]
+  );
+
+  const highestLoadedPage = useMemo(
+    () => (loadedPages.length > 0 ? Math.max(...loadedPages) : 0),
+    [loadedPages]
+  );
+  const totalResultsLoaded = results.length;
+  const hasMoreResults = useMemo(
+    () =>
+      hasSearched &&
+      !reachedEnd &&
+      (totalPages === null || highestLoadedPage < totalPages) &&
+      (totalResults === null || totalResultsLoaded < totalResults),
+    [hasSearched, reachedEnd, totalPages, highestLoadedPage, totalResults, totalResultsLoaded]
   );
 
   const handleClearAiChat = useCallback(() => {
@@ -1107,6 +1241,29 @@ function App() {
   }, [performSearch, settings.lastQuery, settings.resultsPerPage]);
 
   useEffect(() => {
+    const sentinel = loadMoreSentinelRef.current;
+    const container = resultsContainerRef.current;
+    if (!sentinel || !container) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          if (!hasMoreResults || isLoading || isLoadingMore) {
+            return;
+          }
+          void handleLoadMore();
+        }
+      },
+      { root: container, rootMargin: "200px" }
+    );
+    observer.observe(sentinel);
+    return () => {
+      observer.disconnect();
+    };
+  }, [handleLoadMore, hasMoreResults, isLoading, isLoadingMore]);
+
+  useEffect(() => {
     if (filteredResults.length === 0 || fallbackNotice) {
       return;
     }
@@ -1161,7 +1318,7 @@ function App() {
   };
 
   const handlePageChange = async (direction: "previous" | "next") => {
-    if (!activeQuery) {
+    if (!activeQuery || isLoading || isLoadingMore) {
       return;
     }
     const nextPage = direction === "next" ? page + 1 : page - 1;
@@ -1171,8 +1328,33 @@ function App() {
     if (totalPages !== null && nextPage > totalPages) {
       return;
     }
-    await performSearch(activeQuery, nextPage, { recordHistory: false });
+    if (direction === "next" && nextPage > highestLoadedPage) {
+      await performSearch(activeQuery, nextPage, { recordHistory: false });
+      scrollToPage(nextPage);
+      return;
+    }
+    setPage(nextPage);
+    scrollToPage(nextPage);
   };
+
+  const handleLoadMore = useCallback(async () => {
+    if (!activeQuery || isLoading || isLoadingMore || !hasMoreResults) {
+      return;
+    }
+    const nextPage = highestLoadedPage > 0 ? highestLoadedPage + 1 : 1;
+    if (totalPages !== null && nextPage > totalPages) {
+      return;
+    }
+    await performSearch(activeQuery, nextPage, { recordHistory: false });
+  }, [
+    activeQuery,
+    isLoading,
+    isLoadingMore,
+    hasMoreResults,
+    highestLoadedPage,
+    totalPages,
+    performSearch
+  ]);
 
   const handleResultsPerPageChange = (event: ChangeEvent<HTMLSelectElement>) => {
     const value = Number(event.target.value);
@@ -1795,6 +1977,13 @@ function App() {
           notice={combinedNotice}
           viewMode={mediaType === "image" ? "images" : "default"}
           hiddenCount={hiddenResultCount}
+          hiddenDocs={hiddenResults}
+          isLoadingMore={isLoadingMore}
+          loadMoreError={loadMoreError}
+          onLoadMore={handleLoadMore}
+          hasMore={hasMoreResults}
+          loadedPages={loadedPages.length}
+          loadMoreRef={loadMoreSentinelRef}
         />
       </section>
 
