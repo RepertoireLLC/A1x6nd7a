@@ -1030,6 +1030,10 @@ function App() {
       (totalResults === null || totalResultsLoaded < totalResults),
     [hasSearched, reachedEnd, totalPages, highestLoadedPage, totalResults, totalResultsLoaded]
   );
+  const canLoadMore = useMemo(
+    () => Boolean(activeQuery) && hasMoreResults && !isLoading && !isLoadingMore,
+    [activeQuery, hasMoreResults, isLoading, isLoadingMore]
+  );
 
   const handleClearAiChat = useCallback(() => {
     setAiChatMessages([]);
@@ -1240,8 +1244,11 @@ function App() {
     void performSearch(settings.lastQuery, 1, { recordHistory: false, rowsOverride: settings.resultsPerPage });
   }, [performSearch, settings.lastQuery, settings.resultsPerPage]);
 
+  /**
+   * Requests the next archive page when the pagination guard allows it.
+   */
   const handleLoadMore = useCallback(async () => {
-    if (!activeQuery || isLoading || isLoadingMore || !hasMoreResults) {
+    if (!activeQuery || !canLoadMore) {
       return;
     }
     const nextPage = highestLoadedPage > 0 ? highestLoadedPage + 1 : 1;
@@ -1249,28 +1256,17 @@ function App() {
       return;
     }
     await performSearch(activeQuery, nextPage, { recordHistory: false });
-  }, [
-    activeQuery,
-    isLoading,
-    isLoadingMore,
-    hasMoreResults,
-    highestLoadedPage,
-    totalPages,
-    performSearch
-  ]);
+  }, [activeQuery, canLoadMore, highestLoadedPage, totalPages, performSearch]);
 
   useEffect(() => {
     const sentinel = loadMoreSentinelRef.current;
     const container = resultsContainerRef.current;
-    if (!sentinel || !container) {
+    if (!canLoadMore || !sentinel || !container) {
       return;
     }
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) {
-          if (!hasMoreResults || isLoading || isLoadingMore) {
-            return;
-          }
           void handleLoadMore();
         }
       },
@@ -1280,7 +1276,7 @@ function App() {
     return () => {
       observer.disconnect();
     };
-  }, [handleLoadMore, hasMoreResults, isLoading, isLoadingMore]);
+  }, [canLoadMore, handleLoadMore]);
 
   useEffect(() => {
     if (filteredResults.length === 0 || fallbackNotice) {

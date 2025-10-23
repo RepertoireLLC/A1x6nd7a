@@ -232,7 +232,9 @@ export function ResultsList({
         </div>
       ) : null}
       {loadMoreError ? <StatusBanner tone="error" message={loadMoreError} /> : null}
-      {loadMoreRef ? <div ref={loadMoreRef} className="load-more-sentinel" aria-hidden="true" /> : null}
+      {loadMoreRef && hasMore ? (
+        <div ref={loadMoreRef} className="load-more-sentinel" aria-hidden="true" />
+      ) : null}
     </>
   );
 }
