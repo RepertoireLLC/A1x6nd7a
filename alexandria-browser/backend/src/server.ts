@@ -1076,6 +1076,9 @@ function buildFilterExpressions(filters: ArchiveSearchFiltersInput, includeFilte
   const yearFromValue = filters.yearFrom?.trim() ?? "";
   const yearToValue = filters.yearTo?.trim() ?? "";
   const languageValue = filters.language?.trim() ?? "";
+  const collectionValue = filters.collection?.trim() ?? "";
+  const uploaderValue = filters.uploader?.trim() ?? "";
+  const subjectValue = filters.subject?.trim() ?? "";
 
   if (mediaTypeValue) {
     expressions.push(`mediatype:(${mediaTypeValue})`);
@@ -1096,6 +1099,39 @@ function buildFilterExpressions(filters: ArchiveSearchFiltersInput, includeFilte
       const clause = tokens.map((token) => `"${token.replace(/"/g, '\\"')}"`).join(" OR ");
       expressions.push(`language:(${clause})`);
     }
+  }
+
+  const buildClause = (rawValue: string, field: string): string | null => {
+    if (!rawValue) {
+      return null;
+    }
+    const tokens = rawValue
+      .split(/[,\n]+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length > 0)
+      .map((token) => `"${token.replace(/"/g, '\\"')}"`);
+    if (tokens.length === 0) {
+      return null;
+    }
+    if (tokens.length === 1) {
+      return `${field}:(${tokens[0]})`;
+    }
+    return `${field}:(` + tokens.join(" OR ") + ")";
+  };
+
+  const collectionClause = buildClause(collectionValue, "collection");
+  if (collectionClause) {
+    expressions.push(collectionClause);
+  }
+
+  const uploaderClause = buildClause(uploaderValue, "uploader");
+  if (uploaderClause) {
+    expressions.push(uploaderClause);
+  }
+
+  const subjectClause = buildClause(subjectValue, "subject");
+  if (subjectClause) {
+    expressions.push(subjectClause);
   }
 
   return expressions;
@@ -1305,6 +1341,17 @@ function performLocalArchiveSearch(
   const requestedMediaType = filters.mediaType?.toLowerCase() ?? "";
   const requestedYearFrom = filters.yearFrom ? Number.parseInt(filters.yearFrom, 10) : null;
   const requestedYearTo = filters.yearTo ? Number.parseInt(filters.yearTo, 10) : null;
+  const requestedCollections = (filters.collection ?? "")
+    .toLowerCase()
+    .split(/[,\n]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+  const requestedSubjects = (filters.subject ?? "")
+    .toLowerCase()
+    .split(/[,\n]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+  const requestedUploader = (filters.uploader ?? "").toLowerCase().trim();
 
   const matches = SAMPLE_ARCHIVE_DOCS.filter((doc) => {
     if (requestedMediaType && doc.mediatype?.toLowerCase() !== requestedMediaType) {
@@ -1317,6 +1364,50 @@ function performLocalArchiveSearch(
     }
     if (requestedYearTo !== null && (year === null || year > requestedYearTo)) {
       return false;
+    }
+
+    if (requestedCollections.length > 0) {
+      const collectionValues = Array.isArray(doc.collection)
+        ? doc.collection
+        : doc.collection
+        ? [doc.collection]
+        : [];
+      const normalizedCollections = collectionValues
+        .map((value) => (typeof value === "string" ? value.toLowerCase().trim() : ""))
+        .filter((value) => value.length > 0);
+      if (!requestedCollections.some((value) => normalizedCollections.includes(value))) {
+        return false;
+      }
+    }
+
+    if (requestedSubjects.length > 0) {
+      const subjectCandidate = (doc as Record<string, unknown>).subject;
+      const subjectValues = Array.isArray(subjectCandidate)
+        ? subjectCandidate
+        : typeof subjectCandidate === "string"
+        ? subjectCandidate.split(/[,;]+/)
+        : [];
+      const normalizedSubjects = subjectValues
+        .map((value) => (typeof value === "string" ? value.toLowerCase().trim() : ""))
+        .filter((value) => value.length > 0);
+      if (!requestedSubjects.some((value) => normalizedSubjects.includes(value))) {
+        return false;
+      }
+    }
+
+    if (requestedUploader) {
+      const uploaderCandidate = (doc as Record<string, unknown>).uploader ?? doc.creator;
+      const uploaderValues = Array.isArray(uploaderCandidate)
+        ? uploaderCandidate
+        : uploaderCandidate
+        ? [uploaderCandidate]
+        : [];
+      const normalizedUploaders = uploaderValues
+        .map((value) => (typeof value === "string" ? value.toLowerCase().trim() : ""))
+        .filter((value) => value.length > 0);
+      if (!normalizedUploaders.some((value) => value.includes(requestedUploader))) {
+        return false;
+      }
     }
 
     if (tokens.length === 0) {
@@ -1431,6 +1522,9 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
   const languageParam = url.searchParams.get("language")?.trim() ?? "";
   const sourceTrustParam = url.searchParams.get("sourceTrust")?.trim().toLowerCase() ?? "";
   const availabilityParam = url.searchParams.get("availability")?.trim().toLowerCase() ?? "";
+  const collectionParam = url.searchParams.get("collection")?.trim() ?? "";
+  const uploaderParam = url.searchParams.get("uploader")?.trim() ?? "";
+  const subjectParam = url.searchParams.get("subject")?.trim() ?? "";
   const nsfwModeInput = url.searchParams.get("nsfwMode");
   const nsfwUserMode: NSFWUserMode = resolveUserNSFWMode(nsfwModeInput ?? undefined);
   const nsfwModeParam = mapUserModeToFilterMode(nsfwUserMode);
@@ -1487,7 +1581,10 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     language: languageParam,
     sourceTrust: sourceTrustParam,
     availability: availabilityParam,
-    nsfwMode: nsfwModeParam
+    nsfwMode: nsfwModeParam,
+    collection: collectionParam,
+    uploader: uploaderParam,
+    subject: subjectParam
   };
 
   try {

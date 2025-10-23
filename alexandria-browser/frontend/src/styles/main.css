@@ -691,6 +691,29 @@ html[data-theme="light"] datalist option {
   font-weight: 600;
 }
 
+.live-status-actions .archive-cta {
+  border: var(--harmonia-border-weight) solid color-mix(in srgb, var(--harmonia-border) 80%, transparent);
+  border-radius: var(--harmonia-radius-pill);
+  padding: 0.45rem 1.2rem;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--harmonia-accent) 55%, transparent),
+    color-mix(in srgb, var(--harmonia-accent-strong) 45%, transparent)
+  );
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  transition: transform var(--harmonia-transition), box-shadow var(--harmonia-transition);
+  box-shadow: 0 18px 36px -24px var(--harmonia-glow-primary);
+}
+
+.live-status-actions .archive-cta:hover,
+.live-status-actions .archive-cta:focus-visible {
+  transform: translateY(-1px);
+  box-shadow: var(--harmonia-shadow-strong);
+}
+
 .results-container {
   width: min(960px, 100%);
   max-height: 72vh;
@@ -1509,6 +1532,54 @@ html[data-theme="light"] datalist option {
   color: var(--harmonia-text-muted);
 }
 
+.timeline-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 0.85rem;
+}
+
+.timeline-slider input[type="range"] {
+  width: 100%;
+  accent-color: var(--harmonia-accent);
+}
+
+.timeline-slider-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--harmonia-text-muted);
+}
+
+.timeline-entry {
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: var(--harmonia-radius-sm);
+  background: transparent;
+  padding: 0.35rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  cursor: pointer;
+  color: inherit;
+  transition: background var(--harmonia-transition), border-color var(--harmonia-transition),
+    transform var(--harmonia-transition);
+}
+
+.timeline-entry:hover,
+.timeline-entry:focus-visible {
+  background: color-mix(in srgb, var(--harmonia-surface-alt) 65%, transparent);
+  border-color: color-mix(in srgb, var(--harmonia-border) 70%, transparent);
+  transform: translateY(-1px);
+}
+
+.timeline-entry-active {
+  border-color: var(--harmonia-accent);
+  background: color-mix(in srgb, var(--harmonia-surface-alt) 80%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--harmonia-accent) 45%, transparent);
+}
+
 .timeline-message {
   font-size: 0.9rem;
   color: var(--harmonia-text-muted);
@@ -1521,6 +1592,47 @@ html[data-theme="light"] datalist option {
 .timeline-fallback {
   font-size: 0.85rem;
   color: var(--harmonia-text-muted);
+}
+
+.wayback-preview {
+  border: var(--harmonia-border-weight) solid color-mix(in srgb, var(--harmonia-border) 75%, transparent);
+  border-radius: var(--harmonia-radius-md);
+  background: color-mix(in srgb, var(--harmonia-surface) 88%, transparent);
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.wayback-preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.9rem;
+}
+
+.wayback-preview-header a {
+  color: var(--harmonia-accent);
+  font-weight: 600;
+}
+
+.wayback-preview-frame {
+  width: 100%;
+  min-height: 320px;
+  border: none;
+  border-radius: var(--harmonia-radius-sm);
+  background: var(--harmonia-surface-muted);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--harmonia-border) 65%, transparent);
+}
+
+.wayback-preview-empty,
+.wayback-preview-loading {
+  font-size: 0.9rem;
+  color: var(--harmonia-text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
 .related-items {

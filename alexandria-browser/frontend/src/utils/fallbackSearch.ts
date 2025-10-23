@@ -112,6 +112,18 @@ export function performFallbackArchiveSearch(
   const requestedYearFrom = filters.yearFrom ? Number.parseInt(filters.yearFrom, 10) : null;
   const requestedYearTo = filters.yearTo ? Number.parseInt(filters.yearTo, 10) : null;
 
+  const requestedCollections = (filters.collection ?? "")
+    .toLowerCase()
+    .split(/[,\n]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+  const requestedSubjects = (filters.subject ?? "")
+    .toLowerCase()
+    .split(/[,\n]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+  const requestedUploader = (filters.uploader ?? "").toLowerCase().trim();
+
   const matches = SAMPLE_ARCHIVE_DOCS.filter((doc) => {
     if (requestedMediaType && doc.mediatype?.toLowerCase() !== requestedMediaType) {
       return false;
@@ -123,6 +135,50 @@ export function performFallbackArchiveSearch(
         return false;
       }
       if (requestedYearTo !== null && (year === null || year > requestedYearTo)) {
+        return false;
+      }
+    }
+
+    if (requestedCollections.length > 0) {
+      const collectionValues = Array.isArray(doc.collection)
+        ? doc.collection
+        : doc.collection
+        ? [doc.collection]
+        : [];
+      const normalizedCollections = collectionValues
+        .map((value) => (typeof value === "string" ? value.toLowerCase().trim() : ""))
+        .filter((value) => value.length > 0);
+      if (!requestedCollections.some((value) => normalizedCollections.includes(value))) {
+        return false;
+      }
+    }
+
+    if (requestedSubjects.length > 0) {
+      const subjectCandidate = (doc as Record<string, unknown>).subject;
+      const subjectList = Array.isArray(subjectCandidate)
+        ? subjectCandidate
+        : typeof subjectCandidate === "string"
+        ? subjectCandidate.split(/[,;]+/)
+        : [];
+      const normalizedSubjects = subjectList
+        .map((value) => (typeof value === "string" ? value.toLowerCase().trim() : ""))
+        .filter((value) => value.length > 0);
+      if (!requestedSubjects.some((value) => normalizedSubjects.includes(value))) {
+        return false;
+      }
+    }
+
+    if (requestedUploader) {
+      const uploaderCandidate = (doc as Record<string, unknown>).uploader ?? doc.creator;
+      const uploaderValues = Array.isArray(uploaderCandidate)
+        ? uploaderCandidate
+        : uploaderCandidate
+        ? [uploaderCandidate]
+        : [];
+      const normalizedUploaders = uploaderValues
+        .map((value) => (typeof value === "string" ? value.toLowerCase().trim() : ""))
+        .filter((value) => value.length > 0);
+      if (!normalizedUploaders.some((value) => value.includes(requestedUploader))) {
         return false;
       }
     }

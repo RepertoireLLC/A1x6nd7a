@@ -99,9 +99,10 @@ function extractLanguage(doc: ArchiveSearchDoc): string | null {
 }
 
 function matchesClientFilters(doc: ArchiveSearchDoc, filters: SearchFilters): boolean {
+  const docRecord = doc as Record<string, unknown>;
   const languageFilter = filters.language.trim().toLowerCase();
   if (languageFilter) {
-    const languageValues = normalizeList(doc.language ?? (doc as Record<string, unknown>).languages ?? (doc as Record<string, unknown>).lang);
+    const languageValues = normalizeList(doc.language ?? docRecord.languages ?? docRecord.lang);
     if (languageValues.length === 0) {
       return false;
     }
@@ -122,6 +123,39 @@ function matchesClientFilters(doc: ArchiveSearchDoc, filters: SearchFilters): bo
   if (availabilityFilter && availabilityFilter !== "any") {
     const availabilityValue = (doc.availability ?? "").toString().toLowerCase();
     if (!availabilityValue || availabilityValue !== availabilityFilter) {
+      return false;
+    }
+  }
+
+  const collectionFilters = normalizeList(filters.collection);
+  if (collectionFilters.length > 0) {
+    const collectionValues = normalizeList(doc.collection ?? docRecord.collection);
+    if (collectionValues.length === 0) {
+      return false;
+    }
+    if (!collectionFilters.some((value) => collectionValues.includes(value))) {
+      return false;
+    }
+  }
+
+  const subjectFilters = normalizeList(filters.subject);
+  if (subjectFilters.length > 0) {
+    const subjectValues = normalizeList(docRecord.subject ?? docRecord.subjects);
+    if (subjectValues.length === 0) {
+      return false;
+    }
+    if (!subjectFilters.some((value) => subjectValues.includes(value))) {
+      return false;
+    }
+  }
+
+  const uploaderFilter = filters.uploader?.trim().toLowerCase();
+  if (uploaderFilter) {
+    const uploaderValues = normalizeList(docRecord.uploader ?? docRecord.submitter ?? doc.creator);
+    if (uploaderValues.length === 0) {
+      return false;
+    }
+    if (!uploaderValues.some((value) => value.includes(uploaderFilter))) {
       return false;
     }
   }
