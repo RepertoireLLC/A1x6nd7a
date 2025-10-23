@@ -550,10 +550,15 @@ function App() {
   );
 
   const performSearch = useCallback(
-    async (searchQuery: string, pageNumber: number, options?: { recordHistory?: boolean; rowsOverride?: number }) => {
+    async (
+      searchQuery: string,
+      pageNumber: number,
+      options?: { recordHistory?: boolean; rowsOverride?: number; preservePage?: boolean }
+    ) => {
       const rows = options?.rowsOverride ?? resultsPerPage;
       const safeQuery = searchQuery.trim();
       const isFirstPage = pageNumber === 1;
+      const preservePage = options?.preservePage === true && !isFirstPage;
       if (!safeQuery) {
         if (isFirstPage) {
           setError("Please enter a search query.");
@@ -825,7 +830,9 @@ function App() {
         setResults((previous) => mergeRankedResults(isFirstPage ? [] : previous, annotatedDocs, safeQuery));
         setTotalResults(numFound);
         setTotalPages(numFound !== null ? Math.max(1, Math.ceil(numFound / rows)) : null);
-        setPage(pageNumber);
+        if (!preservePage) {
+          setPage(pageNumber);
+        }
         setHasSearched(true);
         setLoadedPages((previous) => {
           if (isFirstPage) {
@@ -1308,24 +1315,34 @@ function App() {
     scrollToPage(nextPage);
   };
 
-  const handleLoadMore = useCallback(async () => {
-    if (!activeQuery || isLoading || isLoadingMore || !hasMoreResults) {
-      return;
-    }
-    const nextPage = highestLoadedPage > 0 ? highestLoadedPage + 1 : 1;
-    if (totalPages !== null && nextPage > totalPages) {
-      return;
-    }
-    await performSearch(activeQuery, nextPage, { recordHistory: false });
-  }, [
-    activeQuery,
-    isLoading,
-    isLoadingMore,
-    hasMoreResults,
-    highestLoadedPage,
-    totalPages,
-    performSearch
-  ]);
+  const handleLoadMore = useCallback(
+    async (source: "auto" | "manual" = "auto") => {
+      if (!activeQuery || isLoading || isLoadingMore || !hasMoreResults) {
+        return;
+      }
+      const nextPage = highestLoadedPage > 0 ? highestLoadedPage + 1 : 1;
+      if (totalPages !== null && nextPage > totalPages) {
+        return;
+      }
+      if (source === "auto") {
+        const maxBackgroundPage = Math.max(page, 1) + 2;
+        if (nextPage > maxBackgroundPage) {
+          return;
+        }
+      }
+      await performSearch(activeQuery, nextPage, { recordHistory: false, preservePage: true });
+    },
+    [
+      activeQuery,
+      isLoading,
+      isLoadingMore,
+      hasMoreResults,
+      highestLoadedPage,
+      totalPages,
+      performSearch,
+      page
+    ]
+  );
 
   useEffect(() => {
     const sentinel = loadMoreSentinelRef.current;
@@ -1339,7 +1356,7 @@ function App() {
           if (!hasMoreResults || isLoading || isLoadingMore) {
             return;
           }
-          void handleLoadMore();
+          void handleLoadMore("auto");
         }
       },
       { root: container, rootMargin: "200px" }

@@ -3,7 +3,7 @@ interface PaginationControlsProps {
   totalPages: number | null;
   isLoading: boolean;
   onPageChange: (direction: "previous" | "next") => void;
-  onLoadMore?: () => void;
+  onLoadMore?: (source?: "manual" | "auto") => void;
   isLoadingMore?: boolean;
   hasMore?: boolean;
   loadedPages?: number;
@@ -52,7 +52,7 @@ export function PaginationControls({
       {onLoadMore ? (
         <button
           type="button"
-          onClick={onLoadMore}
+          onClick={() => onLoadMore?.("manual")}
           disabled={!loadMoreEnabled}
           aria-label="Load more results"
           className="load-more-button"

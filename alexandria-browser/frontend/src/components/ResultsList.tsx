@@ -31,7 +31,7 @@ interface ResultsListProps {
   hiddenCount?: number;
   isLoadingMore?: boolean;
   loadMoreError?: string | null;
-  onLoadMore?: () => void;
+  onLoadMore?: (source?: "manual" | "auto") => void;
   hasMore?: boolean;
   loadedPages?: number;
   loadMoreRef?: RefObject<HTMLDivElement> | MutableRefObject<HTMLDivElement | null>;
