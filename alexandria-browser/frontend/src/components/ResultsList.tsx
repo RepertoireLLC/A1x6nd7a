@@ -82,33 +82,47 @@ export function ResultsList({
   }
 
   if (results.length === 0) {
+    const emptyMessage =
+      hiddenCount > 0
+        ? "All results on this page are hidden by the current NSFW mode."
+        : "No archive results found. Try refining your query.";
+    const emptyTone = hiddenCount > 0 ? "info" : "warning";
     return (
       <>
         {suggestionNode}
-        <StatusBanner tone="warning" message="No archive results found. Try refining your query." />
+        <StatusBanner tone={emptyTone} message={emptyMessage} />
       </>
     );
   }
 
-  const startIndex = results.length === 0 ? 0 : 1;
-  const endIndex = results.length;
-  const loadedSummary = loadedPages && loadedPages > 0 ? `Loaded ${loadedPages} page${loadedPages === 1 ? "" : "s"}` : null;
+  const currentCount = results.length;
+  const pageStartIndex = Math.max(0, (page - 1) * resultsPerPage);
+  const rawStartIndex = currentCount === 0 ? 0 : pageStartIndex + 1;
+  const rawEndIndex = currentCount === 0 ? 0 : pageStartIndex + currentCount;
+  const boundedStartIndex =
+    totalResults !== null
+      ? totalResults === 0
+        ? 0
+        : Math.min(rawStartIndex, totalResults)
+      : rawStartIndex;
+  const boundedEndIndex =
+    totalResults !== null
+      ? totalResults === 0
+        ? 0
+        : Math.min(rawEndIndex, totalResults)
+      : rawEndIndex;
+  const loadedSummary =
+    loadedPages && loadedPages > 0 ? `Loaded ${loadedPages} page${loadedPages === 1 ? "" : "s"}` : null;
+  const globalStartIndex = pageStartIndex;
 
   return (
     <>
       {suggestionNode}
       {notice ? <StatusBanner tone="warning" message={notice} /> : null}
       <div className="results-summary">
-        Showing {startIndex} – {endIndex} of {totalResults ?? "?"} preserved records
+        Showing {boundedStartIndex} – {boundedEndIndex} of {totalResults ?? "?"} preserved records
         {loadedSummary ? ` · ${loadedSummary}` : ""}
       </div>
-      {hiddenCount > 0 ? (
-        <div className="results-filter-note">
-          {hiddenCount === 1
-            ? "1 result hidden by the current NSFW mode."
-            : `${hiddenCount} results hidden by the current NSFW mode.`}
-        </div>
-      ) : null}
       {viewMode === "images" ? (
         <ImageResultGrid
           results={results}
@@ -147,7 +161,7 @@ export function ResultsList({
                 saveState={meta.message}
                 saveTone={meta.tone}
                 snapshotUrl={meta.snapshotUrl}
-                position={index}
+                position={globalStartIndex + index}
               />
             );
           })}
