@@ -35,15 +35,16 @@ export function postProcessDirectSearchPayload(
       : docs.length;
 
   const filteredCount = filteredDocs.length;
+  const totalCount = Number.isFinite(originalCount) ? originalCount : filteredCount;
 
   return {
     ...payload,
     response: {
       ...response,
       docs: filteredDocs,
-      numFound: filteredCount,
+      numFound: totalCount,
     },
-    original_numFound: originalCount,
+    original_numFound: totalCount,
     filtered_count: filteredCount,
   };
 }
