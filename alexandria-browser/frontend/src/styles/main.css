@@ -1561,6 +1561,7 @@ html[data-theme="light"] datalist option {
   justify-content: space-between;
   align-items: center;
   gap: 1rem;
+  flex-wrap: wrap;
 }
 
 .pagination-controls button {
@@ -1591,6 +1592,23 @@ html[data-theme="light"] datalist option {
 .pagination-label {
   color: var(--harmonia-text-muted);
   font-size: 0.9rem;
+}
+
+.pagination-loaded-summary {
+  color: var(--harmonia-text-muted);
+  font-size: 0.85rem;
+}
+
+.load-more-status {
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+  text-align: center;
+  color: var(--harmonia-text-muted);
+}
+
+.load-more-sentinel {
+  width: 100%;
+  height: 1px;
 }
 
 .sidebar {

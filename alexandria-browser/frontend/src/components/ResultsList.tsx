@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { MutableRefObject, ReactNode, RefObject } from "react";
 import type { ArchiveSearchDoc, LinkStatus, NSFWFilterMode } from "../types";
 import type { ReportSubmitHandler } from "../reporting";
 import { ResultCard } from "./ResultCard";
@@ -29,6 +29,12 @@ interface ResultsListProps {
   notice?: string | null;
   viewMode?: "default" | "images";
   hiddenCount?: number;
+  isLoadingMore?: boolean;
+  loadMoreError?: string | null;
+  onLoadMore?: () => void;
+  hasMore?: boolean;
+  loadedPages?: number;
+  loadMoreRef?: RefObject<HTMLDivElement> | MutableRefObject<HTMLDivElement | null>;
 }
 
 /**
@@ -55,7 +61,13 @@ export function ResultsList({
   suggestionNode,
   notice,
   viewMode = "default",
-  hiddenCount = 0
+  hiddenCount = 0,
+  isLoadingMore = false,
+  loadMoreError = null,
+  onLoadMore,
+  hasMore = false,
+  loadedPages,
+  loadMoreRef
 }: ResultsListProps) {
   if (isLoading) {
     return <LoadingIndicator label="Searching the archives…" />;
@@ -78,8 +90,9 @@ export function ResultsList({
     );
   }
 
-  const startIndex = (page - 1) * resultsPerPage + 1;
-  const endIndex = (page - 1) * resultsPerPage + results.length;
+  const startIndex = results.length === 0 ? 0 : 1;
+  const endIndex = results.length;
+  const loadedSummary = loadedPages && loadedPages > 0 ? `Loaded ${loadedPages} page${loadedPages === 1 ? "" : "s"}` : null;
 
   return (
     <>
@@ -87,6 +100,7 @@ export function ResultsList({
       {notice ? <StatusBanner tone="warning" message={notice} /> : null}
       <div className="results-summary">
         Showing {startIndex} – {endIndex} of {totalResults ?? "?"} preserved records
+        {loadedSummary ? ` · ${loadedSummary}` : ""}
       </div>
       {hiddenCount > 0 ? (
         <div className="results-filter-note">
@@ -109,7 +123,7 @@ export function ResultsList({
         />
       ) : (
         <ol className="results-list">
-          {results.map((doc) => {
+          {results.map((doc, index) => {
             const status = statuses[doc.identifier] ?? "checking";
             const meta = saveMeta[doc.identifier] ?? {
               label: "Save to Archive",
@@ -133,6 +147,7 @@ export function ResultsList({
                 saveState={meta.message}
                 saveTone={meta.tone}
                 snapshotUrl={meta.snapshotUrl}
+                position={index}
               />
             );
           })}
@@ -143,7 +158,18 @@ export function ResultsList({
         totalPages={totalPages}
         isLoading={isLoading}
         onPageChange={onPageChange}
+        onLoadMore={onLoadMore}
+        isLoadingMore={isLoadingMore}
+        hasMore={hasMore}
+        loadedPages={loadedPages}
       />
+      {isLoadingMore ? (
+        <div className="load-more-status" role="status" aria-live="polite">
+          Loading additional archive results…
+        </div>
+      ) : null}
+      {loadMoreError ? <StatusBanner tone="error" message={loadMoreError} /> : null}
+      {loadMoreRef ? <div ref={loadMoreRef} className="load-more-sentinel" aria-hidden="true" /> : null}
     </>
   );
 }
