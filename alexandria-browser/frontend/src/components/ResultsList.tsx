@@ -28,7 +28,6 @@ interface ResultsListProps {
   suggestionNode: ReactNode;
   notice?: string | null;
   viewMode?: "default" | "images";
-  hiddenCount?: number;
   isLoadingMore?: boolean;
   loadMoreError?: string | null;
   onLoadMore?: () => void;
@@ -61,7 +60,6 @@ export function ResultsList({
   suggestionNode,
   notice,
   viewMode = "default",
-  hiddenCount = 0,
   isLoadingMore = false,
   loadMoreError = null,
   onLoadMore,
@@ -82,45 +80,24 @@ export function ResultsList({
   }
 
   if (results.length === 0) {
-    const emptyMessage =
-      hiddenCount > 0
-        ? "All results on this page are hidden by the current NSFW mode."
-        : "No archive results found. Try refining your query.";
-    const emptyTone = hiddenCount > 0 ? "info" : "warning";
     return (
       <>
         {suggestionNode}
-        <StatusBanner tone={emptyTone} message={emptyMessage} />
+        <StatusBanner tone="warning" message="No archive results found. Try refining your query." />
       </>
     );
   }
 
-  const currentCount = results.length;
-  const pageStartIndex = Math.max(0, (page - 1) * resultsPerPage);
-  const rawStartIndex = currentCount === 0 ? 0 : pageStartIndex + 1;
-  const rawEndIndex = currentCount === 0 ? 0 : pageStartIndex + currentCount;
-  const boundedStartIndex =
-    totalResults !== null
-      ? totalResults === 0
-        ? 0
-        : Math.min(rawStartIndex, totalResults)
-      : rawStartIndex;
-  const boundedEndIndex =
-    totalResults !== null
-      ? totalResults === 0
-        ? 0
-        : Math.min(rawEndIndex, totalResults)
-      : rawEndIndex;
-  const loadedSummary =
-    loadedPages && loadedPages > 0 ? `Loaded ${loadedPages} page${loadedPages === 1 ? "" : "s"}` : null;
-  const globalStartIndex = pageStartIndex;
+  const startIndex = results.length === 0 ? 0 : 1;
+  const endIndex = results.length;
+  const loadedSummary = loadedPages && loadedPages > 0 ? `Loaded ${loadedPages} page${loadedPages === 1 ? "" : "s"}` : null;
 
   return (
     <>
       {suggestionNode}
       {notice ? <StatusBanner tone="warning" message={notice} /> : null}
       <div className="results-summary">
-        Showing {boundedStartIndex} – {boundedEndIndex} of {totalResults ?? "?"} preserved records
+        Showing {startIndex} – {endIndex} of {totalResults ?? "?"} preserved records
         {loadedSummary ? ` · ${loadedSummary}` : ""}
       </div>
       {viewMode === "images" ? (
@@ -161,7 +138,7 @@ export function ResultsList({
                 saveState={meta.message}
                 saveTone={meta.tone}
                 snapshotUrl={meta.snapshotUrl}
-                position={globalStartIndex + index}
+                position={index}
               />
             );
           })}
