@@ -62,7 +62,7 @@ import type {
 } from "./types";
 import { ItemDetailsPanel } from "./components/ItemDetailsPanel";
 import type { ReportSubmissionPayload } from "./reporting";
-import { annotateDocs, annotateScrapeItems, applyNSFWModeToScrape, countHiddenByMode, shouldIncludeDoc } from "./utils/nsfw";
+import { annotateDocs, annotateScrapeItems, applyNSFWModeToScrape, shouldIncludeDoc } from "./utils/nsfw";
 import { filterByNSFWMode as filterDocsByNSFWMode, getNSFWMode as resolveUserNSFWMode } from "./utils/nsfwMode";
 import { mergeRankedResults } from "./utils/relevance";
 
@@ -562,7 +562,6 @@ function App() {
   }, [history, bookmarks]);
 
   const filteredResults = useMemo(() => filterDocsByNSFWMode(results, nsfwMode), [results, nsfwMode]);
-  const hiddenResultCount = useMemo(() => countHiddenByMode(results, nsfwMode), [results, nsfwMode]);
   const filteredRelatedItems = useMemo(
     () => applyNSFWModeToScrape(relatedItems, nsfwMode),
     [relatedItems, nsfwMode]
@@ -2071,26 +2070,25 @@ function App() {
           hasSearched={hasSearched}
           page={page}
           totalPages={totalPages}
-        totalResults={totalResults}
-        resultsPerPage={resultsPerPage}
-        onPageChange={handlePageChange}
-        onToggleBookmark={toggleBookmark}
-        onOpenDetails={openDetails}
+          totalResults={totalResults}
+          resultsPerPage={resultsPerPage}
+          onPageChange={handlePageChange}
+          onToggleBookmark={toggleBookmark}
+          onOpenDetails={openDetails}
           bookmarkedIds={bookmarkedIdentifiers}
           onSaveSnapshot={handleSaveSnapshot}
           saveMeta={saveMeta}
           onReport={handleReportSubmission}
           suggestionNode={suggestionNode}
-        notice={combinedNotice}
-        viewMode={mediaType === "image" ? "images" : "default"}
-        hiddenCount={hiddenResultCount}
-        isLoadingMore={isLoadingMore}
-        loadMoreError={loadMoreError}
-        onLoadMore={handleLoadMore}
-        hasMore={hasMoreResults}
-        loadedPages={loadedPages.length}
-        loadMoreRef={loadMoreSentinelRef}
-      />
+          notice={combinedNotice}
+          viewMode={mediaType === "image" ? "images" : "default"}
+          isLoadingMore={isLoadingMore}
+          loadMoreError={loadMoreError}
+          onLoadMore={handleLoadMore}
+          hasMore={hasMoreResults}
+          loadedPages={loadedPages.length}
+          loadMoreRef={loadMoreSentinelRef}
+        />
       </section>
 
       <Sidebar

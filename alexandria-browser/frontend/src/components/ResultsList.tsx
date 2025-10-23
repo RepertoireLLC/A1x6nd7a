@@ -28,7 +28,6 @@ interface ResultsListProps {
   suggestionNode: ReactNode;
   notice?: string | null;
   viewMode?: "default" | "images";
-  hiddenCount?: number;
   isLoadingMore?: boolean;
   loadMoreError?: string | null;
   onLoadMore?: () => void;
@@ -61,7 +60,6 @@ export function ResultsList({
   suggestionNode,
   notice,
   viewMode = "default",
-  hiddenCount = 0,
   isLoadingMore = false,
   loadMoreError = null,
   onLoadMore,
@@ -106,13 +104,6 @@ export function ResultsList({
         Showing {startIndex} – {endIndex} of {totalResults ?? "?"} preserved records
         {loadedSummary ? ` · ${loadedSummary}` : ""}
       </div>
-      {hiddenCount > 0 ? (
-        <div className="results-filter-note">
-          {hiddenCount === 1
-            ? "1 result hidden by the current NSFW mode."
-            : `${hiddenCount} results hidden by the current NSFW mode.`}
-        </div>
-      ) : null}
       {viewMode === "images" ? (
         <ImageResultGrid
           results={results}
