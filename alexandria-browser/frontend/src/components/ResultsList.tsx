@@ -1,4 +1,4 @@
-import type { MutableRefObject, ReactNode, RefObject } from "react";
+import type { ReactNode } from "react";
 import type { ArchiveSearchDoc, LinkStatus, NSFWFilterMode } from "../types";
 import type { ReportSubmitHandler } from "../reporting";
 import { ResultCard } from "./ResultCard";
@@ -34,7 +34,6 @@ interface ResultsListProps {
   onLoadMore?: (source?: "manual" | "auto") => void;
   hasMore?: boolean;
   loadedPages?: number;
-  loadMoreRef?: RefObject<HTMLDivElement> | MutableRefObject<HTMLDivElement | null>;
 }
 
 /**
@@ -66,8 +65,7 @@ export function ResultsList({
   loadMoreError = null,
   onLoadMore,
   hasMore = false,
-  loadedPages,
-  loadMoreRef
+  loadedPages
 }: ResultsListProps) {
   if (isLoading) {
     return <LoadingIndicator label="Searching the archives…" />;
@@ -169,7 +167,6 @@ export function ResultsList({
         </div>
       ) : null}
       {loadMoreError ? <StatusBanner tone="error" message={loadMoreError} /> : null}
-      {loadMoreRef ? <div ref={loadMoreRef} className="load-more-sentinel" aria-hidden="true" /> : null}
     </>
   );
 }

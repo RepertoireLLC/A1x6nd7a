@@ -246,7 +246,6 @@ function App() {
   const [filterNotice, setFilterNotice] = useState<string | null>(null);
 
   const resultsContainerRef = useRef<HTMLDivElement | null>(null);
-  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
   const bootstrapped = useRef(false);
   const blacklistRef = useRef<string[]>(initialBlacklist.current);
 
@@ -1358,29 +1357,6 @@ function App() {
     ]
   );
 
-  useEffect(() => {
-    const sentinel = loadMoreSentinelRef.current;
-    const container = resultsContainerRef.current;
-    if (!sentinel || !container) {
-      return;
-    }
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          if (!hasMoreResults || isLoading || isLoadingMore) {
-            return;
-          }
-          void handleLoadMore("auto");
-        }
-      },
-      { root: container, rootMargin: "200px" }
-    );
-    observer.observe(sentinel);
-    return () => {
-      observer.disconnect();
-    };
-  }, [handleLoadMore, hasMoreResults, isLoading, isLoadingMore]);
-
   const handleResultsPerPageChange = (event: ChangeEvent<HTMLSelectElement>) => {
     const value = Number(event.target.value);
     if (!RESULTS_PER_PAGE_OPTIONS.includes(value)) {
@@ -2007,7 +1983,6 @@ function App() {
         onLoadMore={handleLoadMore}
         hasMore={hasMoreResults}
         loadedPages={loadedPages.length}
-        loadMoreRef={loadMoreSentinelRef}
       />
       </section>
 

@@ -70,30 +70,6 @@ app.appendChild(resultsContainer);
 const paginationContainer = document.createElement('div');
 app.appendChild(paginationContainer);
 
-const loadMoreSentinel = document.createElement('div');
-loadMoreSentinel.className = 'load-more-sentinel';
-loadMoreSentinel.setAttribute('aria-hidden', 'true');
-
-let loadMoreObserver = null;
-if (typeof window !== 'undefined' && 'IntersectionObserver' in window) {
-  loadMoreObserver = new IntersectionObserver(
-    (entries) => {
-      for (const entry of entries) {
-        if (
-          entry.isIntersecting &&
-          state.hasMore &&
-          !state.loading &&
-          !state.loadingMore &&
-          !state.loadMoreError
-        ) {
-          runSearch({ append: true, page: state.page + 1, showLoader: false });
-        }
-      }
-    },
-    { root: null, rootMargin: '200px 0px 200px 0px' }
-  );
-}
-
 function persistSettings() {
   saveSettings({
     nsfwMode: state.nsfwMode,
@@ -168,9 +144,6 @@ function renderResults() {
 function renderPagination() {
   paginationContainer.innerHTML = '';
   if (state.error) {
-    if (loadMoreObserver) {
-      loadMoreObserver.disconnect();
-    }
     return;
   }
 
@@ -181,9 +154,6 @@ function renderPagination() {
     Boolean(state.loadMoreError);
 
   if (!shouldRenderControls) {
-    if (loadMoreObserver) {
-      loadMoreObserver.disconnect();
-    }
     return;
   }
 
@@ -205,14 +175,6 @@ function renderPagination() {
   });
 
   paginationContainer.appendChild(controls);
-  paginationContainer.appendChild(loadMoreSentinel);
-
-  if (loadMoreObserver) {
-    loadMoreObserver.disconnect();
-    if (state.hasMore && !state.loadMoreError) {
-      loadMoreObserver.observe(loadMoreSentinel);
-    }
-  }
 }
 
 async function runSearch(options = {}) {

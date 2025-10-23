@@ -22,9 +22,11 @@ export function PaginationControls({
   hasMore = false,
   loadedPages
 }: PaginationControlsProps) {
-  const canGoPrevious = currentPage > 1 && !isLoading;
+  const canGoPrevious = currentPage > 1 && !isLoading && !isLoadingMore;
   const canGoNext =
-    !isLoading && (totalPages === null ? true : currentPage < totalPages);
+    !isLoading &&
+    !isLoadingMore &&
+    (totalPages === null ? true : currentPage < totalPages);
 
   const label = totalPages ? `Page ${currentPage} of ${totalPages}` : `Page ${currentPage}`;
   const loadMoreEnabled = Boolean(hasMore && onLoadMore && !isLoading && !isLoadingMore);
@@ -49,6 +51,11 @@ export function PaginationControls({
       >
         Next
       </button>
+      {isLoadingMore ? (
+        <span className="pagination-status" role="status" aria-live="polite">
+          Loading next results…
+        </span>
+      ) : null}
       {onLoadMore ? (
         <button
           type="button"
