@@ -1,4 +1,66 @@
 import { getFuzzySuggestion } from '../utils/fuzzySearch.js';
+import {
+  createTruthContext,
+  scoreRecordTruth,
+  determineAvailability as resolveAvailability,
+  extractLanguage as resolveLanguage
+} from '../utils/truthScoring.js';
+
+const STOP_WORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'are',
+  'as',
+  'at',
+  'be',
+  'but',
+  'by',
+  'for',
+  'from',
+  'how',
+  'i',
+  'in',
+  'into',
+  'is',
+  'it',
+  'of',
+  'on',
+  'or',
+  'that',
+  'the',
+  'their',
+  'them',
+  'there',
+  'these',
+  'they',
+  'this',
+  'to',
+  'was',
+  'we',
+  'what',
+  'when',
+  'where',
+  'which',
+  'who',
+  'why',
+  'with',
+  'you',
+  'your'
+]);
+
+const FIELD_CONFIG = {
+  title: { weight: 1, keywordBase: 0.7, fuzzyBase: 0.3 },
+  description: { weight: 0.8, keywordBase: 0.625, fuzzyBase: 0.28 },
+  metadata: { weight: 0.5, keywordBase: 0.6, fuzzyBase: 0.24 },
+  fulltext: { weight: 0.3, keywordBase: 0.333, fuzzyBase: 0.2 }
+};
+
+const PROXIMITY_BONUS = [
+  { distance: 3, bonus: 0.2 },
+  { distance: 6, bonus: 0.12 },
+  { distance: 10, bonus: 0.08 }
+];
 
 const DEFAULT_API_BASE_URL = 'http://localhost:4000';
 const HTML_CONTENT_TYPE_PATTERN = /text\/html/i;
@@ -59,6 +121,253 @@ function buildSearchUrl(query, page, rows) {
   url.searchParams.set('page', String(page));
   url.searchParams.set('rows', String(rows));
   return url.toString();
+}
+
+function normalizeQueryString(query) {
+  return query
+    .toLowerCase()
+    .replace(/[\p{P}\p{S}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractKeywords(query) {
+  if (!query) return [];
+  const cleaned = query
+    .toLowerCase()
+    .replace(/[\p{P}\p{S}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleaned) return [];
+
+  const tokens = cleaned.split(' ');
+  const filtered = tokens.filter((token) => token.length > 2 && !STOP_WORDS.has(token));
+  const source = filtered.length > 0 ? filtered : tokens;
+  const keywords = [];
+  const seen = new Set();
+
+  for (const token of source) {
+    if (!seen.has(token)) {
+      seen.add(token);
+      keywords.push(token);
+    }
+    if (keywords.length >= 24) {
+      break;
+    }
+  }
+
+  return keywords;
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function countOccurrences(text, term) {
+  if (!text || !term) return 0;
+  const normalizedText = text.toLowerCase();
+  const normalizedTerm = term.toLowerCase();
+  if (!normalizedText.includes(normalizedTerm)) {
+    return 0;
+  }
+
+  const pattern = new RegExp(escapeRegExp(normalizedTerm), 'g');
+  const matches = normalizedText.match(pattern);
+  return matches ? matches.length : 0;
+}
+
+function tokenize(text) {
+  if (!text) return [];
+  return text
+    .toLowerCase()
+    .replace(/[\p{P}\p{S}]+/gu, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function levenshteinDistance(a, b) {
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  const matrix = Array.from({ length: rows }, () => new Array(cols).fill(0));
+
+  for (let i = 0; i < rows; i++) {
+    matrix[i][0] = i;
+  }
+  for (let j = 0; j < cols; j++) {
+    matrix[0][j] = j;
+  }
+
+  for (let i = 1; i < rows; i++) {
+    for (let j = 1; j < cols; j++) {
+      if (a[i - 1] === b[j - 1]) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j - 1] + 1
+        );
+      }
+    }
+  }
+
+  return matrix[a.length][b.length];
+}
+
+function computeFuzzyMatchScore(words, keyword, baseScore, fieldWeight) {
+  if (!keyword || words.length === 0) return 0;
+  const normalizedKeyword = keyword.toLowerCase();
+  let bestScore = 0;
+
+  for (const word of words) {
+    if (word === normalizedKeyword) continue;
+    const distance = levenshteinDistance(word, normalizedKeyword);
+    if (distance === 0 || distance > 2) continue;
+    const maxLength = Math.max(word.length, normalizedKeyword.length) || 1;
+    const closeness = 1 - distance / maxLength;
+    if (closeness <= 0.35) continue;
+    const bonus = Math.max(0.1, closeness * baseScore) * fieldWeight;
+    if (bonus > bestScore) {
+      bestScore = bonus;
+    }
+  }
+
+  return bestScore;
+}
+
+function computeProximityScore(words, keywords, fieldWeight) {
+  if (keywords.length < 2 || words.length === 0) {
+    return 0;
+  }
+
+  const keywordSet = new Set(keywords.map((keyword) => keyword.toLowerCase()));
+  const positions = [];
+
+  words.forEach((word, index) => {
+    keywordSet.forEach((keyword) => {
+      if (word === keyword || word.includes(keyword)) {
+        positions.push({ keyword, index });
+      }
+    });
+  });
+
+  if (positions.length < 2) {
+    return 0;
+  }
+
+  let minDistance = Infinity;
+
+  for (let i = 0; i < positions.length; i++) {
+    for (let j = i + 1; j < positions.length; j++) {
+      if (positions[i].keyword === positions[j].keyword) continue;
+      const distance = Math.abs(positions[i].index - positions[j].index);
+      if (distance < minDistance) {
+        minDistance = distance;
+      }
+    }
+  }
+
+  if (!Number.isFinite(minDistance)) {
+    return 0;
+  }
+
+  for (const { distance, bonus } of PROXIMITY_BONUS) {
+    if (minDistance <= distance) {
+      return bonus * fieldWeight;
+    }
+  }
+
+  return 0;
+}
+
+function collectValues(target, ...values) {
+  for (const value of values) {
+    if (!value) continue;
+    if (typeof value === 'string' || typeof value === 'number') {
+      target.push(String(value));
+    } else if (Array.isArray(value)) {
+      collectValues(target, ...value);
+    } else if (typeof value === 'object') {
+      collectValues(target, ...Object.values(value));
+    }
+  }
+}
+
+function computeRelevanceScore(fieldTexts, normalizedQuery, keywords) {
+  let exactScore = 0;
+  let keywordScore = 0;
+  let fuzzyScore = 0;
+  let proximityScore = 0;
+
+  for (const [field, text] of Object.entries(fieldTexts)) {
+    if (!text) continue;
+    const config = FIELD_CONFIG[field];
+    if (!config) continue;
+    const lower = text.toLowerCase();
+    const words = tokenize(text);
+
+    if (normalizedQuery && lower.includes(normalizedQuery)) {
+      exactScore += 1 * config.weight;
+    }
+
+    for (const keyword of keywords) {
+      const occurrences = countOccurrences(lower, keyword);
+      if (occurrences > 0) {
+        keywordScore += occurrences * config.keywordBase * config.weight;
+        if (occurrences > 1) {
+          keywordScore += (occurrences - 1) * 0.05 * config.weight;
+        }
+      } else {
+        fuzzyScore += computeFuzzyMatchScore(words, keyword, config.fuzzyBase, config.weight);
+      }
+    }
+
+    const proximityBonus = computeProximityScore(words, keywords, config.weight);
+    proximityScore += proximityBonus;
+  }
+
+  return exactScore + keywordScore + fuzzyScore + proximityScore;
+}
+
+function buildFieldTexts(doc, fallbackDoc, identifier) {
+  const baseDoc = doc && typeof doc === 'object' ? doc : {};
+  const backupDoc = fallbackDoc && typeof fallbackDoc === 'object' ? fallbackDoc : {};
+
+  const title = sanitizeText(baseDoc.title || backupDoc.title || identifier || '');
+  const description = sanitizeText(baseDoc.description || backupDoc.description || '');
+
+  const metadataValues = [];
+  collectValues(
+    metadataValues,
+    baseDoc.subject,
+    backupDoc.subject,
+    baseDoc.tags,
+    backupDoc.tags,
+    baseDoc.keywords,
+    backupDoc.keywords,
+    baseDoc.collection,
+    backupDoc.collection,
+    baseDoc.creator,
+    backupDoc.creator,
+    baseDoc.language,
+    backupDoc.language,
+    baseDoc.publisher,
+    backupDoc.publisher,
+    baseDoc.contributor,
+    backupDoc.contributor,
+    baseDoc.topic,
+    backupDoc.topic,
+    baseDoc.topics,
+    backupDoc.topics,
+    baseDoc.identifier,
+    backupDoc.identifier
+  );
+
+  const metadata = sanitizeText(metadataValues);
+  const fulltext = sanitizeText(baseDoc.text || backupDoc.text || '');
+
+  return { title, description, metadata, fulltext };
 }
 
 function sanitizeText(value) {
@@ -186,6 +495,8 @@ export async function searchArchive(query, page = 1, rows = 10) {
     return { total: 0, results: [], suggestion: null };
   }
 
+  const truthContext = createTruthContext(trimmed);
+
   const url = buildSearchUrl(trimmed, page, rows);
   const payload = await fetchJson(url);
 
@@ -210,8 +521,9 @@ export async function searchArchive(query, page = 1, rows = 10) {
     const fallbackLinks =
       fallbackDoc && typeof fallbackDoc.links === 'object' ? fallbackDoc.links : null;
 
-    const title = sanitizeText(doc.title || fallbackDoc.title || identifier) || identifier;
-    const description = sanitizeText(doc.description || fallbackDoc.description);
+    const fieldTexts = buildFieldTexts(doc, fallbackDoc, identifier);
+    const title = fieldTexts.title || identifier;
+    const description = fieldTexts.description;
     const mediatype = pickString(doc.mediatype, fallbackDoc.mediatype);
 
     const archiveCandidate = pickString(
@@ -244,6 +556,11 @@ export async function searchArchive(query, page = 1, rows = 10) {
       ? fallbackDoc.nsfw_matches
       : [];
 
+    const truthRecord = { ...fallbackDoc, ...doc, identifier };
+    const { score: truthScore, breakdown } = scoreRecordTruth(truthRecord, truthContext);
+    const availability = resolveAvailability(truthRecord);
+    const language = resolveLanguage(truthRecord);
+
     return {
       identifier,
       title,
@@ -254,9 +571,16 @@ export async function searchArchive(query, page = 1, rows = 10) {
       mediatype: mediatype || 'unknown',
       nsfw: nsfwFlag,
       ...(nsfwLevel ? { nsfwLevel } : {}),
-      ...(nsfwMatches.length > 0 ? { nsfwMatches } : {})
+      ...(nsfwMatches.length > 0 ? { nsfwMatches } : {}),
+      score: truthScore,
+      score_breakdown: breakdown,
+      availability,
+      ...(language ? { language } : {}),
+      source_trust: breakdown.trustLevel
     };
   });
+
+  results.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 
   const datasetForFuzzy = results.map((doc) => doc.title || doc.identifier);
   const suggestionFromSpellcheck = extractSuggestion(payload?.spellcheck);
@@ -267,9 +591,20 @@ export async function searchArchive(query, page = 1, rows = 10) {
       ? payload.pagination.total
       : payload?.response?.numFound) ?? results.length;
 
+  const safePage = Number.isFinite(Number(page)) && Number(page) > 0 ? Number(page) : 1;
+  const safeRows = Number.isFinite(Number(rows)) && Number(rows) > 0 ? Number(rows) : 10;
+  const startIndex =
+    typeof payload?.response?.start === 'number'
+      ? payload.response.start
+      : (safePage - 1) * safeRows;
+  const currentCount = startIndex + baseResults.length;
+  const hasMore = currentCount < total;
+
   return {
     total,
     results,
-    suggestion: suggestionFromSpellcheck || fallbackSuggestion
+    suggestion: suggestionFromSpellcheck || fallbackSuggestion,
+    hasMore,
+    page: safePage
   };
 }

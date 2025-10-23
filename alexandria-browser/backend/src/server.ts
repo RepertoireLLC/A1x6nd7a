@@ -1708,16 +1708,21 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     downloads: doc.downloads ?? null,
   }));
 
+  const responseTotal =
+    typeof originalNumFound === "number" && Number.isFinite(originalNumFound)
+      ? originalNumFound
+      : filteredCount;
+
   if (data.response) {
     data.response = {
       ...data.response,
       docs: normalizedDocs,
-      numFound: filteredCount
+      numFound: responseTotal
     };
   } else {
     data.response = {
       docs: normalizedDocs,
-      numFound: filteredCount,
+      numFound: responseTotal,
       start: 0
     };
   }
@@ -1748,7 +1753,7 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     pagination: {
       page: safePage,
       rows: safeRows,
-      total: filteredCount
+      total: responseTotal
     }
   };
 
@@ -1756,7 +1761,10 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     payload.alternate_queries = alternateSuggestions;
   }
 
-  payload.original_numFound = originalNumFound;
+  payload.original_numFound =
+    typeof originalNumFound === "number" && Number.isFinite(originalNumFound)
+      ? originalNumFound
+      : responseTotal;
   payload.filtered_count = filteredCount;
 
   if (usedFallback) {
