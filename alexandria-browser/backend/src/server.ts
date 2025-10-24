@@ -14,8 +14,6 @@
  * - Build Open and Forkable
  */
 
-import path from "node:path";
-
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
 import { ProxyAgent, setGlobalDispatcher } from "undici";
 
@@ -23,7 +21,7 @@ import { SAMPLE_ARCHIVE_DOCS, type SampleArchiveDoc } from "./data/sampleArchive
 import { SAMPLE_METADATA } from "./data/sampleMetadata";
 import { SAMPLE_CDX_SNAPSHOTS } from "./data/sampleCdxSnapshots";
 import { DEFAULT_SCRAPE_RESPONSE, SAMPLE_SCRAPE_RESULTS } from "./data/sampleScrapeResults";
-import { annotateRecord } from "./services/nsfwFilter";
+import { annotateRecord, containsNSFW } from "./services/nsfwFilter";
 import { buildHybridSearchExpression, suggestAlternativeQueries } from "./services/queryExpansion";
 import { scoreArchiveRecord, type SearchScoreBreakdown } from "./services/resultScoring";
 import {
@@ -38,18 +36,20 @@ import {
 import { getSpellCorrector, type SpellcheckResult } from "./services/spellCorrector";
 import { isValidReportReason, sendReportEmail, type ReportSubmission } from "./services/reporting";
 import {
-  configureLocalAI,
+  configureAI,
+  embedSearchText,
   generateAIResponse,
   generateContextualResponse,
+  getAIModelList,
   getLastAIOutcome,
-  isLocalAIEnabled,
-  initializeLocalAI,
-  listAvailableLocalAIModels,
-  type LocalAIContextRequest,
-  type LocalAIConversationTurn,
-  type LocalAIModelInventory,
-  type LocalAIOutcome,
-} from "./ai/LocalAI";
+  initializeAI,
+  isAIEnabled,
+  isAIReady,
+  refineSearchQuery,
+  type AIContextRequest,
+  type AIConversationTurn,
+  type AIOutcome,
+} from "./ai/service";
 import { buildHeuristicAISummary, type HeuristicDocSummary } from "./ai/heuristicSummaries";
 import { loadRuntimeConfig } from "./config/runtimeConfig";
 import {
@@ -107,6 +107,151 @@ type SearchPagination = {
   total: number | null;
 };
 
+const RERANK_EMBED_DOC_LIMIT = 40;
+
+function vectorMagnitude(values: number[]): number {
+  let sum = 0;
+  for (const value of values) {
+    sum += value * value;
+  }
+  return Math.sqrt(sum);
+}
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length === 0 || b.length === 0) {
+    return 0;
+  }
+  const length = Math.min(a.length, b.length);
+  let dot = 0;
+  for (let index = 0; index < length; index += 1) {
+    dot += a[index] * b[index];
+  }
+  const denom = vectorMagnitude(a) * vectorMagnitude(b);
+  if (denom === 0) {
+    return 0;
+  }
+  return dot / denom;
+}
+
+function computeKeywordBoost(tokens: string[], text: string): number {
+  if (tokens.length === 0 || !text) {
+    return 0;
+  }
+  const haystack = text.toLowerCase();
+  let matches = 0;
+  for (const token of tokens) {
+    if (token.length < 3) {
+      continue;
+    }
+    if (haystack.includes(token)) {
+      matches += 1;
+    }
+  }
+  if (matches === 0) {
+    return 0;
+  }
+  return Math.min(0.25, matches / tokens.length);
+}
+
+function computeModeAdjustment(mode: NSFWUserMode, record: Record<string, unknown>): number {
+  const flagged = record.nsfw === true;
+  const severityRaw = record.nsfwLevel ?? record.nsfw_level;
+  const severity = typeof severityRaw === "string" ? severityRaw.toLowerCase() : null;
+
+  switch (mode) {
+    case "safe":
+      return flagged ? -0.8 : 0.15;
+    case "moderate":
+      return severity === "explicit" || severity === "violent" ? -0.45 : 0;
+    case "nsfw-only":
+      return flagged ? 0.4 : -0.6;
+    default:
+      return 0;
+  }
+}
+
+async function rerankDocuments(
+  docs: Array<Record<string, unknown>>,
+  query: string,
+  mode: NSFWUserMode
+): Promise<Array<Record<string, unknown>>> {
+  const trimmedQuery = query.trim();
+  if (!trimmedQuery || docs.length === 0) {
+    return docs;
+  }
+
+  const tokens = trimmedQuery
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+
+  let queryVector: number[] = [];
+  try {
+    queryVector = await embedSearchText(trimmedQuery);
+  } catch (error) {
+    console.warn("Unable to compute query embedding", error);
+    return docs;
+  }
+
+  if (queryVector.length === 0) {
+    return docs;
+  }
+
+  const limitedDocs = docs.slice(0, RERANK_EMBED_DOC_LIMIT);
+  const scored = await Promise.all(
+    limitedDocs.map(async (doc) => {
+      const strings: string[] = [];
+      const title = typeof doc.title === "string" ? doc.title : typeof doc["title"] === "string" ? (doc["title"] as string) : "";
+      if (title) {
+        strings.push(title);
+      }
+      const description = typeof doc.description === "string" ? doc.description : "";
+      if (description) {
+        strings.push(description);
+      }
+      const combined = strings.join(" ").trim();
+
+      let similarity = 0;
+      if (combined) {
+        try {
+          const docVector = await embedSearchText(combined);
+          similarity = cosineSimilarity(queryVector, docVector);
+        } catch (error) {
+          console.warn("Unable to compute document embedding", error);
+        }
+      }
+
+      const metadataScore =
+        typeof doc.score === "number" && Number.isFinite(doc.score)
+          ? (doc.score as number)
+          : 0;
+      const keywordBoost = computeKeywordBoost(tokens, combined || `${title}`);
+      const modeAdjustment = computeModeAdjustment(mode, doc);
+      const total = metadataScore * 0.55 + similarity * 0.35 + keywordBoost + modeAdjustment;
+
+      return {
+        doc,
+        total,
+        similarity,
+        keywordBoost,
+      };
+    })
+  );
+
+  const remaining = docs.slice(RERANK_EMBED_DOC_LIMIT).map((doc) => ({ doc, total: 0, similarity: 0, keywordBoost: 0 }));
+  const combinedScores = scored.concat(remaining);
+  combinedScores.sort((a, b) => b.total - a.total);
+
+  return combinedScores.map((entry) => {
+    const next = { ...entry.doc } as Record<string, unknown>;
+    next.semantic_score = entry.similarity;
+    next.ai_rank_score = entry.total;
+    next.keyword_boost = entry.keywordBoost;
+    return next;
+  });
+}
+
 type ArchiveSearchResponse = Record<string, unknown> & {
   response?: {
     docs?: Array<Record<string, unknown>>;
@@ -138,21 +283,18 @@ type AIQueryResponsePayload = {
   status: AIQueryStatus;
   reply: string | null;
   error?: string | null;
-  mode: LocalAIContextRequest["mode"];
-  outcome?: LocalAIOutcome;
+  mode: AIContextRequest["mode"];
+  outcome?: AIOutcome;
 };
 
 type AIStatusResponsePayload = {
   enabled: boolean;
-  outcome: LocalAIOutcome;
+  outcome: AIOutcome;
   models: string[];
-  modelPaths: string[];
-  modelDirectory: string;
-  directoryAccessible: boolean;
-  directoryError?: string;
+  ready: boolean;
 };
 
-type LocalAIContextShape = NonNullable<LocalAIContextRequest["context"]>;
+type AIContextShape = NonNullable<AIContextRequest["context"]>;
 
 type ArchiveSearchAttempt = {
   description: string;
@@ -226,30 +368,26 @@ const OFFLINE_FALLBACK_MESSAGE_BASE =
 const runtimeConfig = loadRuntimeConfig();
 const runtimeAiConfig = runtimeConfig.ai;
 
-configureLocalAI({
+const configuredOutcome = configureAI({
   enabled: runtimeAiConfig.enabled,
-  modelDirectory: runtimeAiConfig.modelDirectory,
-  modelName: runtimeAiConfig.modelName,
-  modelPath: runtimeAiConfig.modelPath,
+  model: runtimeAiConfig.model,
+  embeddingModel: runtimeAiConfig.embeddingModel,
 });
 
 if (runtimeAiConfig.enabled && runtimeAiConfig.autoInitialize) {
-  void initializeLocalAI().then((outcome) => {
-    if (outcome.status === "success" || outcome.status === "idle") {
-      console.info(
-        "Local AI initialized",
-        outcome.modelPath ? `using model ${outcome.modelPath}` : "without an explicit model path"
-      );
-    } else if (outcome.status === "missing-model") {
-      console.warn("Local AI auto-initialization skipped: no compatible model found.");
-    } else if (outcome.status === "disabled") {
-      console.info("Local AI auto-initialization skipped because the service is disabled.");
+  void initializeAI().then((outcome) => {
+    if (outcome.status === "ready") {
+      console.info("Local AI initialized using npm transformer models.");
+    } else if (outcome.status === "idle") {
+      console.info("Local AI auto-initialization skipped.", outcome.message ?? "");
     } else {
       console.warn("Local AI auto-initialization encountered an issue.", outcome.message);
     }
   });
 } else if (!runtimeAiConfig.enabled) {
   console.info("Local AI assistance disabled via server configuration.");
+} else if (configuredOutcome.status === "error") {
+  console.warn("Local AI configuration encountered an issue.", configuredOutcome.message);
 }
 
 const spellCorrector = getSpellCorrector();
@@ -482,12 +620,12 @@ function parseRequestUrl(req: IncomingMessage): URL {
   return new URL(requestUrl, `http://${hostHeader}`);
 }
 
-function normalizeAIHistory(historyValue: unknown): LocalAIConversationTurn[] {
+function normalizeAIHistory(historyValue: unknown): AIConversationTurn[] {
   if (!Array.isArray(historyValue)) {
     return [];
   }
 
-  const normalized: LocalAIConversationTurn[] = [];
+  const normalized: AIConversationTurn[] = [];
   for (const entry of historyValue) {
     if (!entry || typeof entry !== "object") {
       continue;
@@ -502,7 +640,7 @@ function normalizeAIHistory(historyValue: unknown): LocalAIConversationTurn[] {
       continue;
     }
     const roleValue = typeof record.role === "string" ? record.role.trim().toLowerCase() : "user";
-    const role: LocalAIConversationTurn["role"] = roleValue === "assistant" ? "assistant" : "user";
+    const role: AIConversationTurn["role"] = roleValue === "assistant" ? "assistant" : "user";
     normalized.push({ role, content: trimmedContent });
     if (normalized.length >= 6) {
       // Maintain a short rolling window to avoid overwhelming the model.
@@ -513,13 +651,13 @@ function normalizeAIHistory(historyValue: unknown): LocalAIConversationTurn[] {
   return normalized;
 }
 
-function normalizeAIContext(contextValue: unknown): LocalAIContextRequest["context"] | undefined {
+function normalizeAIContext(contextValue: unknown): AIContextRequest["context"] | undefined {
   if (!contextValue || typeof contextValue !== "object") {
     return undefined;
   }
 
   const record = contextValue as Record<string, unknown>;
-  const context: LocalAIContextShape = {};
+  const context: AIContextShape = {};
 
   if (typeof record.activeQuery === "string" && record.activeQuery.trim()) {
     context.activeQuery = record.activeQuery.trim();
@@ -560,7 +698,7 @@ function normalizeAIContext(contextValue: unknown): LocalAIContextRequest["conte
   return Object.keys(context).length > 0 ? context : undefined;
 }
 
-function normalizeAIMode(modeValue: unknown): LocalAIContextRequest["mode"] {
+function normalizeAIMode(modeValue: unknown): AIContextRequest["mode"] {
   if (typeof modeValue === "string") {
     const normalized = modeValue.trim().toLowerCase();
     if (normalized === "navigation" || normalized === "document" || normalized === "search" || normalized === "chat") {
@@ -1586,6 +1724,22 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     return;
   }
 
+  let effectiveQuery = query;
+  let aiRefinedQuery: string | null = null;
+
+  if (aiModeEnabled) {
+    try {
+      const refined = await refineSearchQuery(query, nsfwUserMode);
+      if (refined && refined.trim() && refined.trim().toLowerCase() !== query.toLowerCase()) {
+        effectiveQuery = refined.trim();
+        aiRefinedQuery = effectiveQuery;
+      }
+    } catch (error) {
+      console.warn("AI refinement failed, falling back to user query", error);
+      effectiveQuery = query;
+    }
+  }
+
   let data: ArchiveSearchResponse | null = null;
   let usedFallback = false;
   let lastSearchError: unknown = null;
@@ -1610,7 +1764,7 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
   };
 
   try {
-    const attempts = buildArchiveSearchAttempts(query, safePage, safeRows, filterConfig);
+    const attempts = buildArchiveSearchAttempts(effectiveQuery, safePage, safeRows, filterConfig);
     const result = await executeArchiveSearchAttempts(attempts);
     data = result.payload;
     lastAttempt = result.attempt;
@@ -1635,7 +1789,7 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       return;
     }
 
-    data = performLocalArchiveSearch(query, safePage, safeRows, filterConfig, safeOffset);
+    data = performLocalArchiveSearch(effectiveQuery, safePage, safeRows, filterConfig, safeOffset);
     usedFallback = true;
     const fallbackInfo = describeArchiveFallback(lastSearchError);
     data.fallback_reason = fallbackInfo.reason;
@@ -1688,6 +1842,7 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       ];
 
       const withLinks = attachArchiveLinks(record);
+      const flagged = containsNSFW(withLinks);
 
       for (const field of possibleFields) {
         if (typeof field === "string") {
@@ -1705,7 +1860,11 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       if (combinedText) {
         combinedTexts.push(combinedText);
       }
-      return annotateRecord(withLinks);
+      const annotated = annotateRecord(withLinks);
+      if (flagged) {
+        annotated.nsfw = true;
+      }
+      return annotated;
     }
 
     return doc;
@@ -1713,7 +1872,7 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
 
   const scoredDocs = normalizedDocs.map((doc) => {
     if (doc && typeof doc === "object") {
-      const analysis = scoreArchiveRecord(doc, query);
+      const analysis = scoreArchiveRecord(doc, effectiveQuery);
       const enriched: Record<string, unknown> = {
         ...doc,
         score: analysis.breakdown.combinedScore,
@@ -1745,9 +1904,11 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
 
   const nsfwAdjustedDocs = filterByNSFWMode(filteredDocs, nsfwUserMode);
 
-  normalizedDocs = nsfwAdjustedDocs;
+  const rerankedDocs = await rerankDocuments(nsfwAdjustedDocs, effectiveQuery, nsfwUserMode);
 
-  const scoreValues = nsfwAdjustedDocs
+  normalizedDocs = rerankedDocs;
+
+  const scoreValues = rerankedDocs
     .map((doc) => {
       const raw = doc.score;
       if (typeof raw === "number" && Number.isFinite(raw)) {
@@ -1762,7 +1923,9 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   const highestScore = scoreValues.length > 0 ? Math.max(...scoreValues) : 0;
   const alternateSuggestions =
-    filteredDocs.length === 0 || highestScore < 0.35 ? suggestAlternativeQueries(query) : [];
+    filteredDocs.length === 0 || highestScore < 0.35
+      ? suggestAlternativeQueries(effectiveQuery)
+      : [];
 
   const summaryResults: ArchiveSearchResultSummary[] = normalizedDocs.map((doc) => {
     const record = doc && typeof doc === "object" ? (doc as Record<string, unknown>) : {};
@@ -1861,8 +2024,8 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
 
   let spellcheck: SpellcheckResult | null = null;
 
-  if (query.length > 0) {
-    const result = spellCorrector.checkQuery(query);
+  if (effectiveQuery.length > 0) {
+    const result = spellCorrector.checkQuery(effectiveQuery);
     const trimmedCorrected = result.correctedQuery.trim();
     const trimmedOriginal = result.originalQuery.trim();
     if (
@@ -1884,6 +2047,10 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       total: responseTotal
     }
   };
+
+  if (aiRefinedQuery) {
+    payload.ai_refined_query = aiRefinedQuery;
+  }
 
   if (alternateSuggestions.length > 0) {
     payload.alternate_queries = alternateSuggestions;
@@ -1910,15 +2077,20 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
   }
 
   if (aiModeEnabled) {
-    let aiOutcome: LocalAIOutcome | null = null;
+    let aiOutcome: AIOutcome | null = null;
 
-    if (!runtimeAiConfig.enabled) {
+    if (!runtimeAiConfig.enabled || !isAIEnabled()) {
       aiSummaryStatus = "unavailable";
       aiSummaryError = "Local AI assistance is disabled by the server configuration.";
-      aiOutcome = { status: "disabled", message: aiSummaryError, modelPath: null };
+      const currentOutcome = getLastAIOutcome();
+      if (currentOutcome.status === "idle" && currentOutcome.message) {
+        aiOutcome = currentOutcome;
+      } else {
+        aiOutcome = { status: "idle", message: aiSummaryError };
+      }
     } else {
       try {
-        const aiResponse = await generateAIResponse(query, { nsfwMode: nsfwUserMode });
+        const aiResponse = await generateAIResponse(effectiveQuery, { nsfwMode: nsfwUserMode });
         aiOutcome = getLastAIOutcome();
         const trimmed = typeof aiResponse === "string" ? aiResponse.trim() : "";
         if (trimmed) {
@@ -1926,24 +2098,12 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
           aiSummaryStatus = "success";
           aiSummaryError = null;
           aiSummarySource = "model";
+        } else if (aiOutcome.status === "error") {
+          aiSummaryStatus = "error";
+          aiSummaryError = aiOutcome.message ?? "Local AI encountered an unexpected error.";
         } else {
-          if (aiOutcome.status === "error") {
-            aiSummaryStatus = "error";
-            aiSummaryError = aiOutcome.message ?? "Local AI encountered an unexpected error.";
-          } else if (aiOutcome.status === "missing-model" || aiOutcome.status === "disabled") {
-            aiSummaryStatus = "unavailable";
-            aiSummaryError = aiOutcome.message ?? "Local AI model is not available on the server.";
-          } else if (aiOutcome.status === "blocked") {
-            aiSummaryStatus = "unavailable";
-            aiSummaryError =
-              aiOutcome.message ??
-              (nsfwUserMode === "safe"
-                ? "AI Mode: This content is hidden because Safe Search is enabled."
-                : "AI suggestions are hidden due to the active NSFW mode.");
-          } else {
-            aiSummaryStatus = "unavailable";
-            aiSummaryError = aiOutcome.message ?? null;
-          }
+          aiSummaryStatus = "unavailable";
+          aiSummaryError = aiOutcome.message ?? "Local AI response is unavailable.";
         }
       } catch (error) {
         aiSummaryStatus = "error";
@@ -1951,10 +2111,10 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       }
     }
 
-    if (aiOutcome?.status !== "blocked") {
+    {
       const reason = aiSummaryError ?? aiOutcome?.message ?? null;
       if (!aiSummary || aiSummaryStatus !== "success") {
-        const heuristic = buildHeuristicAISummary(query, heuristicDocs, nsfwUserMode, reason);
+        const heuristic = buildHeuristicAISummary(effectiveQuery, heuristicDocs, nsfwUserMode, reason);
         if (heuristic) {
           aiSummary = heuristic.summary;
           aiSummaryStatus = "success";
@@ -2004,24 +2164,16 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
 }
 
 async function handleAIStatus({ res }: HandlerContext): Promise<void> {
-  const enabled = isLocalAIEnabled();
-  const inventory: LocalAIModelInventory = await listAvailableLocalAIModels();
+  const enabled = isAIEnabled();
   const outcome = getLastAIOutcome();
-  const modelPaths = inventory.modelPaths;
-  const models = modelPaths.map((modelPath) => path.basename(modelPath));
+  const models = getAIModelList();
 
   const payload: AIStatusResponsePayload = {
     enabled,
     outcome,
     models,
-    modelPaths,
-    modelDirectory: inventory.modelDirectory,
-    directoryAccessible: inventory.directoryAccessible,
+    ready: isAIReady(),
   };
-
-  if (inventory.directoryError) {
-    payload.directoryError = inventory.directoryError;
-  }
 
   sendJson(res, 200, payload);
 }
@@ -2067,14 +2219,18 @@ async function handleAIQuery({ req, res }: HandlerContext): Promise<void> {
   const nsfwModeInput = typeof data.nsfwMode === "string" ? data.nsfwMode : undefined;
   const nsfwUserMode = resolveUserNSFWMode(nsfwModeInput);
 
-  if (!runtimeAiConfig.enabled) {
+  if (!runtimeAiConfig.enabled || !isAIEnabled()) {
     const disabledOutcome = getLastAIOutcome();
     const response: AIQueryResponsePayload = {
       status: "disabled",
       reply: null,
-      error: disabledOutcome.message ?? "Local AI assistance is disabled by the server configuration.",
+      error:
+        disabledOutcome.message ??
+        "Local AI assistance is disabled by the server configuration.",
       mode,
-      outcome: disabledOutcome,
+      outcome: disabledOutcome.status === "idle"
+        ? { ...disabledOutcome }
+        : { status: "idle", message: disabledOutcome.message },
     };
     sendJson(res, 200, response);
     return;
@@ -2084,7 +2240,7 @@ async function handleAIQuery({ req, res }: HandlerContext): Promise<void> {
   if (mode === "search") {
     reply = await generateAIResponse(sanitizedQuery, { nsfwMode: nsfwUserMode });
   } else {
-    const request: LocalAIContextRequest = {
+    const request: AIContextRequest = {
       mode,
       message,
       query: sanitizedQuery,
@@ -2099,23 +2255,10 @@ async function handleAIQuery({ req, res }: HandlerContext): Promise<void> {
   let status: AIQueryStatus = "success";
   let errorMessage: string | null = null;
 
-  if (outcome.status === "disabled") {
-    status = "disabled";
-    errorMessage = outcome.message ?? "Local AI assistance is disabled.";
-  } else if (!reply) {
-    if (outcome.status === "missing-model") {
-      status = "unavailable";
-      errorMessage = outcome.message ?? "Local AI model is not available.";
-    } else if (outcome.status === "error") {
+  if (!reply) {
+    if (outcome.status === "error") {
       status = "error";
       errorMessage = outcome.message ?? "Local AI failed to generate a response.";
-    } else if (outcome.status === "blocked") {
-      status = "unavailable";
-      errorMessage =
-        outcome.message ??
-        (nsfwUserMode === "safe"
-          ? "AI Mode: This content is hidden because Safe Search is enabled."
-          : "AI suggestions are hidden due to the active NSFW mode.");
     } else {
       status = "unavailable";
       errorMessage = outcome.message ?? "Local AI response is unavailable.";

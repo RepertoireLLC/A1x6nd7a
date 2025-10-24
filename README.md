@@ -35,8 +35,7 @@ alexandria-browser/
 To install dependencies and build both workspaces in one go:
 
 ```bash
-# Skip the optional Mistral download when you only need core search features
-ALEXANDRIA_SKIP_MODEL_DOWNLOAD=true npm install --workspaces
+npm install --workspaces
 npm run build:alexandria
 ```
 
@@ -88,15 +87,15 @@ The frontend expects the backend at `http://localhost:4000` by default. Override
 
 > **Tip:** The demo previously bundled mock datasets for offline browsing. Production builds now require the live API. Development servers now enable the legacy offline dataset automatically; set `VITE_ENABLE_OFFLINE_FALLBACK=false` and `ENABLE_OFFLINE_FALLBACK=false` if you prefer to exercise the live API locally.
 
-### Configure the offline Mistral AI assistant
+### AI-powered search assistance
 
-Alexandria bundles optional support for the [Mistral 7B Instruct](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2) `gguf` model via the `node-llama-cpp` runtime.
+The Alexandria backend now embeds a lightweight, fully JavaScript inference stack powered by [`@xenova/transformers`](https://github.com/xenova/transformers.js). No native bindings, Python runtimes, or manual model downloads are required—the first request automatically fetches and caches the small `Xenova/distilgpt2` generator alongside the `Xenova/all-MiniLM-L6-v2` embedding model for semantic ranking. Configuration lives in `alexandria-browser/backend/config/default.json` and honours the following environment variables when you need overrides:
 
-1. **Install dependencies** – running `npm install --workspaces` triggers a post-install script that downloads `Mistral-7B-Instruct-v0.2.Q4_K_M.gguf` into `alexandria-browser/backend/models/`. Subsequent installs skip the transfer when the file already exists. Set `ALEXANDRIA_SKIP_MODEL_DOWNLOAD=true` (or run in CI without opting in) to bypass the download and fetch the model manually.
-2. **Manual download (optional)** – if the automated step is skipped, download the model directly from Hugging Face and place it at the path referenced in `config/ai.json` (default: `alexandria-browser/backend/models/mistral-7b-instruct.gguf`).
-3. **Enable the assistant** – edit `alexandria-browser/backend/config/ai.json` and change `"aiEnabled": false` to `true` once the model is available. You may also adjust `modelPath` or `defaultModel` to match a different filename or location.
-4. **Override via environment (optional)** – the backend honours `ALEXANDRIA_AI_MODEL_PATH`, `ALEXANDRIA_AI_MODEL_DIR`, `ALEXANDRIA_AI_MODEL`, and `ALEXANDRIA_DISABLE_LOCAL_AI` for runtime overrides without editing the JSON file. These variables are resolved before loading the model.
-5. **Run the dev servers** – start the backend and frontend as described above, then toggle **AI Mode** inside the Alexandria settings panel to verify the assistant responds. If the model is missing or disabled, the UI falls back to the standard search experience and logs a warning instead of failing.
+* `ALEXANDRIA_AI_ENABLED` – enable/disable the assistant entirely (`true` by default).
+* `ALEXANDRIA_AI_MODEL_NAME` / `ALEXANDRIA_AI_MODEL` – swap the text-generation model.
+* `ALEXANDRIA_AI_EMBEDDING_MODEL` – choose a different embedding backbone.
+
+Start both dev servers, toggle **AI Mode** in the settings sidebar, and the assistant will refine queries, re-rank results via embeddings, and summarise findings. If you disable the assistant, the UI reverts to the core archive search experience without errors.
 
 #### Production build
 

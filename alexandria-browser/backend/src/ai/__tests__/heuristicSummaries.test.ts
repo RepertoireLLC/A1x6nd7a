@@ -56,7 +56,7 @@ describe("buildHeuristicAISummary", () => {
     expect(result?.summary).not.toMatch(/adult|explicit/i);
   });
 
-  it("focuses on nsfw language when only-nsfw mode is active", () => {
+  it("focuses on nsfw language when nsfw-only mode is active", () => {
     const docs: HeuristicDocSummary[] = [
       {
         identifier: "nsfw-doc",
@@ -66,7 +66,7 @@ describe("buildHeuristicAISummary", () => {
       },
     ];
 
-    const result = buildHeuristicAISummary("classic cinema", docs, "only-nsfw");
+    const result = buildHeuristicAISummary("classic cinema", docs, "nsfw-only");
     expect(result).not.toBeNull();
     expect(result?.notice).toContain("NSFW");
   });

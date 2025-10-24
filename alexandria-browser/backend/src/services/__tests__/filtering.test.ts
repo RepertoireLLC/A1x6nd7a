@@ -21,8 +21,8 @@ describe("filtering", () => {
     expect(normalizeAvailability("archive")).toBe("archived-only");
     expect(normalizeSourceTrust("Curated")).toBe("high");
     expect(normalizeSourceTrust("default")).toBe("medium");
-    expect(normalizeNsfwMode("only-nsfw")).toBe("only");
-    expect(normalizeNsfwMode("unrestricted")).toBe("off");
+    expect(normalizeNsfwMode("nsfw-only")).toBe("nsfw-only");
+    expect(normalizeNsfwMode("unrestricted")).toBe("unrestricted");
   });
 
   it("matches language, trust, availability, and nsfw filters", () => {

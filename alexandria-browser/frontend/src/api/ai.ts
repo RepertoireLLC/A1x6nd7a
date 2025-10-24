@@ -26,9 +26,8 @@ export interface AIQueryRequest {
 }
 
 export interface AIQueryOutcome {
-  status: "idle" | "success" | "missing-model" | "error" | "disabled" | "blocked";
-  message?: string;
-  modelPath?: string | null;
+  status: "idle" | "ready" | "error";
+  message?: string | null;
 }
 
 export interface AIQueryResponse {
@@ -43,10 +42,7 @@ export interface AIStatusResponse {
   enabled: boolean;
   outcome: AIQueryOutcome;
   models: string[];
-  modelPaths: string[];
-  modelDirectory: string;
-  directoryAccessible: boolean;
-  directoryError?: string;
+  ready: boolean;
 }
 
 function buildQueryUrl(): string {

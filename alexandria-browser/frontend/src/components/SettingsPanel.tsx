@@ -46,8 +46,8 @@ export function SettingsPanel({
         <select className="settings-select" value={nsfwMode} onChange={handleModeChange}>
           <option value="safe">Safe — Truthful content for all ages</option>
           <option value="moderate">Moderate — Truthful content with mature context</option>
-          <option value="off">No Restriction — All truthful content visible</option>
-          <option value="only">NSFW Only — Explicit truth-focused material only</option>
+          <option value="unrestricted">No Restriction — All truthful content visible</option>
+          <option value="nsfw-only">NSFW Only — Explicit truth-focused material only</option>
         </select>
       </label>
       <label className="setting-row">

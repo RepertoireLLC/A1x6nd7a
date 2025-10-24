@@ -9,10 +9,9 @@ import keywordPayload from "../../../src/config/nsfwKeywords.json" assert { type
 import { detectKeywordMatches } from "./nsfwKeywordMatcher";
 
 interface KeywordConfig {
-  categories?: {
-    explicit?: unknown;
-    mild?: unknown;
-  };
+  explicit?: unknown;
+  adult?: unknown;
+  violent?: unknown;
 }
 
 type ClassifiedRecord<T> = T & {
@@ -27,7 +26,7 @@ type Classification = {
   matches: string[];
 };
 
-const MODE_VALUES: readonly NSFWFilterMode[] = ["safe", "moderate", "off", "only"];
+const MODE_VALUES: readonly NSFWFilterMode[] = ["safe", "moderate", "unrestricted", "nsfw-only"];
 
 function normalizeList(input: unknown): string[] {
   if (!Array.isArray(input)) {
@@ -42,16 +41,11 @@ function normalizeList(input: unknown): string[] {
   return Array.from(next);
 }
 
-function parseKeywordConfig(payload: KeywordConfig): { explicit: string[]; mild: string[] } {
-  if (payload.categories && typeof payload.categories === "object") {
-    const explicit = normalizeList(payload.categories.explicit);
-    const mild = normalizeList(payload.categories.mild);
-    const explicitSet = new Set(explicit);
-    const filteredMild = mild.filter((keyword) => !explicitSet.has(keyword));
-    return { explicit, mild: filteredMild };
-  }
-
-  return { explicit: [], mild: [] };
+function parseKeywordConfig(payload: KeywordConfig): { explicit: string[]; adult: string[]; violent: string[] } {
+  const explicit = normalizeList(payload.explicit);
+  const adult = normalizeList(payload.adult).filter((keyword) => !explicit.includes(keyword));
+  const violent = normalizeList(payload.violent);
+  return { explicit, adult, violent };
 }
 
 const KEYWORD_SETS = parseKeywordConfig(keywordPayload as KeywordConfig);
@@ -62,11 +56,11 @@ function normalizeMode(mode: NSFWFilterMode | string | undefined): NSFWFilterMod
     if (MODE_VALUES.includes(lowered as NSFWFilterMode)) {
       return lowered as NSFWFilterMode;
     }
-    if (lowered === "unrestricted" || lowered === "none" || lowered === "no_filter") {
-      return "off";
+    if (lowered === "unrestricted" || lowered === "none" || lowered === "no_filter" || lowered === "off") {
+      return "unrestricted";
     }
-    if (lowered === "only_nsfw" || lowered === "only-nsfw" || lowered === "nsfw") {
-      return "only";
+    if (lowered === "nsfw-only" || lowered === "only_nsfw" || lowered === "only-nsfw" || lowered === "nsfw") {
+      return "nsfw-only";
     }
   }
   return "safe";
@@ -133,6 +127,7 @@ function collectCandidateStrings(record: Record<string, unknown>): string[] {
 function classifyRecord(record: Record<string, unknown>): Classification {
   const explicitMatches = new Set<string>();
   const mildMatches = new Set<string>();
+  const violentMatches = new Set<string>();
 
   for (const value of collectCandidateStrings(record)) {
     const explicit = detectKeywordMatches(value, KEYWORD_SETS.explicit);
@@ -140,9 +135,14 @@ function classifyRecord(record: Record<string, unknown>): Classification {
       explicitMatches.add(keyword);
     }
 
-    const mild = detectKeywordMatches(value, KEYWORD_SETS.mild);
-    for (const keyword of mild) {
+    const adult = detectKeywordMatches(value, KEYWORD_SETS.adult);
+    for (const keyword of adult) {
       mildMatches.add(keyword);
+    }
+
+    const violent = detectKeywordMatches(value, KEYWORD_SETS.violent);
+    for (const keyword of violent) {
+      violentMatches.add(keyword);
     }
   }
 
@@ -150,7 +150,15 @@ function classifyRecord(record: Record<string, unknown>): Classification {
     return {
       flagged: true,
       severity: "explicit",
-      matches: Array.from(new Set([...explicitMatches, ...mildMatches]))
+      matches: Array.from(new Set([...explicitMatches, ...mildMatches, ...violentMatches]))
+    };
+  }
+
+  if (violentMatches.size > 0) {
+    return {
+      flagged: true,
+      severity: "violent",
+      matches: Array.from(new Set([...violentMatches, ...mildMatches]))
     };
   }
 
@@ -215,7 +223,7 @@ function resolveSeverity(record: ClassifiedRecord<unknown>): NSFWSeverity | null
   const value = record.nsfwLevel ?? (record as Record<string, unknown>).nsfw_level;
   if (typeof value === "string") {
     const lowered = value.trim().toLowerCase();
-    if (lowered === "explicit" || lowered === "mild") {
+    if (lowered === "explicit" || lowered === "mild" || lowered === "violent") {
       return lowered as NSFWSeverity;
     }
   }
@@ -224,7 +232,7 @@ function resolveSeverity(record: ClassifiedRecord<unknown>): NSFWSeverity | null
 
 function isFlagged(record: ClassifiedRecord<unknown>): boolean {
   const severity = resolveSeverity(record);
-  if (severity === "explicit" || severity === "mild") {
+  if (severity === "explicit" || severity === "mild" || severity === "violent") {
     return true;
   }
   return record.nsfw === true;
@@ -234,14 +242,17 @@ function matchesMode(record: ClassifiedRecord<unknown>, mode: NSFWFilterMode): b
   const severity = resolveSeverity(record);
   const flagged = isFlagged(record);
 
-  if (mode === "only") {
+  if (mode === "nsfw-only") {
     return flagged;
   }
   if (mode === "safe") {
     return !flagged;
   }
   if (mode === "moderate") {
-    return severity !== "explicit";
+    if (!flagged) {
+      return true;
+    }
+    return severity === "mild";
   }
   return true;
 }
@@ -281,7 +292,7 @@ export function shouldIncludeDoc(doc: ArchiveSearchDoc, mode: NSFWFilterMode): b
 
 export function countHiddenByMode(docs: ArchiveSearchDoc[], mode: NSFWFilterMode): number {
   const normalized = normalizeMode(mode);
-  if (normalized === "off" || normalized === "only") {
+  if (normalized === "unrestricted" || normalized === "nsfw-only") {
     return 0;
   }
   let hidden = 0;

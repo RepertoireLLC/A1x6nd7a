@@ -15,7 +15,6 @@
     "dev:alexandria": "npm-run-all --parallel dev:backend dev:frontend",
     "build:alexandria": "npm run build --workspace alexandria-browser/backend && npm run build --workspace alexandria-browser/frontend",
     "test": "npm run --workspaces --if-present test",
-    "postinstall": "node scripts/install-mistral-model.mjs",
     "self-check:alexandria": "node scripts/ai-self-check.mjs",
     "test:e2e": "playwright test"
   },

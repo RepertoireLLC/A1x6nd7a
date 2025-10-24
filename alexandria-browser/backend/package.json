@@ -10,8 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "gpt4all": "^4.0.0",
-    "node-llama-cpp": "^3.14.0",
+    "@xenova/transformers": "^2.6.1",
     "nodemailer": "^6.9.12",
     "undici": "^7.16.0"
   },

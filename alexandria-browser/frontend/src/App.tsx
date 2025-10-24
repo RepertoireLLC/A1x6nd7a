@@ -258,7 +258,9 @@ function App() {
   const settings = initialSettings.current;
 
   const [theme, setTheme] = useState<"light" | "dark">(() => settings.theme);
-  const [nsfwMode, setNsfwMode] = useState<NSFWFilterMode>(() => settings.nsfwMode ?? (settings.filterNSFW ? "safe" : "off"));
+  const [nsfwMode, setNsfwMode] = useState<NSFWFilterMode>(
+    () => settings.nsfwMode ?? (settings.filterNSFW ? "safe" : "unrestricted")
+  );
   const [nsfwAcknowledged, setNsfwAcknowledged] = useState<boolean>(() => Boolean(settings.nsfwAcknowledged));
   const [query, setQuery] = useState(() => settings.lastQuery);
   const [activeQuery, setActiveQuery] = useState<string | null>(() =>
@@ -371,7 +373,7 @@ function App() {
   useEffect(() => {
     const settingsPayload: StoredSettings = {
       theme,
-      filterNSFW: nsfwMode !== "off",
+      filterNSFW: nsfwMode !== "unrestricted",
       nsfwMode,
       nsfwAcknowledged,
       lastQuery: activeQuery ?? "",
@@ -432,15 +434,10 @@ function App() {
         return;
       }
 
-      const { enabled, outcome, models, directoryAccessible } = statusResult.data;
+      const { enabled, outcome, models, ready } = statusResult.data;
 
-      if (!enabled || outcome.status === "disabled") {
+      if (!enabled) {
         setAiAvailability("disabled");
-        return;
-      }
-
-      if (!directoryAccessible && models.length === 0) {
-        setAiAvailability("unavailable");
         return;
       }
 
@@ -448,17 +445,11 @@ function App() {
         case "error":
           setAiAvailability("error");
           return;
-        case "missing-model":
-          setAiAvailability("unavailable");
-          return;
-        case "blocked":
-          setAiAvailability("unavailable");
-          return;
         default:
           break;
       }
 
-      if (models.length === 0) {
+      if (!ready || models.length === 0) {
         setAiAvailability("unavailable");
         return;
       }
@@ -2037,7 +2028,7 @@ function App() {
     const defaults = resetStoredSettings();
     initialSettings.current = defaults;
     setTheme(defaults.theme);
-    setNsfwMode(defaults.nsfwMode ?? (defaults.filterNSFW ? "safe" : "off"));
+    setNsfwMode(defaults.nsfwMode ?? (defaults.filterNSFW ? "safe" : "unrestricted"));
     setNsfwAcknowledged(Boolean(defaults.nsfwAcknowledged));
     setResultsPerPage(defaults.resultsPerPage);
     setMediaType(defaults.mediaType);
@@ -2346,8 +2337,8 @@ function App() {
             <select value={nsfwMode} onChange={(event) => handleChangeNSFWMode(event.target.value as NSFWFilterMode)}>
               <option value="safe">Safe</option>
               <option value="moderate">Moderate</option>
-              <option value="off">No Restriction</option>
-              <option value="only">NSFW Only</option>
+              <option value="unrestricted">No Restriction</option>
+              <option value="nsfw-only">NSFW Only</option>
             </select>
           </label>
           <div className="year-filters">

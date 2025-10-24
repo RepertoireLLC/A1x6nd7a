@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { detectKeywordMatches } from "../utils/nsfwKeywordMatcher";
 
-export type NSFWSeverity = "mild" | "explicit";
+export type NSFWSeverity = "mild" | "explicit" | "violent";
 
 export interface NSFWClassification {
   flagged: boolean;
@@ -13,35 +13,32 @@ export interface NSFWClassification {
 }
 
 interface KeywordConfig {
-  categories?: {
-    explicit?: unknown;
-    mild?: unknown;
-  };
+  explicit?: unknown;
+  adult?: unknown;
+  violent?: unknown;
 }
 
 interface KeywordSets {
   explicit: string[];
-  mild: string[];
+  adult: string[];
+  violent: string[];
 }
 
 const KEYWORD_SETS = loadKeywordSets();
 
 function loadKeywordSets(): KeywordSets {
-  const configPath = join(dirname(fileURLToPath(import.meta.url)), "../../../src/config/nsfwKeywords.json");
+  const configPath = join(dirname(fileURLToPath(import.meta.url)), "../../filters/nsfwTerms.json");
   try {
     const raw = readFileSync(configPath, "utf-8");
     const payload = JSON.parse(raw) as KeywordConfig;
-    if (payload.categories && typeof payload.categories === "object") {
-      const explicit = normalizeList(payload.categories.explicit);
-      const mild = normalizeList(payload.categories.mild);
-      const explicitSet = new Set(explicit);
-      const filteredMild = mild.filter((keyword) => !explicitSet.has(keyword));
-      return { explicit, mild: filteredMild };
-    }
+    const explicit = normalizeList(payload.explicit);
+    const adult = normalizeList(payload.adult).filter((term) => !explicit.includes(term));
+    const violent = normalizeList(payload.violent);
+    return { explicit, adult, violent };
   } catch (error) {
     console.warn("Unable to load NSFW keyword configuration", error);
   }
-  return { explicit: [], mild: [] };
+  return { explicit: [], adult: [], violent: [] };
 }
 
 function normalizeList(value: unknown): string[] {
@@ -116,6 +113,7 @@ function collectStrings(record: Record<string, unknown>): string[] {
 function classifyStrings(values: string[]): NSFWClassification {
   const explicitMatches = new Set<string>();
   const mildMatches = new Set<string>();
+  const violentMatches = new Set<string>();
 
   for (const value of values) {
     const explicit = detectKeywordMatches(value, KEYWORD_SETS.explicit);
@@ -123,9 +121,14 @@ function classifyStrings(values: string[]): NSFWClassification {
       explicitMatches.add(keyword);
     }
 
-    const mild = detectKeywordMatches(value, KEYWORD_SETS.mild);
-    for (const keyword of mild) {
+    const adult = detectKeywordMatches(value, KEYWORD_SETS.adult);
+    for (const keyword of adult) {
       mildMatches.add(keyword);
+    }
+
+    const violent = detectKeywordMatches(value, KEYWORD_SETS.violent);
+    for (const keyword of violent) {
+      violentMatches.add(keyword);
     }
   }
 
@@ -133,7 +136,15 @@ function classifyStrings(values: string[]): NSFWClassification {
     return {
       flagged: true,
       severity: "explicit",
-      matches: Array.from(new Set([...explicitMatches, ...mildMatches]))
+      matches: Array.from(new Set([...explicitMatches, ...mildMatches, ...violentMatches]))
+    };
+  }
+
+  if (violentMatches.size > 0) {
+    return {
+      flagged: true,
+      severity: "violent",
+      matches: Array.from(new Set([...violentMatches, ...mildMatches]))
     };
   }
 
@@ -177,4 +188,8 @@ export function annotateRecord<T extends Record<string, unknown>>(record: T): T 
 
 export function isNSFWContent(text: string = ""): boolean {
   return classifyText(text).flagged;
+}
+
+export function containsNSFW(record: Record<string, unknown>): boolean {
+  return classifyRecord(record).flagged;
 }
