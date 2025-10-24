@@ -59,6 +59,24 @@ let configuredModel = "Xenova/distilgpt2";
 let configuredEmbeddingModel = "Xenova/all-MiniLM-L6-v2";
 let lastOutcome: AIOutcome = { status: "idle" };
 
+function sanitizeDetail(detail?: string | null): string | undefined {
+  if (typeof detail !== "string") {
+    return undefined;
+  }
+
+  const trimmed = detail.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const lower = trimmed.toLowerCase();
+  if (lower === "undefined" || lower === "null" || trimmed === "[object Object]") {
+    return undefined;
+  }
+
+  return trimmed;
+}
+
 function sanitize(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
@@ -109,7 +127,18 @@ function summarizeContext(request: AIContextRequest): string {
 }
 
 function setOutcome(status: AIStatus, message?: string | null): AIOutcome {
-  lastOutcome = message ? { status, message } : { status };
+  const sanitizedMessage = sanitizeDetail(message);
+
+  if (!sanitizedMessage && status === "error") {
+    lastOutcome = {
+      status,
+      message:
+        "Transformer AI initialization failed. Confirm the @xenova/transformers models can download or disable autoInitialize in backend/config/default.json.",
+    };
+    return lastOutcome;
+  }
+
+  lastOutcome = sanitizedMessage ? { status, message: sanitizedMessage } : { status };
   return lastOutcome;
 }
 
@@ -177,8 +206,16 @@ export async function initializeAI(): Promise<AIOutcome> {
     return setOutcome("ready");
   } catch (error) {
     initialized = false;
-    const message = error instanceof Error ? error.message : String(error);
-    return setOutcome("error", message);
+    const primary = error instanceof Error ? error.message ?? error.name : null;
+    const secondary =
+      error && typeof error === "object" && "cause" in error && error.cause
+        ? String((error as { cause?: unknown }).cause)
+        : null;
+    const detail = sanitizeDetail(primary) ?? sanitizeDetail(secondary);
+    if (detail) {
+      return setOutcome("error", detail);
+    }
+    return setOutcome("error");
   }
 }
 

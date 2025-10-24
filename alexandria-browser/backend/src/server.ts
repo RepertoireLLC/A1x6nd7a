@@ -375,8 +375,21 @@ const configuredOutcome = configureAI({
 });
 
 function formatAiDetail(message: string | null | undefined): string {
-  const trimmed = typeof message === "string" ? message.trim() : "";
-  return trimmed.length > 0 ? trimmed : "No additional details were provided.";
+  if (typeof message !== "string") {
+    return "No additional details were provided.";
+  }
+
+  const trimmed = message.trim();
+  if (!trimmed || trimmed === "[object Object]") {
+    return "No additional details were provided.";
+  }
+
+  const normalized = trimmed.toLowerCase();
+  if (normalized === "undefined" || normalized === "null") {
+    return "No additional details were provided.";
+  }
+
+  return trimmed;
 }
 
 if (runtimeAiConfig.enabled && runtimeAiConfig.autoInitialize) {
