@@ -109,6 +109,18 @@ type SearchPagination = {
 
 const RERANK_EMBED_DOC_LIMIT = 40;
 
+const LOCAL_SEARCH_STOP_WORDS = new Set([
+  "and",
+  "or",
+  "not",
+  "the",
+  "a",
+  "an",
+  "of",
+  "to",
+  "in"
+]);
+
 function vectorMagnitude(values: number[]): number {
   let sum = 0;
   for (const value of values) {
@@ -168,6 +180,37 @@ function computeModeAdjustment(mode: NSFWUserMode, record: Record<string, unknow
     default:
       return 0;
   }
+}
+
+function extractLocalSearchTokens(query: string): string[] {
+  if (!query) {
+    return [];
+  }
+
+  const matches = query.toLowerCase().match(/[a-z0-9]+/g);
+  if (!matches) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const tokens: string[] = [];
+
+  for (const candidate of matches) {
+    if (LOCAL_SEARCH_STOP_WORDS.has(candidate)) {
+      continue;
+    }
+
+    if (candidate.length < 2 && !/^\d+$/.test(candidate)) {
+      continue;
+    }
+
+    if (!seen.has(candidate)) {
+      seen.add(candidate);
+      tokens.push(candidate);
+    }
+  }
+
+  return tokens;
 }
 
 async function rerankDocuments(
@@ -1507,11 +1550,7 @@ function performLocalArchiveSearch(
   filters: ArchiveSearchFiltersInput,
   offset?: number
 ): ArchiveSearchResponse {
-  const tokens = query
-    .toLowerCase()
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0);
+  const tokens = extractLocalSearchTokens(query);
 
   const requestedMediaType = filters.mediaType?.toLowerCase() ?? "";
   const requestedYearFrom = filters.yearFrom ? Number.parseInt(filters.yearFrom, 10) : null;
@@ -1590,7 +1629,14 @@ function performLocalArchiveSearch(
     }
 
     const haystack = gatherSearchableText(doc).toLowerCase();
-    return tokens.every((token) => haystack.includes(token));
+    const matchedTokens = tokens.filter((token) => haystack.includes(token));
+
+    if (tokens.length <= 2) {
+      return matchedTokens.length === tokens.length;
+    }
+
+    const minimumMatches = Math.max(1, Math.ceil(tokens.length * 0.5));
+    return matchedTokens.length >= minimumMatches;
   });
 
   const safePage = Number.isFinite(page) && page > 0 ? page : 1;
