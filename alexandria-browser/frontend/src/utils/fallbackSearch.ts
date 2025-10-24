@@ -154,13 +154,13 @@ export function performFallbackArchiveSearch(
     }
 
     if (requestedSubjects.length > 0) {
-      const subjectCandidate = (doc as Record<string, unknown>).subject;
-      const subjectList = Array.isArray(subjectCandidate)
+      const subjectCandidate = doc.subject ?? doc.subjects;
+      const subjectValues = Array.isArray(subjectCandidate)
         ? subjectCandidate
         : typeof subjectCandidate === "string"
         ? subjectCandidate.split(/[,;]+/)
         : [];
-      const normalizedSubjects = subjectList
+      const normalizedSubjects = subjectValues
         .map((value) => (typeof value === "string" ? value.toLowerCase().trim() : ""))
         .filter((value) => value.length > 0);
       if (!requestedSubjects.some((value) => normalizedSubjects.includes(value))) {
@@ -169,7 +169,7 @@ export function performFallbackArchiveSearch(
     }
 
     if (requestedUploader) {
-      const uploaderCandidate = (doc as Record<string, unknown>).uploader ?? doc.creator;
+      const uploaderCandidate = doc.uploader ?? doc.submitter ?? doc.creator;
       const uploaderValues = Array.isArray(uploaderCandidate)
         ? uploaderCandidate
         : uploaderCandidate

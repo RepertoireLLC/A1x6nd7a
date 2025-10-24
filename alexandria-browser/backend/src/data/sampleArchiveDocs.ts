@@ -8,6 +8,8 @@ export interface SampleArchiveDoc {
   publicdate?: string;
   creator?: string | string[];
   collection?: string | string[];
+  subject?: string | string[];
+  uploader?: string | string[];
   links?: {
     archive: string;
     original?: string | null;

@@ -1381,7 +1381,7 @@ function performLocalArchiveSearch(
     }
 
     if (requestedSubjects.length > 0) {
-      const subjectCandidate = (doc as Record<string, unknown>).subject;
+      const subjectCandidate = doc.subject;
       const subjectValues = Array.isArray(subjectCandidate)
         ? subjectCandidate
         : typeof subjectCandidate === "string"
@@ -1396,7 +1396,7 @@ function performLocalArchiveSearch(
     }
 
     if (requestedUploader) {
-      const uploaderCandidate = (doc as Record<string, unknown>).uploader ?? doc.creator;
+      const uploaderCandidate = doc.uploader ?? doc.creator;
       const uploaderValues = Array.isArray(uploaderCandidate)
         ? uploaderCandidate
         : uploaderCandidate
