@@ -1,5 +1,5 @@
 import { SAMPLE_ARCHIVE_DOCS } from "../data/sampleArchiveDocs";
-import type { ArchiveDocLinks, ArchiveSearchDoc, ArchiveSearchResponse, SearchFilters } from "../types";
+import type { ArchiveDocLinks, ArchiveSearchDoc, ArchiveSearchPayload, SearchFilters } from "../types";
 import { annotateDocs } from "./nsfw";
 
 function extractYearValue(value: unknown): number | null {
@@ -101,7 +101,7 @@ export function performFallbackArchiveSearch(
   page: number,
   rows: number,
   filters: SearchFilters
-): ArchiveSearchResponse {
+): ArchiveSearchPayload {
   const tokens = query
     .toLowerCase()
     .split(/\s+/)

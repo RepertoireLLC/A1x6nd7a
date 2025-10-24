@@ -1,8 +1,4 @@
-import type {
-  ArchiveSearchDoc,
-  ArchiveSearchResponse,
-  SearchFilters,
-} from "../types";
+import type { ArchiveSearchDoc, ArchiveSearchPayload, SearchFilters } from "../types";
 import {
   createTruthScoringContext,
   scoreArchiveDocTruth,
@@ -18,10 +14,10 @@ const CURATED_COLLECTIONS = new Set([
 ]);
 
 export function postProcessDirectSearchPayload(
-  payload: ArchiveSearchResponse,
+  payload: ArchiveSearchPayload,
   query: string,
   filters: SearchFilters,
-): ArchiveSearchResponse {
+): ArchiveSearchPayload {
   const response = payload.response ?? {};
   const docs = Array.isArray(response.docs) ? response.docs : [];
   const context = createTruthScoringContext(query);

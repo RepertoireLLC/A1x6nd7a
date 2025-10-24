@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ArchiveSearchDoc, ArchiveSearchResponse, SearchFilters } from "../types";
+import type { ArchiveSearchDoc, ArchiveSearchPayload, SearchFilters } from "../types";
 import { postProcessDirectSearchPayload } from "./postProcess";
 
 describe("postProcessDirectSearchPayload", () => {
@@ -33,7 +33,7 @@ describe("postProcessDirectSearchPayload", () => {
       nsfw: true,
     };
 
-    const payload: ArchiveSearchResponse = {
+    const payload: ArchiveSearchPayload = {
       response: {
         docs: [matchingDoc, filteredDoc],
         numFound: 2,
@@ -65,7 +65,7 @@ describe("postProcessDirectSearchPayload", () => {
       links: { archive: "https://archive.org/details/archived-item", wayback: "https://web.archive.org" },
     };
 
-    const payload: ArchiveSearchResponse = {
+    const payload: ArchiveSearchPayload = {
       response: {
         docs: [doc],
         numFound: 1,
