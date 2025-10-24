@@ -374,25 +374,23 @@ const runtimeConfig = loadRuntimeConfig();
 const runtimeAiConfig = runtimeConfig.ai;
 
 configureLocalAI({
+  // Keep the runtime configuration in sync with the lightweight LocalAI wrapper.
   enabled: runtimeAiConfig.enabled,
-  modelDirectory: runtimeAiConfig.modelDirectory,
-  modelName: runtimeAiConfig.modelName,
-  modelPath: runtimeAiConfig.modelPath,
+  model: runtimeAiConfig.model,
+  embeddingModel: runtimeAiConfig.embeddingModel,
 });
 
 if (runtimeAiConfig.enabled && runtimeAiConfig.autoInitialize) {
   void initializeLocalAI().then((outcome) => {
-    if (outcome.status === "success" || outcome.status === "idle") {
-      console.info(
-        "Local AI initialized",
-        outcome.modelPath ? `using model ${outcome.modelPath}` : "without an explicit model path"
-      );
-    } else if (outcome.status === "missing-model") {
-      console.warn("Local AI auto-initialization skipped: no compatible model found.");
+    if (outcome.status === "ready" || outcome.status === "idle" || outcome.status === "success") {
+      const modelLabel = outcome.model ? `using model ${outcome.model}` : "without an explicit model";
+      console.info("Local AI initialized", modelLabel);
     } else if (outcome.status === "disabled") {
       console.info("Local AI auto-initialization skipped because the service is disabled.");
-    } else {
+    } else if (outcome.status === "error") {
       console.warn("Local AI auto-initialization encountered an issue.", outcome.message);
+    } else {
+      console.info("Local AI auto-initialization completed with status", outcome.status);
     }
   });
 } else if (!runtimeAiConfig.enabled) {
@@ -415,6 +413,19 @@ function ensureUrlString(value: unknown): string | null {
     return new URL(trimmed).toString();
   } catch {
     return null;
+  }
+}
+
+function buildSuppressionMessageForMode(mode: NSFWUserMode): string {
+  switch (mode) {
+    case "safe":
+      return "AI Mode: This content is hidden because Safe mode is enabled for universal audiences.";
+    case "moderate":
+      return "AI Mode: Explicit or graphic requests are blocked while Moderate mode is active.";
+    case "nsfw-only":
+      return "AI Mode: NSFW Only mode requires adult keywords before suggestions can be generated.";
+    default:
+      return "AI suggestions are hidden due to the active NSFW mode.";
   }
 }
 
@@ -2091,7 +2102,11 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     if (!runtimeAiConfig.enabled) {
       aiSummaryStatus = "unavailable";
       aiSummaryError = "Local AI assistance is disabled by the server configuration.";
-      aiOutcome = { status: "disabled", message: aiSummaryError, modelPath: null };
+      aiOutcome = {
+        status: "disabled",
+        message: aiSummaryError,
+        model: runtimeAiConfig.model,
+      };
     } else {
       try {
         const aiResponse = await generateAIResponse(effectiveQuery, { nsfwMode: nsfwUserMode });
@@ -2103,22 +2118,24 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
           aiSummaryError = null;
           aiSummarySource = "model";
         } else {
-          if (aiOutcome.status === "error") {
+          const suppressed =
+            aiOutcome?.status === "success" && typeof aiOutcome.message === "string" && aiOutcome.message.trim().length > 0;
+          const suppressionMessage = suppressed
+            ? aiOutcome.message?.trim() || buildSuppressionMessageForMode(nsfwUserMode)
+            : null;
+
+          if (aiOutcome?.status === "error") {
             aiSummaryStatus = "error";
             aiSummaryError = aiOutcome.message ?? "Local AI encountered an unexpected error.";
-          } else if (aiOutcome.status === "missing-model" || aiOutcome.status === "disabled") {
+          } else if (aiOutcome?.status === "disabled") {
             aiSummaryStatus = "unavailable";
             aiSummaryError = aiOutcome.message ?? "Local AI model is not available on the server.";
-          } else if (aiOutcome.status === "blocked") {
+          } else if (suppressionMessage) {
             aiSummaryStatus = "unavailable";
-            aiSummaryError =
-              aiOutcome.message ??
-              (nsfwUserMode === "safe"
-                ? "AI Mode: This content is hidden because Safe Search is enabled."
-                : "AI suggestions are hidden due to the active NSFW mode.");
+            aiSummaryError = suppressionMessage;
           } else {
             aiSummaryStatus = "unavailable";
-            aiSummaryError = aiOutcome.message ?? null;
+            aiSummaryError = aiOutcome?.message ?? null;
           }
         }
       } catch (error) {
@@ -2127,7 +2144,10 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       }
     }
 
-    if (aiOutcome?.status !== "blocked") {
+    const suppressionActive =
+      aiOutcome?.status === "success" && typeof aiOutcome.message === "string" && aiOutcome.message.trim().length > 0;
+
+    if (!suppressionActive) {
       const reason = aiSummaryError ?? aiOutcome?.message ?? null;
       if (!aiSummary || aiSummaryStatus !== "success") {
         const heuristic = buildHeuristicAISummary(effectiveQuery, heuristicDocs, nsfwUserMode, reason);
@@ -2279,19 +2299,12 @@ async function handleAIQuery({ req, res }: HandlerContext): Promise<void> {
     status = "disabled";
     errorMessage = outcome.message ?? "Local AI assistance is disabled.";
   } else if (!reply) {
-    if (outcome.status === "missing-model") {
-      status = "unavailable";
-      errorMessage = outcome.message ?? "Local AI model is not available.";
-    } else if (outcome.status === "error") {
+    if (outcome.status === "error") {
       status = "error";
       errorMessage = outcome.message ?? "Local AI failed to generate a response.";
-    } else if (outcome.status === "blocked") {
+    } else if (outcome.status === "success" && outcome.message) {
       status = "unavailable";
-      errorMessage =
-        outcome.message ??
-        (nsfwUserMode === "safe"
-          ? "AI Mode: This content is hidden because Safe Search is enabled."
-          : "AI suggestions are hidden due to the active NSFW mode.");
+      errorMessage = outcome.message ?? buildSuppressionMessageForMode(nsfwUserMode);
     } else {
       status = "unavailable";
       errorMessage = outcome.message ?? "Local AI response is unavailable.";
