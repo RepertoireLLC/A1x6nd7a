@@ -86,7 +86,7 @@ npm run dev --workspace alexandria-browser/frontend
 
 The frontend expects the backend at `http://localhost:4000` by default. Override this via `VITE_API_BASE_URL` in a `.env` file placed beside `frontend/.env` if you host the API elsewhere.
 
-> **Tip:** The demo previously bundled mock datasets for offline browsing. Production builds now require the live API. Opt-in to the legacy behaviour locally by setting `VITE_ENABLE_OFFLINE_FALLBACK=true` for the frontend and `ENABLE_OFFLINE_FALLBACK=true` for the backend before starting the dev servers.
+> **Tip:** The demo previously bundled mock datasets for offline browsing. Production builds now require the live API. Development servers now enable the legacy offline dataset automatically; set `VITE_ENABLE_OFFLINE_FALLBACK=false` and `ENABLE_OFFLINE_FALLBACK=false` if you prefer to exercise the live API locally.
 
 ### Configure the offline Mistral AI assistant
 

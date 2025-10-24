@@ -578,7 +578,8 @@ function getEnv(name: string): string | undefined {
 
 const nodeEnv = getEnv("NODE_ENV") ?? "development";
 const offlineFallbackEnv = getEnv("ENABLE_OFFLINE_FALLBACK");
-const offlineFallbackEnabled = offlineFallbackEnv === "true";
+const offlineFallbackEnabled =
+  offlineFallbackEnv === "true" || (offlineFallbackEnv === undefined && nodeEnv !== "production");
 const proxyEnvCandidates = [
   getEnv("HTTPS_PROXY"),
   getEnv("https_proxy"),
