@@ -1,5 +1,6 @@
 import { askAI, configureModels, embedText, initAI } from "../../ai/engine";
 import { buildPrompt } from "../../ai/modeHandler";
+import { buildHybridSearchExpression, suggestAlternativeQueries } from "../services/queryExpansion";
 import {
   buildNSFWPromptInstruction,
   normalizeUserSuppliedMode,
@@ -295,9 +296,78 @@ function normalizeRefinedQuery(candidate: string, original: string): string {
   return firstLine;
 }
 
+function tokenizeForComparison(value: string): string[] {
+  return value
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0 && token !== "or" && token !== "and");
+}
+
+function hasEquivalentTokens(candidate: string, original: string): boolean {
+  const candidateTokens = new Set(tokenizeForComparison(candidate));
+  const originalTokens = new Set(tokenizeForComparison(original));
+
+  if (candidateTokens.size !== originalTokens.size) {
+    return false;
+  }
+
+  for (const token of candidateTokens) {
+    if (!originalTokens.has(token)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+export function buildHeuristicRefinement(query: string): string | null {
+  const sanitized = sanitize(query);
+  if (!sanitized) {
+    return null;
+  }
+
+  const baseTokens = sanitized
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+  const hasMultipleTokens = baseTokens.length > 1;
+  const hasLongToken = baseTokens.some((token) => token.length >= 4);
+
+  const expressions = new Set<string>();
+  const hybridExpression = buildHybridSearchExpression(sanitized, true).trim();
+  if (hybridExpression) {
+    expressions.add(hybridExpression);
+  }
+
+  const synonymSuggestions = suggestAlternativeQueries(sanitized);
+  for (const suggestion of synonymSuggestions) {
+    const trimmed = suggestion.trim();
+    if (trimmed) {
+      const wrapped = trimmed.startsWith("(") && trimmed.endsWith(")") ? trimmed : `(${trimmed})`;
+      expressions.add(wrapped);
+    }
+  }
+
+  if (expressions.size === 0) {
+    return null;
+  }
+
+  const combined = Array.from(expressions).join(" OR ");
+  const hasSynonymExpansions = synonymSuggestions.length > 0;
+  const shouldPreserveExpansions = hasSynonymExpansions || hasMultipleTokens || hasLongToken;
+
+  if (!shouldPreserveExpansions && hasEquivalentTokens(combined, sanitized)) {
+    return null;
+  }
+
+  return combined;
+}
+
 export async function refineSearchQuery(query: string, mode: NSFWUserMode): Promise<string> {
   const sanitizedQuery = sanitize(query);
-  if (!sanitizedQuery || !aiEnabled) {
+  if (!sanitizedQuery) {
     return query;
   }
 
@@ -307,8 +377,14 @@ export async function refineSearchQuery(query: string, mode: NSFWUserMode): Prom
     return query;
   }
 
+  const heuristicFallback = buildHeuristicRefinement(sanitizedQuery);
+
+  if (!aiEnabled) {
+    return heuristicFallback ?? query;
+  }
+
   if (!(await ensureReady())) {
-    return query;
+    return heuristicFallback ?? query;
   }
 
   const instructions = [
@@ -328,7 +404,7 @@ export async function refineSearchQuery(query: string, mode: NSFWUserMode): Prom
   } catch (error) {
     const messageText = error instanceof Error ? error.message : String(error);
     setOutcome("error", messageText);
-    return query;
+    return heuristicFallback ?? query;
   }
 }
 
