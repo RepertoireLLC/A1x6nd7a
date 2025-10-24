@@ -5,6 +5,7 @@ import { createPaginationControls } from './src/components/PaginationControls.js
 import { createSettingsModal } from './src/components/SettingsModal.js';
 import { applyNSFWFilter, getKeywords, NSFW_MODES } from './src/utils/nsfwFilter.js';
 import { loadSettings, saveSettings, resetSettings } from './src/utils/settingsStorage.js';
+import { interpretSearchQuery } from './src/utils/aiSearchInterpreter.js';
 
 const storedSettings = loadSettings();
 
@@ -25,7 +26,10 @@ const state = {
   keywords: [],
   hasMore: false,
   pageCache: new Map(),
-  loadedPages: new Set()
+  loadedPages: new Set(),
+  aiSearchEnabled: Boolean(storedSettings.aiSearchEnabled),
+  activeFilters: null,
+  effectiveQuery: ''
 };
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50];
@@ -160,7 +164,8 @@ function persistSettings() {
     nsfwMode: state.nsfwMode,
     nsfwFiltering: state.nsfwMode !== NSFW_MODES.OFF,
     nsfwAcknowledged: state.nsfwAcknowledged,
-    pageSize: state.pageSize
+    pageSize: state.pageSize,
+    aiSearchEnabled: state.aiSearchEnabled
   });
 }
 
@@ -290,6 +295,11 @@ async function runSearch(options = {}) {
   const targetPageNumber = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
   const showLoader = options.showLoader ?? !append;
 
+  const aiContext = state.aiSearchEnabled ? interpretSearchQuery(state.query) : null;
+  const interpretedQuery = aiContext?.query && aiContext.query.trim() ? aiContext.query.trim() : state.query;
+  const activeFilters = aiContext?.filters && Object.keys(aiContext.filters).length > 0 ? aiContext.filters : null;
+  const effectiveQuery = interpretedQuery || state.query;
+
   if (append && (state.loadingMore || state.loading || !state.hasMore)) {
     return;
   }
@@ -314,10 +324,16 @@ async function runSearch(options = {}) {
     setLoading(true);
   }
 
+  state.activeFilters = activeFilters ? { ...activeFilters } : null;
+  state.effectiveQuery = typeof effectiveQuery === 'string' ? effectiveQuery.trim() : '';
+
   try {
     let pageData = state.pageCache.get(targetPageNumber);
     if (!pageData) {
-      pageData = await searchArchive(state.query, targetPageNumber, state.pageSize);
+      pageData = await searchArchive(effectiveQuery, targetPageNumber, state.pageSize, {
+        ai: state.aiSearchEnabled,
+        filters: activeFilters ?? undefined
+      });
       state.pageCache.set(targetPageNumber, pageData);
     }
 
@@ -409,6 +425,7 @@ function renderKeywordsInModal(keywords) {
 const settingsModal = createSettingsModal({
   initialNSFWMode: state.nsfwMode,
   initialPageSize: state.pageSize,
+  initialAISearchEnabled: state.aiSearchEnabled,
   pageSizeOptions: PAGE_SIZE_OPTIONS,
   keywords: state.keywords,
   onChangeNSFWMode: async (mode) => {
@@ -459,6 +476,18 @@ const settingsModal = createSettingsModal({
     state.results = await applyNSFWFilter(baseResults, state.nsfwMode);
     renderResults();
   },
+  onToggleAISearch: async (enabled) => {
+    const nextState = Boolean(enabled);
+    if (state.aiSearchEnabled === nextState) {
+      return;
+    }
+    state.aiSearchEnabled = nextState;
+    persistSettings();
+    if (state.query) {
+      state.page = 1;
+      await runSearch({ showLoader: true });
+    }
+  },
   onChangePageSize: async (size) => {
     const parsed = Number(size);
     if (!Number.isFinite(parsed) || parsed <= 0 || parsed === state.pageSize) {
@@ -478,10 +507,14 @@ const settingsModal = createSettingsModal({
     state.nsfwMode = defaults.nsfwMode ?? (defaults.nsfwFiltering ? NSFW_MODES.SAFE : NSFW_MODES.OFF);
     state.nsfwAcknowledged = Boolean(defaults.nsfwAcknowledged);
     state.pageSize = defaults.pageSize;
+    state.aiSearchEnabled = Boolean(defaults.aiSearchEnabled);
+    state.activeFilters = null;
+    state.effectiveQuery = '';
     state.page = 1;
     persistSettings();
     settingsModal.setNSFWMode(state.nsfwMode);
     settingsModal.setPageSize(state.pageSize);
+    settingsModal.setAISearchEnabled(state.aiSearchEnabled);
 
     if (state.query) {
       await runSearch();

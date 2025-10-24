@@ -5,9 +5,11 @@ export function createSettingsModal({
   initialPageSize,
   pageSizeOptions = [],
   keywords,
+  initialAISearchEnabled = false,
   onChangeNSFWMode,
   onKeywordsChange,
   onChangePageSize,
+  onToggleAISearch,
   onResetSettings,
   onClose
 }) {
@@ -99,6 +101,25 @@ export function createSettingsModal({
 
   pageSizeLabel.appendChild(pageSizeSelect);
   preferencesSection.appendChild(pageSizeLabel);
+
+  const aiToggleWrapper = document.createElement('label');
+  aiToggleWrapper.className = 'toggle-wrapper';
+
+  const aiToggleText = document.createElement('span');
+  aiToggleText.textContent = 'AI-assisted search (interprets queries before searching)';
+
+  const aiToggle = document.createElement('input');
+  aiToggle.type = 'checkbox';
+  aiToggle.checked = Boolean(initialAISearchEnabled);
+  aiToggle.setAttribute('aria-label', 'Enable AI-assisted search');
+
+  aiToggle.addEventListener('change', () => {
+    onToggleAISearch?.(aiToggle.checked);
+  });
+
+  aiToggleWrapper.appendChild(aiToggleText);
+  aiToggleWrapper.appendChild(aiToggle);
+  preferencesSection.appendChild(aiToggleWrapper);
   content.appendChild(preferencesSection);
 
   const keywordSection = document.createElement('div');
@@ -206,5 +227,9 @@ export function createSettingsModal({
     }
   }
 
-  return { overlay, open, close, renderKeywords, setNSFWMode, setPageSize };
+  function setAISearchEnabled(enabled) {
+    aiToggle.checked = Boolean(enabled);
+  }
+
+  return { overlay, open, close, renderKeywords, setNSFWMode, setPageSize, setAISearchEnabled };
 }

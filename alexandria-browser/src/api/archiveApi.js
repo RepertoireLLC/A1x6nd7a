@@ -115,7 +115,19 @@ function resolveApiBaseUrl() {
 
 const API_BASE_URL = resolveApiBaseUrl().replace(/\/$/, '');
 
-function buildSearchUrl(query, page, rows) {
+const FILTER_PARAM_KEYS = [
+  'mediaType',
+  'yearFrom',
+  'yearTo',
+  'language',
+  'sourceTrust',
+  'availability',
+  'collection',
+  'uploader',
+  'subject'
+];
+
+function buildSearchUrl(query, page, rows, options = {}) {
   const url = new URL('/api/searchArchive', `${API_BASE_URL}/`);
   const safeRows = Number.isFinite(Number(rows)) && Number(rows) > 0 ? Number(rows) : 10;
   const safePage = Number.isFinite(Number(page)) && Number(page) > 0 ? Number(page) : 1;
@@ -125,6 +137,20 @@ function buildSearchUrl(query, page, rows) {
   url.searchParams.set('page', String(safePage));
   url.searchParams.set('rows', String(safeRows));
   url.searchParams.set('offset', String(safeOffset));
+
+  if (options.ai) {
+    url.searchParams.set('ai', '1');
+  }
+
+  if (options.filters && typeof options.filters === 'object') {
+    for (const key of FILTER_PARAM_KEYS) {
+      const value = options.filters[key];
+      if (typeof value === 'string' && value.trim()) {
+        url.searchParams.set(key, value.trim());
+      }
+    }
+  }
+
   return url.toString();
 }
 
@@ -494,7 +520,7 @@ async function fetchJson(url) {
   }
 }
 
-export async function searchArchive(query, page = 1, rows = 10) {
+export async function searchArchive(query, page = 1, rows = 10, options = {}) {
   const trimmed = query.trim();
   if (!trimmed) {
     return { total: 0, results: [], suggestion: null };
@@ -502,7 +528,7 @@ export async function searchArchive(query, page = 1, rows = 10) {
 
   const truthContext = createTruthContext(trimmed);
 
-  const url = buildSearchUrl(trimmed, page, rows);
+  const url = buildSearchUrl(trimmed, page, rows, options);
   const payload = await fetchJson(url);
 
   const normalizedDocs = Array.isArray(payload?.response?.docs) ? payload.response.docs : [];

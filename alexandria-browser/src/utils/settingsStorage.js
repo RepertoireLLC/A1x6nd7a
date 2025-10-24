@@ -6,7 +6,8 @@ const DEFAULT_SETTINGS = Object.freeze({
   nsfwMode: 'safe',
   nsfwFiltering: true,
   nsfwAcknowledged: false,
-  pageSize: 10
+  pageSize: 10,
+  aiSearchEnabled: false
 });
 
 function isValidMode(mode) {
@@ -39,7 +40,8 @@ function readSettings() {
       nsfwMode: resolvedMode,
       nsfwFiltering,
       nsfwAcknowledged,
-      pageSize: Number.isFinite(pageSizeValue) && pageSizeValue > 0 ? pageSizeValue : DEFAULT_SETTINGS.pageSize
+      pageSize: Number.isFinite(pageSizeValue) && pageSizeValue > 0 ? pageSizeValue : DEFAULT_SETTINGS.pageSize,
+      aiSearchEnabled: Boolean(parsed?.aiSearchEnabled)
     };
   } catch (error) {
     console.warn('Failed to read saved settings, using defaults.', error);
@@ -67,7 +69,8 @@ export function saveSettings(next) {
     nsfwMode,
     nsfwFiltering: nsfwMode !== 'off',
     nsfwAcknowledged,
-    pageSize: Number.isFinite(pageSizeValue) && pageSizeValue > 0 ? pageSizeValue : DEFAULT_SETTINGS.pageSize
+    pageSize: Number.isFinite(pageSizeValue) && pageSizeValue > 0 ? pageSizeValue : DEFAULT_SETTINGS.pageSize,
+    aiSearchEnabled: Boolean(next?.aiSearchEnabled)
   };
   writeSettings(settings);
   return settings;

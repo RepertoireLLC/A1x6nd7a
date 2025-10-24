@@ -113,10 +113,12 @@ export interface ArchiveSearchPayload {
   original_numFound?: number | null;
   filtered_count?: number | null;
   ai_summary?: string | null;
-  ai_summary_status?: BackendAISummaryStatus;
+  ai_summary_status?: BackendAISummaryStatus | "disabled";
   ai_summary_error?: string | null;
   ai_summary_source?: AISummarySource;
   ai_summary_notice?: string | null;
+  ai_refined_query?: string | null;
+  ai_applied_filters?: Record<string, string> | null;
 }
 
 export type SearchModeSetting = "safe" | "moderate" | "no-restriction" | "nsfw-only";

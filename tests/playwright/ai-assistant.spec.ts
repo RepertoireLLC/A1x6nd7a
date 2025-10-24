@@ -1,7 +1,8 @@
 import { expect, test } from "@playwright/test";
 
 const SETTINGS_KEY = "alexandria-browser-settings";
-const SEEDED_SETTINGS = {
+
+const BASE_SETTINGS = {
   theme: "light",
   filterNSFW: true,
   nsfwMode: "safe",
@@ -14,46 +15,92 @@ const SEEDED_SETTINGS = {
   language: "",
   sourceTrust: "any",
   availability: "any",
-  aiAssistantEnabled: true,
+  collection: "",
+  uploader: "",
+  subject: "",
+  aiAssistantEnabled: false,
 };
 
-test.beforeEach(async ({ page }) => {
-  await page.addInitScript(([key, settings]) => {
-    window.localStorage.setItem(key, JSON.stringify(settings));
-  }, [SETTINGS_KEY, SEEDED_SETTINGS]);
-});
+async function seedSettings(page, overrides: Partial<typeof BASE_SETTINGS>) {
+  await page.addInitScript(([key, defaults, custom]) => {
+    const payload = { ...defaults, ...(custom ?? {}) };
+    window.localStorage.setItem(key, JSON.stringify(payload));
+  }, [SETTINGS_KEY, BASE_SETTINGS, overrides ?? {}]);
+}
 
-test.describe("AI assistant heuristics", () => {
-  test("surfaces heuristic summary when offline model unavailable", async ({ page }) => {
+test.describe("AI search interpretation", () => {
+  const query = "Show me encyclopedia britannica volumes before 1920";
+
+  test("uses literal query when AI mode is disabled", async ({ page }) => {
+    await seedSettings(page, { aiAssistantEnabled: false });
+
     await page.goto("/");
     await page.waitForLoadState("domcontentloaded");
     await expect(page.getByRole("heading", { name: /Alexandria Browser/i })).toBeVisible({ timeout: 30000 });
 
-    const searchBox = page.locator('input[placeholder="Seek the Alexandria archives or paste a URL"]');
+    const searchBox = page.getByPlaceholder("Seek the Alexandria archives or paste a URL");
     await expect(searchBox).toBeVisible({ timeout: 30000 });
-    await searchBox.fill("Apollo 11 mission");
-    await page.getByRole("button", { name: /initiate search/i }).click();
 
-    const summaryLocator = page.locator(".ai-assistant-summary");
-    await expect(summaryLocator).toContainText(/Alexandria heuristics reviewed|No archive items matched/i, {
-      timeout: 45000,
-    });
+    const responsePromise = page
+      .waitForResponse((response) =>
+        response.url().includes("/api/searchArchive") && response.request().method() === "GET"
+      )
+      .then((response) => response.json());
 
-    const summaryText = await summaryLocator.innerText();
-    expect(summaryText).toContain("Alexandria heuristics reviewed 1 result for \"Apollo 11 mission\"");
-    expect(summaryText).toContain("Apollo 11 Mission Reports (1969 · Texts · NASA)");
-    expect(summaryText).toMatch(/Keyword suggestions:\s*- apollo\s*- mission\s*- [\w-]+\s*- [\w-]+\s*- landing/i);
-    expect(summaryText).toContain("Notable media types: Texts (1).");
+    await searchBox.fill(query);
 
-    const noticeLocator = page.locator(".ai-assistant-notice");
-    const noticeText = await noticeLocator.innerText();
-    expect(noticeText).toMatch(/No offline AI response was available|No compatible local AI model was found/i);
-    expect(noticeText).toContain("Suggestions are synthesized from the current search results.");
+    const payload = (await responsePromise) as {
+      finalQuery?: string;
+      refinedByAI?: boolean;
+    };
 
-    const sourceBadge = page.locator(".ai-assistant-source");
-    await expect(sourceBadge).toContainText(/heuristic/i);
+    expect(payload.finalQuery).toBe(query);
+    expect(payload.refinedByAI).toBeFalsy();
 
-    const statusBadge = page.locator(".ai-assistant-status");
-    await expect(statusBadge).toContainText(/ready/i);
+    const aiPanelHeading = page.getByRole("heading", { name: /AI Search Interpretation/i });
+    await expect(aiPanelHeading).toHaveCount(0);
+    await expect(page.getByText(/Alexandria is searching for/i)).toHaveCount(0);
+  });
+
+  test("surfaces interpreted query when AI mode is enabled", async ({ page }) => {
+    await seedSettings(page, { aiAssistantEnabled: true });
+
+    await page.goto("/");
+    await page.waitForLoadState("domcontentloaded");
+    await expect(page.getByRole("heading", { name: /Alexandria Browser/i })).toBeVisible({ timeout: 30000 });
+
+    const searchBox = page.getByPlaceholder("Seek the Alexandria archives or paste a URL");
+    await expect(searchBox).toBeVisible({ timeout: 30000 });
+
+    const responsePromise = page
+      .waitForResponse((response) =>
+        response.url().includes("/api/searchArchive") && response.request().method() === "GET"
+      )
+      .then((response) => response.json());
+
+    await searchBox.fill(query);
+
+    const payload = (await responsePromise) as {
+      finalQuery?: string;
+      refinedByAI?: boolean;
+      archive?: { ai_applied_filters?: Record<string, string> | null };
+    };
+
+    expect(payload.finalQuery).toBe("encyclopedia britannica volumes");
+    expect(payload.refinedByAI).toBeTruthy();
+
+    const aiPanelHeading = page.getByRole("heading", { name: /AI Search Interpretation/i });
+    await expect(aiPanelHeading).toBeVisible({ timeout: 30000 });
+
+    await expect(
+      page.getByText(/Alexandria is searching for\s+.*encyclopedia britannica volumes/i)
+    ).toBeVisible({ timeout: 30000 });
+
+    await expect(page.getByText(/“encyclopedia britannica volumes”/i)).toBeVisible({ timeout: 30000 });
+
+    if (payload.archive?.ai_applied_filters) {
+      await expect(page.getByText(/AI-applied filters/i)).toBeVisible({ timeout: 30000 });
+      await expect(page.getByText(/Latest year/i)).toBeVisible();
+    }
   });
 });

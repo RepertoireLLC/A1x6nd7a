@@ -14,7 +14,6 @@
  * - Build Open and Forkable
  */
 
-import path from "node:path";
 
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
 import { ProxyAgent, setGlobalDispatcher } from "undici";
@@ -37,27 +36,8 @@ import {
 } from "./services/filtering";
 import { getSpellCorrector, type SpellcheckResult } from "./services/spellCorrector";
 import { isValidReportReason, sendReportEmail, type ReportSubmission } from "./services/reporting";
-import {
-  configureLocalAI,
-  embedSearchText,
-  generateAIResponse,
-  generateContextualResponse,
-  getLastAIOutcome,
-  isLocalAIEnabled,
-  initializeLocalAI,
-  listAvailableLocalAIModels,
-  type LocalAIContextRequest,
-  type LocalAIConversationTurn,
-  type LocalAIModelInventory,
-  type LocalAIOutcome,
-} from "./ai/LocalAI";
-import {
-  initializeSearchAssist,
-  refineQueryWithTransformers,
-  type QueryRefinementResult,
-} from "./ai/searchAssist";
-import { buildHeuristicAISummary, type HeuristicDocSummary } from "./ai/heuristicSummaries";
-import { loadRuntimeConfig } from "./config/runtimeConfig";
+import { safeInterpretSearchQuery } from "./services/interpreterGuard";
+import type { QueryFilters } from "./services/queryInterpreter";
 import {
   filterByNSFWMode,
   getNSFWMode as resolveUserNSFWMode,
@@ -75,7 +55,7 @@ const DEFAULT_USER_AGENT =
   getEnv("ARCHIVE_USER_AGENT") ??
   "Mozilla/5.0 (compatible; AlexandriaBrowser/1.0; +https://github.com/harmonia-labs/alexandria-browser)";
 
-const ALLOWED_MEDIA_TYPES = new Set([
+export const ALLOWED_MEDIA_TYPES = new Set([
   "texts",
   "audio",
   "movies",
@@ -88,7 +68,10 @@ const ALLOWED_MEDIA_TYPES = new Set([
   "tvnews"
 ]);
 
-const YEAR_PATTERN = /^\d{4}$/;
+export const YEAR_PATTERN = /^\d{4}$/;
+
+const AI_INTERPRETATION_ERROR_MESSAGE =
+  "AI search interpretation failed. Alexandria searched using your original keywords.";
 
 type ArchiveSearchResultSummary = {
   identifier: string;
@@ -114,30 +97,6 @@ type SearchPagination = {
 };
 
 const RERANK_EMBED_DOC_LIMIT = 40;
-
-function vectorMagnitude(values: number[]): number {
-  let sum = 0;
-  for (const value of values) {
-    sum += value * value;
-  }
-  return Math.sqrt(sum);
-}
-
-function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length === 0 || b.length === 0) {
-    return 0;
-  }
-  const length = Math.min(a.length, b.length);
-  let dot = 0;
-  for (let index = 0; index < length; index += 1) {
-    dot += a[index] * b[index];
-  }
-  const denom = vectorMagnitude(a) * vectorMagnitude(b);
-  if (denom === 0) {
-    return 0;
-  }
-  return dot / denom;
-}
 
 function computeKeywordBoost(tokens: string[], text: string): number {
   if (tokens.length === 0 || !text) {
@@ -192,66 +151,37 @@ async function rerankDocuments(
     .map((token) => token.trim())
     .filter((token) => token.length > 0);
 
-  let queryVector: number[] = [];
-  try {
-    queryVector = await embedSearchText(trimmedQuery);
-  } catch (error) {
-    console.warn("Unable to compute query embedding", error);
-    return docs;
-  }
+  const scored = docs.map((doc) => {
+    const strings: string[] = [];
+    const title = typeof doc.title === "string" ? doc.title : typeof doc["title"] === "string" ? (doc["title"] as string) : "";
+    if (title) {
+      strings.push(title);
+    }
+    const description = typeof doc.description === "string" ? doc.description : "";
+    if (description) {
+      strings.push(description);
+    }
+    const combined = strings.join(" ").trim();
 
-  if (queryVector.length === 0) {
-    return docs;
-  }
+    const metadataScore =
+      typeof doc.score === "number" && Number.isFinite(doc.score)
+        ? (doc.score as number)
+        : 0;
+    const keywordBoost = computeKeywordBoost(tokens, combined || `${title}`);
+    const modeAdjustment = computeModeAdjustment(mode, doc);
+    const total = metadataScore + keywordBoost + modeAdjustment;
 
-  const limitedDocs = docs.slice(0, RERANK_EMBED_DOC_LIMIT);
-  const scored = await Promise.all(
-    limitedDocs.map(async (doc) => {
-      const strings: string[] = [];
-      const title = typeof doc.title === "string" ? doc.title : typeof doc["title"] === "string" ? (doc["title"] as string) : "";
-      if (title) {
-        strings.push(title);
-      }
-      const description = typeof doc.description === "string" ? doc.description : "";
-      if (description) {
-        strings.push(description);
-      }
-      const combined = strings.join(" ").trim();
+    return {
+      doc,
+      total,
+      keywordBoost,
+    };
+  });
 
-      let similarity = 0;
-      if (combined) {
-        try {
-          const docVector = await embedSearchText(combined);
-          similarity = cosineSimilarity(queryVector, docVector);
-        } catch (error) {
-          console.warn("Unable to compute document embedding", error);
-        }
-      }
+  scored.sort((a, b) => b.total - a.total);
 
-      const metadataScore =
-        typeof doc.score === "number" && Number.isFinite(doc.score)
-          ? (doc.score as number)
-          : 0;
-      const keywordBoost = computeKeywordBoost(tokens, combined || `${title}`);
-      const modeAdjustment = computeModeAdjustment(mode, doc);
-      const total = metadataScore * 0.55 + similarity * 0.35 + keywordBoost + modeAdjustment;
-
-      return {
-        doc,
-        total,
-        similarity,
-        keywordBoost,
-      };
-    })
-  );
-
-  const remaining = docs.slice(RERANK_EMBED_DOC_LIMIT).map((doc) => ({ doc, total: 0, similarity: 0, keywordBoost: 0 }));
-  const combinedScores = scored.concat(remaining);
-  combinedScores.sort((a, b) => b.total - a.total);
-
-  return combinedScores.map((entry) => {
+  return scored.map((entry) => {
     const next = { ...entry.doc } as Record<string, unknown>;
-    next.semantic_score = entry.similarity;
     next.ai_rank_score = entry.total;
     next.keyword_boost = entry.keywordBoost;
     return next;
@@ -275,35 +205,11 @@ type ArchiveSearchResponse = Record<string, unknown> & {
   original_numFound?: number | null;
   filtered_count?: number | null;
   ai_summary?: string | null;
-  ai_summary_status?: AISummaryStatus;
+  ai_summary_status?: string;
   ai_summary_error?: string | null;
-  ai_summary_source?: "model" | "heuristic";
+  ai_summary_source?: string | null;
   ai_summary_notice?: string | null;
 };
-
-type AISummaryStatus = "success" | "unavailable" | "error";
-
-type AIQueryStatus = "success" | "unavailable" | "error" | "disabled";
-
-type AIQueryResponsePayload = {
-  status: AIQueryStatus;
-  reply: string | null;
-  error?: string | null;
-  mode: LocalAIContextRequest["mode"];
-  outcome?: LocalAIOutcome;
-};
-
-type AIStatusResponsePayload = {
-  enabled: boolean;
-  outcome: LocalAIOutcome;
-  models: string[];
-  modelPaths: string[];
-  modelDirectory: string;
-  directoryAccessible: boolean;
-  directoryError?: string;
-};
-
-type LocalAIContextShape = NonNullable<LocalAIContextRequest["context"]>;
 
 type ArchiveSearchAttempt = {
   description: string;
@@ -373,47 +279,6 @@ type RouteHandler = (context: HandlerContext) => Promise<void> | void;
 const HEAD_TIMEOUT_MS = 7000;
 const OFFLINE_FALLBACK_MESSAGE_BASE =
   "Working offline — showing a limited built-in dataset.";
-
-const runtimeConfig = loadRuntimeConfig();
-const runtimeAiConfig = runtimeConfig.ai;
-
-configureLocalAI({
-  // Keep the runtime configuration in sync with the lightweight LocalAI wrapper.
-  enabled: runtimeAiConfig.enabled,
-  model: runtimeAiConfig.model,
-  embeddingModel: runtimeAiConfig.embeddingModel,
-});
-
-if (runtimeAiConfig.enabled && runtimeAiConfig.autoInitialize) {
-  void initializeLocalAI().then((outcome) => {
-    if (outcome.status === "ready" || outcome.status === "idle" || outcome.status === "success") {
-      const modelLabel = outcome.model ? `using model ${outcome.model}` : "without an explicit model";
-      console.info("Local AI initialized", modelLabel);
-    } else if (outcome.status === "disabled") {
-      console.info("Local AI auto-initialization skipped because the service is disabled.");
-    } else if (outcome.status === "error") {
-      console.warn("Local AI auto-initialization encountered an issue.", outcome.message);
-    } else {
-      console.info("Local AI auto-initialization completed with status", outcome.status);
-    }
-  });
-} else if (!runtimeAiConfig.enabled) {
-  console.info("Local AI assistance disabled via server configuration.");
-}
-
-void initializeSearchAssist()
-  .then((pipelines) => {
-    if (pipelines) {
-      console.info("Transformer-assisted search models preloaded for AI mode.");
-    } else {
-      console.warn(
-        "Transformer-assisted search unavailable. Falling back to legacy refinements when AI mode is enabled."
-      );
-    }
-  })
-  .catch((error) => {
-    console.error("Unexpected failure while preparing transformer-assisted search.", error);
-  });
 
 const spellCorrector = getSpellCorrector();
 
@@ -656,95 +521,6 @@ function parseRequestUrl(req: IncomingMessage): URL {
   const hostHeader = req.headers?.host ?? "localhost";
   const requestUrl = req.url ?? "/";
   return new URL(requestUrl, `http://${hostHeader}`);
-}
-
-function normalizeAIHistory(historyValue: unknown): LocalAIConversationTurn[] {
-  if (!Array.isArray(historyValue)) {
-    return [];
-  }
-
-  const normalized: LocalAIConversationTurn[] = [];
-  for (const entry of historyValue) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
-    const record = entry as Record<string, unknown>;
-    const contentValue = record.content;
-    if (typeof contentValue !== "string") {
-      continue;
-    }
-    const trimmedContent = contentValue.trim();
-    if (!trimmedContent) {
-      continue;
-    }
-    const roleValue = typeof record.role === "string" ? record.role.trim().toLowerCase() : "user";
-    const role: LocalAIConversationTurn["role"] = roleValue === "assistant" ? "assistant" : "user";
-    normalized.push({ role, content: trimmedContent });
-    if (normalized.length >= 6) {
-      // Maintain a short rolling window to avoid overwhelming the model.
-      normalized.splice(0, normalized.length - 6);
-    }
-  }
-
-  return normalized;
-}
-
-function normalizeAIContext(contextValue: unknown): LocalAIContextRequest["context"] | undefined {
-  if (!contextValue || typeof contextValue !== "object") {
-    return undefined;
-  }
-
-  const record = contextValue as Record<string, unknown>;
-  const context: LocalAIContextShape = {};
-
-  if (typeof record.activeQuery === "string" && record.activeQuery.trim()) {
-    context.activeQuery = record.activeQuery.trim();
-  }
-  if (typeof record.currentUrl === "string" && record.currentUrl.trim()) {
-    context.currentUrl = record.currentUrl.trim();
-  }
-  const titleValue = typeof record.documentTitle === "string" ? record.documentTitle : record.title;
-  if (typeof titleValue === "string" && titleValue.trim()) {
-    context.documentTitle = titleValue.trim();
-  }
-  const summaryValue =
-    typeof record.documentSummary === "string"
-      ? record.documentSummary
-      : typeof record.summary === "string"
-      ? record.summary
-      : typeof record.description === "string"
-      ? record.description
-      : undefined;
-  if (typeof summaryValue === "string" && summaryValue.trim()) {
-    context.documentSummary = summaryValue.trim();
-  }
-  const notesValue = typeof record.extraNotes === "string" ? record.extraNotes : record.notes;
-  if (typeof notesValue === "string" && notesValue.trim()) {
-    context.extraNotes = notesValue.trim();
-  }
-
-  const navigationValue = record.navigationTrail ?? record.trail ?? record.breadcrumbs;
-  if (Array.isArray(navigationValue)) {
-    const navigationTrail = navigationValue
-      .map((item) => (typeof item === "string" ? item.trim() : ""))
-      .filter((item) => Boolean(item));
-    if (navigationTrail.length > 0) {
-      context.navigationTrail = navigationTrail.slice(-5);
-    }
-  }
-
-  return Object.keys(context).length > 0 ? context : undefined;
-}
-
-function normalizeAIMode(modeValue: unknown): LocalAIContextRequest["mode"] {
-  if (typeof modeValue === "string") {
-    const normalized = modeValue.trim().toLowerCase();
-    if (normalized === "navigation" || normalized === "document" || normalized === "search" || normalized === "chat") {
-      return normalized;
-    }
-  }
-
-  return "chat";
 }
 
 function getEnv(name: string): string | undefined {
@@ -1768,43 +1544,98 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
 
   let effectiveQuery = query;
   let aiRefinedQuery: string | null = null;
-  let aiRefinement: QueryRefinementResult | null = null;
+  const aiAppliedFilters: Record<string, string> = {};
+  let aiInterpretationError: Error | null = null;
+  let aiFilters: QueryFilters = {};
+
+  const trimmedOriginalQuery = query.trim();
 
   if (aiModeEnabled) {
-    try {
-      const refinement = await refineQueryWithTransformers(query, nsfwUserMode);
-      aiRefinement = refinement;
-      effectiveQuery = refinement.finalQuery || query;
-      if (refinement.refined) {
-        aiRefinedQuery = refinement.finalQuery;
-      }
-    } catch (error) {
-      console.warn("AI refinement failed, falling back to user query", error);
-      effectiveQuery = query;
+    const interpretationResult = safeInterpretSearchQuery(query, {
+      allowedMediaTypes: ALLOWED_MEDIA_TYPES,
+      yearPattern: YEAR_PATTERN,
+    });
+
+    if (interpretationResult.error) {
+      aiInterpretationError = interpretationResult.error;
+      console.warn("AI query interpretation failed — using the original query", interpretationResult.error);
     }
+
+    const interpretedQuery = interpretationResult.interpretation?.query?.trim() ?? "";
+    if (interpretedQuery) {
+      if (interpretedQuery.toLowerCase() !== trimmedOriginalQuery.toLowerCase()) {
+        aiRefinedQuery = interpretedQuery;
+      }
+      effectiveQuery = interpretedQuery;
+    }
+
+    aiFilters = interpretationResult.filters ?? {};
+  }
+
+  const resolveFilter = (explicit: string, derived: string | undefined): string => {
+    if (explicit && explicit.trim()) {
+      return explicit.trim();
+    }
+    if (derived && derived.trim()) {
+      return derived.trim();
+    }
+    return "";
+  };
+
+  const resolvedMediaType = resolveFilter(mediaTypeParam, aiFilters.mediaType);
+  const resolvedYearFrom = resolveFilter(yearFromParam, aiFilters.yearFrom);
+  const resolvedYearTo = resolveFilter(yearToParam, aiFilters.yearTo);
+  const resolvedLanguage = resolveFilter(languageParam, aiFilters.language);
+  const resolvedSourceTrust = resolveFilter(sourceTrustParam, aiFilters.sourceTrust);
+  const resolvedAvailability = resolveFilter(availabilityParam, aiFilters.availability);
+  const resolvedCollection = resolveFilter(collectionParam, aiFilters.collection);
+  const resolvedUploader = resolveFilter(uploaderParam, aiFilters.uploader);
+  const resolvedSubject = resolveFilter(subjectParam, aiFilters.subject);
+
+  if (!mediaTypeParam && aiFilters.mediaType) {
+    aiAppliedFilters.mediaType = aiFilters.mediaType;
+  }
+  if (!yearFromParam && aiFilters.yearFrom) {
+    aiAppliedFilters.yearFrom = aiFilters.yearFrom;
+  }
+  if (!yearToParam && aiFilters.yearTo) {
+    aiAppliedFilters.yearTo = aiFilters.yearTo;
+  }
+  if (!languageParam && aiFilters.language) {
+    aiAppliedFilters.language = aiFilters.language;
+  }
+  if (!sourceTrustParam && aiFilters.sourceTrust) {
+    aiAppliedFilters.sourceTrust = aiFilters.sourceTrust;
+  }
+  if (!availabilityParam && aiFilters.availability) {
+    aiAppliedFilters.availability = aiFilters.availability;
+  }
+  if (!collectionParam && aiFilters.collection) {
+    aiAppliedFilters.collection = aiFilters.collection;
+  }
+  if (!uploaderParam && aiFilters.uploader) {
+    aiAppliedFilters.uploader = aiFilters.uploader;
+  }
+  if (!subjectParam && aiFilters.subject) {
+    aiAppliedFilters.subject = aiFilters.subject;
   }
 
   let data: ArchiveSearchResponse | null = null;
   let usedFallback = false;
   let lastSearchError: unknown = null;
   let lastAttempt: ArchiveSearchAttempt | null = null;
-  let aiSummary: string | null = null;
-  let aiSummaryStatus: AISummaryStatus | null = null;
-  let aiSummaryError: string | null = null;
-  let aiSummaryNotice: string | null = null;
-  let aiSummarySource: "model" | "heuristic" | null = null;
 
   const filterConfig: ArchiveSearchFiltersInput = {
-    mediaType: mediaTypeParam,
-    yearFrom: yearFromParam,
-    yearTo: yearToParam,
-    language: languageParam,
-    sourceTrust: sourceTrustParam,
-    availability: availabilityParam,
+    mediaType: resolvedMediaType,
+    yearFrom: resolvedYearFrom,
+    yearTo: resolvedYearTo,
+    language: resolvedLanguage,
+    sourceTrust: resolvedSourceTrust,
+    availability: resolvedAvailability,
     nsfwMode: nsfwModeParam,
-    collection: collectionParam,
-    uploader: uploaderParam,
-    subject: subjectParam
+    collection: resolvedCollection,
+    uploader: resolvedUploader,
+    subject: resolvedSubject
   };
 
   try {
@@ -2032,17 +1863,6 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
 
   const filteredCount = normalizedDocs.length;
 
-  const heuristicDocs: HeuristicDocSummary[] = summaryResults.map((doc) => ({
-    identifier: doc.identifier,
-    title: doc.title,
-    description: doc.description,
-    mediatype: doc.mediatype,
-    year: doc.year,
-    creator: doc.creator,
-    language: doc.language ?? null,
-    downloads: doc.downloads ?? null,
-  }));
-
   const responseTotal =
     typeof originalNumFound === "number" && Number.isFinite(originalNumFound)
       ? originalNumFound
@@ -2096,6 +1916,10 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     archivePayload.ai_refined_query = aiRefinedQuery;
   }
 
+  const rawRefinement = (data as Record<string, unknown>).refinement as unknown;
+  const refinementDetails =
+    rawRefinement && typeof rawRefinement === "object" ? (rawRefinement as Record<string, unknown>) : null;
+
   if (alternateSuggestions.length > 0) {
     archivePayload.alternate_queries = alternateSuggestions;
   }
@@ -2120,114 +1944,58 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     }
   }
 
-  if (aiModeEnabled) {
-    let aiOutcome: LocalAIOutcome | null = null;
-
-    if (!runtimeAiConfig.enabled) {
-      aiSummaryStatus = "unavailable";
-      aiSummaryError = "Local AI assistance is disabled by the server configuration.";
-      aiOutcome = {
-        status: "disabled",
-        message: aiSummaryError,
-        model: runtimeAiConfig.model,
-      };
-    } else {
-      try {
-        const aiResponse = await generateAIResponse(effectiveQuery, { nsfwMode: nsfwUserMode });
-        aiOutcome = getLastAIOutcome();
-        const trimmed = typeof aiResponse === "string" ? aiResponse.trim() : "";
-        if (trimmed) {
-          aiSummary = trimmed;
-          aiSummaryStatus = "success";
-          aiSummaryError = null;
-          aiSummarySource = "model";
-        } else {
-          const suppressed =
-            aiOutcome?.status === "success" && typeof aiOutcome.message === "string" && aiOutcome.message.trim().length > 0;
-          const suppressionMessage = suppressed
-            ? aiOutcome.message?.trim() || buildSuppressionMessageForMode(nsfwUserMode)
-            : null;
-
-          if (aiOutcome?.status === "error") {
-            aiSummaryStatus = "error";
-            aiSummaryError = aiOutcome.message ?? "Local AI encountered an unexpected error.";
-          } else if (aiOutcome?.status === "disabled") {
-            aiSummaryStatus = "unavailable";
-            aiSummaryError = aiOutcome.message ?? "Local AI model is not available on the server.";
-          } else if (suppressionMessage) {
-            aiSummaryStatus = "unavailable";
-            aiSummaryError = suppressionMessage;
-          } else {
-            aiSummaryStatus = "unavailable";
-            aiSummaryError = aiOutcome?.message ?? null;
-          }
-        }
-      } catch (error) {
-        aiSummaryStatus = "error";
-        aiSummaryError = error instanceof Error ? error.message : "Local AI failed to generate a response.";
-      }
-    }
-
-    const suppressionActive =
-      aiOutcome?.status === "success" && typeof aiOutcome.message === "string" && aiOutcome.message.trim().length > 0;
-
-    if (!suppressionActive) {
-      const reason = aiSummaryError ?? aiOutcome?.message ?? null;
-      if (!aiSummary || aiSummaryStatus !== "success") {
-        const heuristic = buildHeuristicAISummary(effectiveQuery, heuristicDocs, nsfwUserMode, reason);
-        if (heuristic) {
-          aiSummary = heuristic.summary;
-          aiSummaryStatus = "success";
-          aiSummaryError = null;
-          aiSummaryNotice = heuristic.notice;
-          aiSummarySource = "heuristic";
-        }
-      }
-    }
-
-    archivePayload.ai_summary = aiSummary;
-    archivePayload.ai_summary_status = aiSummaryStatus ?? "unavailable";
-    if (aiSummaryError && aiSummaryError.trim()) {
-      archivePayload.ai_summary_error = aiSummaryError.trim();
-    } else if ("ai_summary_error" in archivePayload) {
-      delete archivePayload.ai_summary_error;
-    }
-    if (aiSummaryNotice && aiSummaryNotice.trim()) {
-      archivePayload.ai_summary_notice = aiSummaryNotice.trim();
-    } else if ("ai_summary_notice" in archivePayload) {
-      delete archivePayload.ai_summary_notice;
-    }
-    if (aiSummarySource) {
-      archivePayload.ai_summary_source = aiSummarySource;
-    } else if ("ai_summary_source" in archivePayload) {
-      delete archivePayload.ai_summary_source;
-    }
-  } else {
-    if ("ai_summary" in archivePayload) {
-      delete archivePayload.ai_summary;
-    }
-    if ("ai_summary_status" in archivePayload) {
-      delete archivePayload.ai_summary_status;
-    }
-    if ("ai_summary_error" in archivePayload) {
-      delete archivePayload.ai_summary_error;
-    }
-    if ("ai_summary_notice" in archivePayload) {
-      delete archivePayload.ai_summary_notice;
-    }
-    if ("ai_summary_source" in archivePayload) {
-      delete archivePayload.ai_summary_source;
-    }
+  if ("ai_summary" in archivePayload) {
+    delete archivePayload.ai_summary;
+  }
+  if ("ai_summary_status" in archivePayload) {
+    delete archivePayload.ai_summary_status;
+  }
+  if ("ai_summary_error" in archivePayload) {
+    delete archivePayload.ai_summary_error;
+  }
+  if ("ai_summary_notice" in archivePayload) {
+    delete archivePayload.ai_summary_notice;
+  }
+  if ("ai_summary_source" in archivePayload) {
+    delete archivePayload.ai_summary_source;
   }
 
-  const refinementDetails = aiRefinement
-    ? { source: aiRefinement.source, categories: aiRefinement.categories }
-    : null;
-
-  if (refinementDetails) {
-    archivePayload.ai_refinement = refinementDetails;
-  } else if ("ai_refinement" in archivePayload) {
+  if ("ai_refinement" in archivePayload) {
     delete archivePayload.ai_refinement;
+  }
+
+  if (aiModeEnabled) {
+    archivePayload.ai_summary = null;
+    if (aiInterpretationError) {
+      archivePayload.ai_summary_status = "error";
+      archivePayload.ai_summary_error = AI_INTERPRETATION_ERROR_MESSAGE;
+    } else {
+      archivePayload.ai_summary_status = "unavailable";
+      archivePayload.ai_summary_error =
+        "AI summarization is disabled in search-only mode. Results are ranked using truth relevance.";
+    }
+    archivePayload.ai_summary_notice = null;
+    archivePayload.ai_summary_source = null;
+    if (aiRefinedQuery) {
+      archivePayload.ai_refined_query = aiRefinedQuery;
+    }
+    if (!aiInterpretationError && Object.keys(aiAppliedFilters).length > 0) {
+      archivePayload.ai_applied_filters = aiAppliedFilters;
+    } else if ("ai_applied_filters" in archivePayload) {
+      delete archivePayload.ai_applied_filters;
+    }
+  } else {
+    archivePayload.ai_summary = null;
+    archivePayload.ai_summary_status = "disabled";
+    archivePayload.ai_summary_error = null;
+    archivePayload.ai_summary_notice = null;
+    archivePayload.ai_summary_source = null;
+    if ("ai_refined_query" in archivePayload) {
+      delete archivePayload.ai_refined_query;
+    }
+    if ("ai_applied_filters" in archivePayload) {
+      delete archivePayload.ai_applied_filters;
+    }
   }
 
   const responsePayload = {
@@ -2251,129 +2019,15 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
 }
 
 async function handleAIStatus({ res }: HandlerContext): Promise<void> {
-  const enabled = isLocalAIEnabled();
-  const inventory: LocalAIModelInventory = await listAvailableLocalAIModels();
-  const outcome = getLastAIOutcome();
-  const modelPaths = inventory.modelPaths;
-  const models = modelPaths.map((modelPath) => path.basename(modelPath));
-
-  const payload: AIStatusResponsePayload = {
-    enabled,
-    outcome,
-    models,
-    modelPaths,
-    modelDirectory: inventory.modelDirectory,
-    directoryAccessible: inventory.directoryAccessible,
-  };
-
-  if (inventory.directoryError) {
-    payload.directoryError = inventory.directoryError;
-  }
-
-  sendJson(res, 200, payload);
+  sendJson(res, 410, {
+    error: "AI chat features are disabled. Enable AI Search mode to use query interpretation.",
+  });
 }
 
-async function handleAIQuery({ req, res }: HandlerContext): Promise<void> {
-  let payload: unknown;
-  try {
-    payload = await readJsonBody(req);
-  } catch (error) {
-    if (error instanceof HttpError) {
-      sendJson(res, error.statusCode, { error: error.message });
-      return;
-    }
-    console.error("Error reading AI request body", error);
-    sendJson(res, 400, { error: "Unable to read request body." });
-    return;
-  }
-
-  const data = (payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {}) ?? {};
-
-  const messageCandidateFields: unknown[] = [data.message, data.prompt, data.question, data.query];
-  let message = "";
-  for (const candidate of messageCandidateFields) {
-    if (typeof candidate === "string") {
-      const trimmed = candidate.trim();
-      if (trimmed) {
-        message = trimmed;
-        break;
-      }
-    }
-  }
-
-  if (!message) {
-    sendJson(res, 400, { error: "Missing required field 'message' in request body." });
-    return;
-  }
-
-  const queryValue = typeof data.query === "string" ? data.query.trim() : "";
-  const sanitizedQuery = queryValue || message;
-  const mode = normalizeAIMode(data.mode);
-  const history = normalizeAIHistory(data.history);
-  const context = normalizeAIContext(data.context);
-  const nsfwModeInput = typeof data.nsfwMode === "string" ? data.nsfwMode : undefined;
-  const nsfwUserMode = resolveUserNSFWMode(nsfwModeInput);
-
-  if (!runtimeAiConfig.enabled) {
-    const disabledOutcome = getLastAIOutcome();
-    const response: AIQueryResponsePayload = {
-      status: "disabled",
-      reply: null,
-      error: disabledOutcome.message ?? "Local AI assistance is disabled by the server configuration.",
-      mode,
-      outcome: disabledOutcome,
-    };
-    sendJson(res, 200, response);
-    return;
-  }
-
-  let reply: string | null = null;
-  if (mode === "search") {
-    reply = await generateAIResponse(sanitizedQuery, { nsfwMode: nsfwUserMode });
-  } else {
-    const request: LocalAIContextRequest = {
-      mode,
-      message,
-      query: sanitizedQuery,
-      context,
-      history,
-      nsfwMode: nsfwUserMode,
-    };
-    reply = await generateContextualResponse(request);
-  }
-
-  const outcome = getLastAIOutcome();
-  let status: AIQueryStatus = "success";
-  let errorMessage: string | null = null;
-
-  if (outcome.status === "disabled") {
-    status = "disabled";
-    errorMessage = outcome.message ?? "Local AI assistance is disabled.";
-  } else if (!reply) {
-    if (outcome.status === "error") {
-      status = "error";
-      errorMessage = outcome.message ?? "Local AI failed to generate a response.";
-    } else if (outcome.status === "success" && outcome.message) {
-      status = "unavailable";
-      errorMessage = outcome.message ?? buildSuppressionMessageForMode(nsfwUserMode);
-    } else {
-      status = "unavailable";
-      errorMessage = outcome.message ?? "Local AI response is unavailable.";
-    }
-  }
-
-  const responsePayload: AIQueryResponsePayload = {
-    status,
-    reply: reply ?? null,
-    mode,
-    outcome,
-  };
-
-  if (errorMessage) {
-    responsePayload.error = errorMessage;
-  }
-
-  sendJson(res, 200, responsePayload);
+async function handleAIQuery({ res }: HandlerContext): Promise<void> {
+  sendJson(res, 410, {
+    error: "Conversational AI is unavailable. Alexandria now uses AI only to interpret searches.",
+  });
 }
 
 async function handleMetadata({ res, url }: HandlerContext): Promise<void> {

@@ -392,6 +392,48 @@ html[data-theme="light"] datalist option {
   line-height: 1.5;
 }
 
+.ai-assistant-interpretation {
+  margin-top: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.ai-assistant-subheading {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--harmonia-text);
+}
+
+.ai-assistant-filters {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.ai-assistant-filter {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.4rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: calc(var(--harmonia-radius) * 0.9);
+  border: 1px solid color-mix(in srgb, var(--harmonia-border) 55%, transparent);
+  background: color-mix(in srgb, var(--harmonia-surface-muted) 55%, transparent);
+}
+
+.ai-assistant-filter dt {
+  margin: 0;
+  font-weight: 600;
+  color: var(--harmonia-text);
+}
+
+.ai-assistant-filter dd {
+  margin: 0;
+  color: var(--harmonia-text-muted);
+}
+
 .ai-assistant-loading {
   color: var(--harmonia-accent);
 }
