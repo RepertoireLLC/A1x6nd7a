@@ -41,26 +41,34 @@ npm run build:alexandria
 
 #### Windows setup using Anaconda Prompt
 
+The project runs happily inside an Anaconda-managed shell, which is handy on locked-down Windows machines.
+
 1. Open **Anaconda Prompt** from the Start menu.
-2. If you prefer to isolate tools, create and activate a Conda environment with Node.js:
+2. (Optional) Create and activate an isolated Conda environment that bundles Node.js:
    ```bash
    conda create -n alexandria nodejs -y
    conda activate alexandria
    ```
-   Skip this step if Node.js 18+ and npm 9+ are already available on your system PATH.
+   > Skip this step if Node.js 18+ and npm 9+ are already present on your global PATH.
 3. Navigate to the repository root (replace the path with your checkout location):
    ```bash
    cd C:\path\to\A1x6nd7a
    ```
-4. Install workspace dependencies:
+4. Install workspace dependencies (the first run also pulls the lightweight `@xenova/transformers` models on demand):
    ```bash
    npm install --workspaces
    ```
-5. Run the combined build:
+5. Launch the backend in one Anaconda Prompt window so the transformer pipeline can initialise and cache its models:
    ```bash
-   npm run build:alexandria
+   npm run dev --workspace alexandria-browser/backend
    ```
-6. When finished, deactivate the Conda environment if you created one:
+   The first startup may take a minute while ONNX weights download. If your network blocks the download, you can pre-fetch them by running the command once with VPN/proxy access; subsequent runs work offline thanks to the local cache stored under `%APPDATA%/onnxruntime-web`. Warnings about "Removing initializer" are safe to ignore.
+6. In a second Anaconda Prompt window (activate the same `alexandria` environment if you created it), start the frontend:
+   ```bash
+   npm run dev --workspace alexandria-browser/frontend
+   ```
+   The Vite dev server will report the local URL (typically http://localhost:5173). Visit it in your browser; the backend continues to serve at http://localhost:4000.
+7. When you finish developing, stop both dev servers with `Ctrl+C`. Deactivate the Conda environment if you created one:
    ```bash
    conda deactivate
    ```
