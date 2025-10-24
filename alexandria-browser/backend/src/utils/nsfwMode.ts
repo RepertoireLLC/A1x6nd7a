@@ -201,11 +201,5 @@ export function normalizeUserSuppliedMode(value: string | undefined): NSFWUserMo
   if (!fallback) {
     return userMode;
   }
-  if (fallback === "off") {
-    return "unrestricted";
-  }
-  if (fallback === "nsfw-only") {
-    return "nsfw-only";
-  }
   return fallback;
 }

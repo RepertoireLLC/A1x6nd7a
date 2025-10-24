@@ -292,6 +292,9 @@ function App() {
   const [saveMeta, setSaveMeta] = useState<Record<string, SaveMeta>>({});
   const [suggestedQuery, setSuggestedQuery] = useState<string | null>(null);
   const [suggestionCorrections, setSuggestionCorrections] = useState<SpellcheckCorrection[]>([]);
+  const [aiOriginalQuery, setAiOriginalQuery] = useState<string | null>(null);
+  const [aiRefinedQuery, setAiRefinedQuery] = useState<string | null>(null);
+  const [aiRefinementTopics, setAiRefinementTopics] = useState<string[]>([]);
   const [aiAssistantEnabled, setAiAssistantEnabled] = useState(() => Boolean(settings.aiAssistantEnabled));
   const [aiSummary, setAiSummary] = useState<string | null>(null);
   const [aiSummaryStatus, setAiSummaryStatus] = useState<AISummaryStatus>(() =>
@@ -974,6 +977,42 @@ function App() {
         }
 
         const payload = result.data;
+        const archivePayload = payload.archive ?? {
+          response: { docs: [], numFound: null, start: 0 },
+        };
+        const normalizedOriginalQuery =
+          typeof payload.originalQuery === "string" ? payload.originalQuery.trim() : "";
+        const normalizedFinalQuery =
+          typeof payload.finalQuery === "string" ? payload.finalQuery.trim() : "";
+        const refinedCategories = Array.isArray(payload.refinement?.categories)
+          ? payload.refinement!.categories
+              .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+              .filter((entry, index, array) => entry.length > 0 && array.indexOf(entry) === index)
+          : [];
+        const refinedSuggestions = Array.isArray(payload.refinement?.suggestions)
+          ? payload.refinement!.suggestions
+              .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+              .filter((entry, index, array) => entry.length > 0 && array.indexOf(entry) === index)
+          : [];
+        const refinementTopics = [...refinedSuggestions, ...refinedCategories].filter(
+          (entry, index, array) => entry.length > 0 && array.indexOf(entry) === index
+        );
+
+        if (
+          aiAssistantEnabled &&
+          payload.refinedByAI &&
+          normalizedOriginalQuery &&
+          normalizedFinalQuery &&
+          normalizedFinalQuery.toLowerCase() !== normalizedOriginalQuery.toLowerCase()
+        ) {
+          setAiOriginalQuery(normalizedOriginalQuery);
+          setAiRefinedQuery(normalizedFinalQuery);
+          setAiRefinementTopics(refinementTopics);
+        } else if (isFirstPage) {
+          setAiOriginalQuery(normalizedOriginalQuery || null);
+          setAiRefinedQuery(null);
+          setAiRefinementTopics([]);
+        }
 
         const session = searchSessionRef.current;
         if (session) {
@@ -996,9 +1035,10 @@ function App() {
         }
 
         if (aiAssistantEnabled) {
-          const hasStatusField = Object.prototype.hasOwnProperty.call(payload, "ai_summary_status");
-          const backendStatus = parseBackendAIStatus(payload.ai_summary_status);
-          const rawSummary = typeof payload.ai_summary === "string" ? payload.ai_summary.trim() : "";
+          const hasStatusField = Object.prototype.hasOwnProperty.call(archivePayload, "ai_summary_status");
+          const backendStatus = parseBackendAIStatus(archivePayload.ai_summary_status);
+          const rawSummary =
+            typeof archivePayload.ai_summary === "string" ? archivePayload.ai_summary.trim() : "";
           const summaryText = rawSummary.length > 0 ? rawSummary : null;
           let nextStatus: AISummaryStatus = summaryText ? "success" : "unavailable";
 
@@ -1010,7 +1050,10 @@ function App() {
           }
 
           let nextError: string | null = null;
-          const rawError = typeof payload.ai_summary_error === "string" ? payload.ai_summary_error.trim() : "";
+          const rawError =
+            typeof archivePayload.ai_summary_error === "string"
+              ? archivePayload.ai_summary_error.trim()
+              : "";
           if (nextStatus === "error") {
             nextError = rawError || "AI assistant could not summarize this query.";
           } else if (nextStatus === "unavailable") {
@@ -1023,10 +1066,15 @@ function App() {
             }
           }
 
-          const rawNotice = typeof payload.ai_summary_notice === "string" ? payload.ai_summary_notice.trim() : "";
+          const rawNotice =
+            typeof archivePayload.ai_summary_notice === "string"
+              ? archivePayload.ai_summary_notice.trim()
+              : "";
           const summaryNotice = rawNotice.length > 0 ? rawNotice : null;
           const rawSource =
-            typeof payload.ai_summary_source === "string" ? payload.ai_summary_source.trim().toLowerCase() : "";
+            typeof archivePayload.ai_summary_source === "string"
+              ? archivePayload.ai_summary_source.trim().toLowerCase()
+              : "";
           const summarySource: AISummarySource | null =
             rawSource === "model" || rawSource === "heuristic" ? (rawSource as AISummarySource) : null;
 
@@ -1060,10 +1108,10 @@ function App() {
           setAiAvailability("disabled");
         }
 
-        if (payload.fallback) {
-          const fallbackReason = payload.fallback_reason?.trim() ?? "";
+        if (archivePayload.fallback) {
+          const fallbackReason = archivePayload.fallback_reason?.trim() ?? "";
           const fallbackMessage =
-            payload.fallback_message?.trim() ??
+            archivePayload.fallback_message?.trim() ??
             (fallbackReason === "network-error"
               ? "Working offline — showing a limited built-in dataset because the Internet Archive could not be reached."
               : fallbackReason === "html-response" || fallbackReason === "malformed-json"
@@ -1074,10 +1122,10 @@ function App() {
             console.warn("Archive search is relying on offline data due to:", fallbackReason);
           }
         } else if (
-          payload.search_strategy &&
-          payload.search_strategy !== "primary search with fuzzy expansion"
+          archivePayload.search_strategy &&
+          archivePayload.search_strategy !== "primary search with fuzzy expansion"
         ) {
-          const simplifiedQuery = payload.search_strategy_query?.trim();
+          const simplifiedQuery = archivePayload.search_strategy_query?.trim();
           const strategyMessage = simplifiedQuery
             ? `Recovered from an unexpected Internet Archive response by retrying with the simplified query "${simplifiedQuery}". Results may be broader than usual.`
             : "Recovered from an unexpected Internet Archive response by retrying with a simplified query. Results may be broader than usual.";
@@ -1086,22 +1134,23 @@ function App() {
           setFallbackNotice(null);
         }
 
-        const docs = payload.response?.docs ?? [];
-        const numFound = payload.response?.numFound ?? null;
-        const altQueries = Array.isArray(payload.alternate_queries)
-          ? payload.alternate_queries
+        const docs = archivePayload.response?.docs ?? [];
+        const numFound = archivePayload.response?.numFound ?? null;
+        const altQueries = Array.isArray(archivePayload.alternate_queries)
+          ? archivePayload.alternate_queries
               .map((item) => (typeof item === "string" ? item.trim() : ""))
               .filter((item, index, array) => item.length > 0 && array.indexOf(item) === index)
           : [];
         setAlternateSuggestions(altQueries);
 
         const originalCount =
-          typeof payload.original_numFound === "number" && Number.isFinite(payload.original_numFound)
-            ? payload.original_numFound
+          typeof archivePayload.original_numFound === "number" &&
+          Number.isFinite(archivePayload.original_numFound)
+            ? archivePayload.original_numFound
             : null;
         const filteredCountValue =
-          typeof payload.filtered_count === "number" && Number.isFinite(payload.filtered_count)
-            ? payload.filtered_count
+          typeof archivePayload.filtered_count === "number" && Number.isFinite(archivePayload.filtered_count)
+            ? archivePayload.filtered_count
             : typeof numFound === "number" && Number.isFinite(numFound)
             ? numFound
             : null;
@@ -1141,7 +1190,7 @@ function App() {
           }
           return [...previous, pageNumber].sort((a, b) => a - b);
         });
-        const defaultStatus: LinkStatus = payload.fallback ? "offline" : "checking";
+        const defaultStatus: LinkStatus = archivePayload.fallback ? "offline" : "checking";
         if (isFirstPage) {
           setStatuses(() => {
             const next: Record<string, LinkStatus> = {};
@@ -1178,7 +1227,7 @@ function App() {
           });
         }
 
-        const suggestion = payload.spellcheck;
+        const suggestion = archivePayload.spellcheck;
         if (
           suggestion &&
           suggestion.correctedQuery &&
@@ -1204,7 +1253,7 @@ function App() {
           resultsContainerRef.current.scrollTo({ top: 0, behavior: "smooth" });
         }
 
-        if (payload.fallback) {
+        if (archivePayload.fallback) {
           setLiveStatus(null);
           setWaybackDetails(null);
           setWaybackError(null);
@@ -2100,6 +2149,9 @@ function App() {
       setAiAvailability("unknown");
       setAiDocHelperStatus("idle");
       setSidebarTab("assistant");
+      setAiOriginalQuery(null);
+      setAiRefinedQuery(null);
+      setAiRefinementTopics([]);
     } else {
       setAiSummary(null);
       setAiSummaryError(null);
@@ -2114,6 +2166,9 @@ function App() {
       setAiDocHelperStatus("disabled");
       setAiDocHelperMessage(null);
       setAiDocHelperError(null);
+      setAiOriginalQuery(null);
+      setAiRefinedQuery(null);
+      setAiRefinementTopics([]);
     }
   };
 
@@ -2147,6 +2202,31 @@ function App() {
   );
 
   const suggestionElements: JSX.Element[] = [];
+
+  if (
+    aiAssistantEnabled &&
+    aiRefinedQuery &&
+    aiOriginalQuery &&
+    aiRefinedQuery.toLowerCase() !== aiOriginalQuery.toLowerCase()
+  ) {
+    suggestionElements.push(
+      <div key="ai-refinement" className="spellcheck-suggestion" role="note">
+        AI interpreted "{aiOriginalQuery}" as{" "}
+        <button
+          type="button"
+          className="spellcheck-button"
+          onClick={() => handleSuggestionClick(aiRefinedQuery)}
+        >
+          {aiRefinedQuery}
+        </button>
+        {aiRefinementTopics.length > 0 ? (
+          <span className="spellcheck-details">
+            Focus: {aiRefinementTopics.slice(0, 3).join(", ")}
+          </span>
+        ) : null}
+      </div>
+    );
+  }
 
   if (suggestedQuery) {
     suggestionElements.push(

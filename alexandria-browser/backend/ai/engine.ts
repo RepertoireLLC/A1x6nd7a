@@ -75,7 +75,9 @@ async function loadGenerator(): Promise<TextGenerationPipeline> {
     return generatorPromise;
   }
 
-  generatorPromise = pipeline("text-generation", generatorModel).then((instance) => {
+  const pipelinePromise = pipeline("text-generation", generatorModel) as Promise<unknown>;
+  // Ensure downstream consumers receive a consistently typed generator instance.
+  generatorPromise = pipelinePromise.then((instance: unknown) => {
     generator = instance as TextGenerationPipeline;
     return generator;
   });
@@ -91,7 +93,9 @@ async function loadEmbedder(): Promise<FeatureExtractionPipeline> {
     return embedderPromise;
   }
 
-  embedderPromise = pipeline("feature-extraction", embeddingModel).then((instance) => {
+  const pipelinePromise = pipeline("feature-extraction", embeddingModel) as Promise<unknown>;
+  // Convert the dynamically loaded embedding pipeline into a strongly typed helper.
+  embedderPromise = pipelinePromise.then((instance: unknown) => {
     embedder = instance as FeatureExtractionPipeline;
     return embedder;
   });
