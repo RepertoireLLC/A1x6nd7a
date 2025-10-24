@@ -38,6 +38,11 @@ export interface SearchScoreBreakdown {
   relevance: number;
   combinedScore: number;
   trustLevel: SourceTrustLevel;
+  titleAccuracy?: number;
+  descriptionStrength?: number;
+  keywordCoverage?: number;
+  dateRelevance?: number;
+  completeness?: number;
 }
 
 export interface ArchiveSearchDoc {

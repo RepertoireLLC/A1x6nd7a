@@ -74,6 +74,60 @@ const loadMoreSentinel = document.createElement('div');
 loadMoreSentinel.className = 'load-more-sentinel';
 loadMoreSentinel.setAttribute('aria-hidden', 'true');
 
+function createSkeletonCard() {
+  const card = document.createElement('div');
+  card.className = 'result-card skeleton-card';
+
+  const layout = document.createElement('div');
+  layout.className = 'result-layout';
+
+  const thumb = document.createElement('div');
+  thumb.className = 'result-thumb-wrapper skeleton-block';
+  layout.appendChild(thumb);
+
+  const body = document.createElement('div');
+  body.className = 'result-body';
+
+  const lineLarge = document.createElement('div');
+  lineLarge.className = 'skeleton-line skeleton-line-large';
+  const lineMedium = document.createElement('div');
+  lineMedium.className = 'skeleton-line skeleton-line-medium';
+  const lineSmall = document.createElement('div');
+  lineSmall.className = 'skeleton-line skeleton-line-small';
+
+  body.appendChild(lineLarge);
+  body.appendChild(lineMedium);
+  body.appendChild(lineSmall);
+
+  layout.appendChild(body);
+  card.appendChild(layout);
+  return card;
+}
+
+function renderSkeletonResults(count = 3) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'results-skeleton';
+  for (let index = 0; index < count; index++) {
+    wrapper.appendChild(createSkeletonCard());
+  }
+  return wrapper;
+}
+
+function showReportNotice(detail) {
+  const notice = document.createElement('div');
+  notice.className = 'report-notice';
+  const title = typeof detail?.title === 'string' && detail.title.trim() ? detail.title.trim() : detail?.identifier;
+  notice.textContent = title
+    ? `Report queued for “${title}”. Use the Alexandria desktop app to submit full details.`
+    : 'Report queued. Use the Alexandria desktop app to submit full details.';
+  messageContainer.appendChild(notice);
+  setTimeout(() => {
+    if (notice.parentElement) {
+      notice.parentElement.removeChild(notice);
+    }
+  }, 4000);
+}
+
 let loadMoreObserver = null;
 if (typeof window !== 'undefined' && 'IntersectionObserver' in window) {
   loadMoreObserver = new IntersectionObserver(
@@ -93,6 +147,13 @@ if (typeof window !== 'undefined' && 'IntersectionObserver' in window) {
     { root: null, rootMargin: '200px 0px 200px 0px' }
   );
 }
+
+resultsContainer.addEventListener('alexandria:report', (event) => {
+  if (!(event instanceof CustomEvent)) {
+    return;
+  }
+  showReportNotice(event.detail ?? {});
+});
 
 function persistSettings() {
   saveSettings({
@@ -148,6 +209,11 @@ function renderResults() {
     error.className = 'error-state';
     error.textContent = state.error;
     messageContainer.appendChild(error);
+    return;
+  }
+
+  if (state.loading && !state.loadingMore) {
+    resultsContainer.appendChild(renderSkeletonResults());
     return;
   }
 
@@ -311,10 +377,15 @@ async function runSearch(options = {}) {
     state.results = processed;
   } catch (error) {
     console.error(error);
+    const fallbackMessage = 'Unable to fetch results right now. Check your internet connection or try again later.';
+    const friendlyMessage =
+      error instanceof Error && error.message && error.message.trim()
+        ? error.message.trim()
+        : fallbackMessage;
     if (append) {
-      state.loadMoreError = 'Unable to load more results. Please try again.';
+      state.loadMoreError = friendlyMessage;
     } else {
-      state.error = 'Unable to fetch results right now. Check your internet connection or try again later.';
+      state.error = friendlyMessage;
       state.rawResults = [];
       state.results = [];
       state.total = 0;

@@ -18,6 +18,14 @@ export interface TruthScoreResult {
   breakdown: SearchScoreBreakdown;
 }
 
+interface RelevanceAnalysis {
+  score: number;
+  keywordCoverage: number;
+  titleAccuracy: number;
+  descriptionStrength: number;
+  metadataSupport: number;
+}
+
 const STOP_WORDS = new Set<string>([
   "a",
   "about",
@@ -244,6 +252,10 @@ function clamp(value: number, min: number, max: number): number {
   if (value < min) return min;
   if (value > max) return max;
   return value;
+}
+
+function roundScore(value: number): number {
+  return Math.round(value * 1000) / 1000;
 }
 
 function stripHtml(input: string): string {
@@ -486,8 +498,16 @@ function computeProximityBonus(words: string[], keywords: string[], weight: numb
   return 0;
 }
 
-function computeRelevance(fieldTexts: FieldTexts, normalizedQuery: string, keywords: string[]): number {
+function computeRelevance(fieldTexts: FieldTexts, normalizedQuery: string, keywords: string[]): RelevanceAnalysis {
   let rawScore = 0;
+
+  const normalizedKeywords = keywords
+    .map((keyword) => keyword.toLowerCase().trim())
+    .filter((keyword) => keyword.length > 0);
+  const uniqueKeywords = Array.from(new Set(normalizedKeywords));
+  const matchedKeywords = new Set<string>();
+  const coverageMetrics: Partial<Record<keyof FieldTexts, number>> = {};
+  const keywordCount = uniqueKeywords.length;
 
   for (const [field, text] of Object.entries(fieldTexts) as Array<[keyof FieldTexts, string]>) {
     if (!text) {
@@ -507,22 +527,53 @@ function computeRelevance(fieldTexts: FieldTexts, normalizedQuery: string, keywo
       rawScore += 1 * config.weight;
     }
 
-    for (const keyword of keywords) {
+    let fieldDirectMatches = 0;
+    let fieldFuzzyScore = 0;
+
+    for (const keyword of uniqueKeywords) {
       const occurrences = countOccurrences(normalizedField, keyword);
       if (occurrences > 0) {
         rawScore += occurrences * config.keywordBase * config.weight;
         if (occurrences > 1) {
           rawScore += (occurrences - 1) * 0.05 * config.weight;
         }
-      } else {
-        rawScore += computeFuzzyMatchScore(words, keyword, config);
+        matchedKeywords.add(keyword);
+        fieldDirectMatches += 1;
+        continue;
+      }
+
+      const fuzzyScore = computeFuzzyMatchScore(words, keyword, config);
+      if (fuzzyScore > 0) {
+        rawScore += fuzzyScore;
+        matchedKeywords.add(keyword);
+        fieldFuzzyScore += fuzzyScore;
       }
     }
 
-    rawScore += computeProximityBonus(words, keywords, config.weight);
+    rawScore += computeProximityBonus(words, uniqueKeywords, config.weight);
+
+    let coverage = 0;
+    if (keywordCount > 0) {
+      const normalizationBase = config.fuzzyBase * config.weight || 1;
+      const normalizedFuzzy = fieldFuzzyScore > 0 ? Math.min(1, fieldFuzzyScore / normalizationBase) : 0;
+      coverage = clamp((fieldDirectMatches + normalizedFuzzy * 0.6) / keywordCount, 0, 1);
+    }
+    coverageMetrics[field] = coverage;
   }
 
-  return clamp(1 - Math.exp(-rawScore), 0, 1);
+  const score = clamp(1 - Math.exp(-rawScore), 0, 1);
+  const keywordCoverage = keywordCount > 0 ? matchedKeywords.size / keywordCount : 0;
+  const titleAccuracy = coverageMetrics.title ?? 0;
+  const descriptionStrength = coverageMetrics.description ?? 0;
+  const metadataSupport = Math.max(coverageMetrics.metadata ?? 0, coverageMetrics.fulltext ?? 0);
+
+  return {
+    score,
+    keywordCoverage,
+    titleAccuracy,
+    descriptionStrength,
+    metadataSupport,
+  };
 }
 
 function toArray(value: unknown): string[] {
@@ -639,10 +690,25 @@ function extractYear(value: unknown): number | null {
   return null;
 }
 
-function scoreHistoricalValue(doc: ArchiveSearchDoc, fieldTexts: FieldTexts): number {
-  const candidates: number[] = [];
+function extractYearsFromQuery(query: string): number[] {
+  if (!query) {
+    return [];
+  }
+  const matches = query.matchAll(/(1[0-9]{3}|20[0-9]{2}|2100)s?/gi);
+  const years = new Set<number>();
+  for (const match of matches) {
+    const value = match[1];
+    if (value) {
+      years.add(Number.parseInt(value, 10));
+    }
+  }
+  return [...years];
+}
+
+function gatherYearCandidates(doc: ArchiveSearchDoc): number[] {
   const extras = doc as Record<string, unknown>;
   const yearValues = [doc.year, doc.date, doc.publicdate, extras.public_date, extras.publicDate];
+  const candidates: number[] = [];
   for (const value of yearValues) {
     const year = extractYear(value);
     if (year !== null) {
@@ -655,7 +721,11 @@ function scoreHistoricalValue(doc: ArchiveSearchDoc, fieldTexts: FieldTexts): nu
       candidates.push(identifierYear);
     }
   }
+  return candidates;
+}
 
+function scoreHistoricalValue(doc: ArchiveSearchDoc, fieldTexts: FieldTexts): number {
+  const candidates = gatherYearCandidates(doc);
   const now = new Date().getUTCFullYear();
   const year = candidates.length > 0 ? Math.min(...candidates) : null;
   let score = 0.35;
@@ -686,6 +756,52 @@ function scoreHistoricalValue(doc: ArchiveSearchDoc, fieldTexts: FieldTexts): nu
   return clamp(score, 0, 1);
 }
 
+function scoreDateRelevance(doc: ArchiveSearchDoc, context: TruthScoringContext): number {
+  const queryYears = extractYearsFromQuery(context.originalQuery);
+  const candidates = gatherYearCandidates(doc);
+
+  if (queryYears.length === 0) {
+    return candidates.length > 0 ? 0.6 : 0.5;
+  }
+
+  if (candidates.length === 0) {
+    return 0.2;
+  }
+
+  const now = new Date().getUTCFullYear();
+  let bestScore = 0.25;
+
+  for (const candidate of candidates) {
+    for (const targetYear of queryYears) {
+      const diff = Math.abs(candidate - targetYear);
+      let score = 0.25;
+      if (diff === 0) {
+        score = 1;
+      } else if (diff <= 1) {
+        score = 0.9;
+      } else if (diff <= 3) {
+        score = 0.8;
+      } else if (diff <= 5) {
+        score = 0.7;
+      } else if (diff <= 10) {
+        score = 0.55;
+      } else if (diff <= 25) {
+        score = 0.4;
+      }
+
+      if (candidate > now + 1) {
+        score = Math.min(score, 0.2);
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+      }
+    }
+  }
+
+  return clamp(bestScore, 0, 1);
+}
+
 function hasMeaningfulText(value: unknown): boolean {
   if (!value) {
     return false;
@@ -695,6 +811,28 @@ function hasMeaningfulText(value: unknown): boolean {
   }
   if (Array.isArray(value)) {
     return value.some((entry) => typeof entry === "string" && entry.trim().length > 0);
+  }
+  return false;
+}
+
+function hasStructuredData(value: unknown): boolean {
+  if (!value) {
+    return false;
+  }
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value > 0;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasStructuredData(entry));
+  }
+  if (typeof value === "object") {
+    return Object.keys(value as Record<string, unknown>).length > 0;
   }
   return false;
 }
@@ -748,6 +886,46 @@ function scoreTransparency(doc: ArchiveSearchDoc, fieldTexts: FieldTexts): numbe
   return clamp(score, 0, 1);
 }
 
+function scoreCompleteness(doc: ArchiveSearchDoc, fieldTexts: FieldTexts): number {
+  const extras = doc as Record<string, unknown>;
+  const checks: Array<[unknown, number]> = [
+    [doc.title, 1],
+    [fieldTexts.description, 1],
+    [fieldTexts.metadata, 0.8],
+    [fieldTexts.fulltext, 0.6],
+    [doc.mediatype, 0.5],
+    [doc.creator, 0.5],
+    [doc.collection ?? extras.collection, 0.4],
+    [doc.subject ?? extras.subject ?? doc.subjects, 0.4],
+    [doc.language ?? extras.languages ?? extras.lang, 0.35],
+    [doc.publicdate ?? doc.year ?? doc.date, 0.4],
+    [doc.thumbnail, 0.3],
+    [doc.links, 0.25],
+    [doc.original_url ?? extras.original ?? extras.originalurl, 0.25],
+    [extras.files_count, 0.2],
+    [extras.item_size, 0.15],
+  ];
+
+  let available = 0;
+  let total = 0;
+
+  for (const [value, weight] of checks) {
+    if (weight <= 0) {
+      continue;
+    }
+    total += weight;
+    if (hasStructuredData(value)) {
+      available += weight;
+    }
+  }
+
+  if (total <= 0) {
+    return 0.5;
+  }
+
+  return clamp(available / total, 0, 1);
+}
+
 function determineTrustLevel(authenticity: number): "high" | "medium" | "low" {
   if (authenticity >= 0.6) {
     return "high";
@@ -769,29 +947,46 @@ export function createTruthScoringContext(query: string): TruthScoringContext {
 
 export function scoreArchiveDocTruth(doc: ArchiveSearchDoc, context: TruthScoringContext): TruthScoreResult {
   const fieldTexts = buildFieldTexts(doc);
-  const relevance = context.originalQuery ? computeRelevance(fieldTexts, context.normalizedQuery, context.keywords) : 0.2;
+  const relevanceAnalysis = computeRelevance(fieldTexts, context.normalizedQuery, context.keywords);
+  const relevance = context.originalQuery ? relevanceAnalysis.score : 0.2;
   const authenticity = scoreAuthenticity(doc, fieldTexts);
   const historicalValue = scoreHistoricalValue(doc, fieldTexts);
   const transparency = scoreTransparency(doc, fieldTexts);
-
-  const combined = clamp(
-    relevance * 0.4 +
-      authenticity * 0.3 +
-      historicalValue * 0.15 +
-      transparency * 0.15,
+  const completeness = scoreCompleteness(doc, fieldTexts);
+  const dateRelevance = scoreDateRelevance(doc, context);
+  const keywordCoverage = clamp(
+    context.originalQuery ? relevanceAnalysis.keywordCoverage : 0,
     0,
     1,
   );
 
+  const combined = clamp(
+    relevance * 0.32 +
+      authenticity * 0.22 +
+      historicalValue * 0.1 +
+      transparency * 0.1 +
+      completeness * 0.1 +
+      dateRelevance * 0.08 +
+      keywordCoverage * 0.08,
+    0,
+    1,
+  );
+  // TODO: Future AI-enhanced ranking here.
+
   const normalizedScore = combined > 0 ? combined : relevance;
 
   const breakdown: SearchScoreBreakdown = {
-    authenticity: Math.round(authenticity * 1000) / 1000,
-    historicalValue: Math.round(historicalValue * 1000) / 1000,
-    transparency: Math.round(transparency * 1000) / 1000,
-    relevance: Math.round(relevance * 1000) / 1000,
-    combinedScore: Math.round(normalizedScore * 1000) / 1000,
+    authenticity: roundScore(authenticity),
+    historicalValue: roundScore(historicalValue),
+    transparency: roundScore(transparency),
+    relevance: roundScore(relevance),
+    combinedScore: roundScore(normalizedScore),
     trustLevel: determineTrustLevel(authenticity),
+    titleAccuracy: roundScore(relevanceAnalysis.titleAccuracy),
+    descriptionStrength: roundScore(relevanceAnalysis.descriptionStrength),
+    keywordCoverage: roundScore(keywordCoverage),
+    dateRelevance: roundScore(dateRelevance),
+    completeness: roundScore(completeness),
   };
 
   return { score: breakdown.combinedScore, breakdown };

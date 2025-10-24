@@ -435,6 +435,10 @@ function buildDirectArchiveSearchUrl(
   const filterExpressions = buildFilterExpressions(filters, options.includeFilters);
   const parts = [baseExpression, ...filterExpressions].filter((part) => part && part.length > 0);
 
+  const safeRows = Number.isFinite(rows) && rows > 0 ? rows : 20;
+  const safePage = Number.isFinite(page) && page > 0 ? page : 1;
+  const safeOffset = Math.max(0, (safePage - 1) * safeRows);
+
   let finalQuery: string;
   if (parts.length > 1) {
     const normalizedParts = parts.map((part) => {
@@ -452,8 +456,10 @@ function buildDirectArchiveSearchUrl(
 
   requestUrl.searchParams.set("q", finalQuery);
   requestUrl.searchParams.set("output", "json");
-  requestUrl.searchParams.set("page", String(page));
-  requestUrl.searchParams.set("rows", String(rows));
+  requestUrl.searchParams.set("page", String(safePage));
+  requestUrl.searchParams.set("rows", String(safeRows));
+  requestUrl.searchParams.set("start", String(safeOffset));
+  requestUrl.searchParams.set("offset", String(safeOffset));
   requestUrl.searchParams.set("fl", ARCHIVE_SEARCH_FIELDS);
 
   return requestUrl;
@@ -466,6 +472,8 @@ function buildDirectArchiveSearchAttempts(
   filters: SearchFilters
 ): DirectArchiveSearchAttempt[] {
   const trimmedQuery = query.trim();
+  const safeRows = Number.isFinite(rows) && rows > 0 ? rows : 20;
+  const safePage = Number.isFinite(page) && page > 0 ? page : 1;
 
   const normalizedFilters: SearchFilters = {
     mediaType: filters.mediaType.trim(),
@@ -486,7 +494,7 @@ function buildDirectArchiveSearchAttempts(
     filterValue: SearchFilters,
     options: { includeFilters: boolean; includeFuzzy: boolean }
   ): DirectArchiveSearchAttempt => {
-    const url = buildDirectArchiveSearchUrl(queryValue, page, rows, filterValue, options);
+    const url = buildDirectArchiveSearchUrl(queryValue, safePage, safeRows, filterValue, options);
     const effectiveQuery = url.searchParams.get("q") ?? queryValue;
     return { description, url, query: effectiveQuery };
   };
@@ -595,7 +603,11 @@ async function executeDirectArchiveSearch(
   rows: number,
   filters: SearchFilters
 ): Promise<{ payload: ArchiveSearchResponse; attempt: DirectArchiveSearchAttempt }> {
-  const attempts = buildDirectArchiveSearchAttempts(query, page, rows, filters);
+  const safeRows = Number.isFinite(rows) && rows > 0 ? rows : 20;
+  const safePage = Number.isFinite(page) && page > 0 ? page : 1;
+  const safeOffset = Math.max(0, (safePage - 1) * safeRows);
+
+  const attempts = buildDirectArchiveSearchAttempts(query, safePage, safeRows, filters);
   let lastError: unknown = null;
 
   for (let index = 0; index < attempts.length; index++) {
@@ -611,6 +623,20 @@ async function executeDirectArchiveSearch(
       };
       const processed = postProcessDirectSearchPayload(augmented, query, filters);
 
+      const normalizedResponse = processed.response ?? {};
+      const resolvedStart =
+        typeof normalizedResponse.start === "number" && Number.isFinite(normalizedResponse.start)
+          ? normalizedResponse.start
+          : safeOffset;
+
+      const payloadWithStart: ArchiveSearchResponse = {
+        ...processed,
+        response: {
+          ...normalizedResponse,
+          start: resolvedStart,
+        },
+      };
+
       if (!archiveApiSuccessLogged) {
         console.info("Archive API fully connected. Live search 100% operational.");
         archiveApiSuccessLogged = true;
@@ -623,7 +649,7 @@ async function executeDirectArchiveSearch(
         }
       }
 
-      return { payload: processed, attempt };
+      return { payload: payloadWithStart, attempt };
     } catch (error) {
       lastError = error;
       const context =
@@ -670,10 +696,15 @@ export async function searchArchive(
     });
   }
 
+  const safeRows = Number.isFinite(rows) && rows > 0 ? rows : 20;
+  const safePage = Number.isFinite(page) && page > 0 ? page : 1;
+  const safeOffset = Math.max(0, (safePage - 1) * safeRows);
+
   const url = buildApiUrl("/api/searchArchive");
   url.searchParams.set("q", sanitizedQuery);
-  url.searchParams.set("page", String(page));
-  url.searchParams.set("rows", String(rows));
+  url.searchParams.set("page", String(safePage));
+  url.searchParams.set("rows", String(safeRows));
+  url.searchParams.set("offset", String(safeOffset));
 
   if (filters.mediaType !== "all") {
     url.searchParams.set("mediaType", filters.mediaType);
@@ -766,7 +797,7 @@ export async function searchArchive(
       uploader: filters.uploader?.trim(),
       subject: filters.subject?.trim(),
     };
-    const { payload } = await executeDirectArchiveSearch(sanitizedQuery, page, rows, directFilters);
+    const { payload } = await executeDirectArchiveSearch(sanitizedQuery, safePage, safeRows, directFilters);
     return { ok: true, data: payload, status: 200 };
   } catch (directError) {
     lastError = directError;
@@ -775,7 +806,7 @@ export async function searchArchive(
 
   if (OFFLINE_FALLBACK_ENABLED) {
     console.warn("Search request failed, using local fallback dataset.", lastError);
-    const fallbackPayload = performFallbackArchiveSearch(sanitizedQuery, page, rows, filters);
+    const fallbackPayload = performFallbackArchiveSearch(sanitizedQuery, safePage, safeRows, filters);
     return { ok: true, data: fallbackPayload, status: 200 };
   }
 

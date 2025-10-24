@@ -52,3 +52,36 @@ export function mediaIcon(mediatype?: string) {
       return "🗂️";
   }
 }
+
+/**
+ * Provide a human readable label for the media type.
+ */
+export function getMediaLabel(mediatype?: string) {
+  if (!mediatype) {
+    return "Archive item";
+  }
+  const normalized = mediatype.toLowerCase();
+  switch (normalized) {
+    case "texts":
+      return "Text";
+    case "audio":
+    case "etree":
+      return "Audio";
+    case "movies":
+    case "video":
+      return "Video";
+    case "software":
+      return "Software";
+    case "image":
+    case "images":
+      return "Image";
+    case "data":
+      return "Data";
+    case "web":
+      return "Web page";
+    case "collection":
+      return "Collection";
+    default:
+      return mediatype.charAt(0).toUpperCase() + mediatype.slice(1);
+  }
+}

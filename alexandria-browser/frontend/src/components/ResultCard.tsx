@@ -1,5 +1,5 @@
 import type { ArchiveSearchDoc, LinkStatus, NSFWFilterMode } from "../types";
-import { getDescription, getYearOrDate, mediaIcon } from "../utils/format";
+import { getDescription, getMediaLabel, getYearOrDate, mediaIcon } from "../utils/format";
 import { resolveDocLinks, STATUS_ARIA_LABELS, STATUS_LABELS } from "../utils/resultPresentation";
 import { ReportAction, type ReportSubmitHandler } from "../reporting";
 
@@ -42,6 +42,7 @@ export function ResultCard({
   const { archiveUrl, waybackUrl, originalUrl } = resolveDocLinks(doc);
   const description = getDescription(doc.description);
   const yearOrDate = getYearOrDate(doc);
+  const mediaLabel = getMediaLabel(doc.mediatype);
   const creator = Array.isArray(doc.creator) ? doc.creator.join(", ") : doc.creator ?? "";
   const severity = doc.nsfwLevel ?? doc.nsfw_level ?? null;
   const isNSFW = doc.nsfw === true || severity === "mild" || severity === "explicit";
@@ -58,6 +59,17 @@ export function ResultCard({
     : typeof doc.language === "string"
     ? doc.language.trim()
     : null;
+  const statusLabel = STATUS_LABELS[status];
+  const statusAriaLabel = STATUS_ARIA_LABELS[status];
+  const availability = doc.availability ?? null;
+  const availabilityLabel =
+    availability === "online"
+      ? "Original source online"
+      : availability === "archived-only"
+      ? "Archive copy"
+      : availability === "offline"
+      ? "Offline"
+      : null;
 
   const cardClasses = ["result-card"];
   if (isNSFW) {
@@ -87,15 +99,27 @@ export function ResultCard({
               <span className="result-media" aria-hidden="true">{mediaIcon(doc.mediatype)}</span>
             )}
           </div>
-          <div>
-            <a href={archiveUrl} target="_blank" rel="noreferrer" className="result-title">
-              {doc.title || doc.identifier}
-            </a>
+          <div className="result-header-body">
+            <div className="result-title-row">
+              <a href={archiveUrl} target="_blank" rel="noreferrer" className="result-title">
+                {doc.title || doc.identifier}
+              </a>
+              <div className="result-badges">
+                {mediaLabel ? <span className="result-badge result-badge-type">{mediaLabel}</span> : null}
+                <span
+                  className={`result-badge result-badge-status status-${status}`}
+                  aria-label={statusAriaLabel}
+                >
+                  {statusLabel}
+                </span>
+              </div>
+            </div>
             <div className="result-meta">
               <span>{yearOrDate}</span>
               {creator ? <span>· {creator}</span> : null}
+              {availabilityLabel ? <span>· {availabilityLabel}</span> : null}
               {isNSFW ? <span className="nsfw-label">{nsfwLabelText}</span> : null}
-              {scorePercent !== null ? <span>· Relevance {scorePercent}%</span> : null}
+              {scorePercent !== null ? <span>· Truth relevance {scorePercent}%</span> : null}
               {trustLabel ? <span>· {trustLabel.charAt(0).toUpperCase() + trustLabel.slice(1)} trust</span> : null}
               {languageLabel ? <span>· {languageLabel}</span> : null}
             </div>
@@ -103,9 +127,6 @@ export function ResultCard({
         </div>
         {description ? <p className="result-description">{description}</p> : null}
         <div className="result-footer">
-          <span className={`result-status status-${status}`} aria-label={STATUS_ARIA_LABELS[status]}>
-            {STATUS_LABELS[status]}
-          </span>
           <div className="result-links">
             <ReportAction
               identifier={doc.identifier}
