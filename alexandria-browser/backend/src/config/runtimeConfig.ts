@@ -4,9 +4,8 @@ import path from "node:path";
 export interface RuntimeAIConfig {
   enabled: boolean;
   autoInitialize: boolean;
-  modelDirectory?: string;
-  modelName?: string;
-  modelPath?: string;
+  model: string;
+  embeddingModel: string;
 }
 
 export interface RuntimeConfig {
@@ -15,11 +14,10 @@ export interface RuntimeConfig {
 
 const DEFAULT_CONFIG: RuntimeConfig = {
   ai: {
-    enabled: false,
-    autoInitialize: false,
-    modelDirectory: path.resolve(process.cwd(), "models"),
-    modelName: "mistral-7b-instruct",
-    modelPath: path.resolve(process.cwd(), "models/mistral-7b-instruct.gguf"),
+    enabled: true,
+    autoInitialize: true,
+    model: "Xenova/distilgpt2",
+    embeddingModel: "Xenova/all-MiniLM-L6-v2",
   },
 };
 
@@ -65,21 +63,17 @@ export function loadRuntimeConfig(): RuntimeConfig {
 
   const envEnabled = process.env.ALEXANDRIA_AI_ENABLED;
   const envAutoInit = process.env.ALEXANDRIA_AI_AUTOINIT;
-  const envModelDir = process.env.ALEXANDRIA_AI_MODEL_DIR;
-  const envModelName = process.env.ALEXANDRIA_AI_MODEL_NAME;
-  const envModelPath = process.env.ALEXANDRIA_AI_MODEL_PATH;
+  const envModelName = process.env.ALEXANDRIA_AI_MODEL_NAME ?? process.env.ALEXANDRIA_AI_MODEL;
+  const envEmbeddingModel = process.env.ALEXANDRIA_AI_EMBEDDING_MODEL;
 
   merged.ai.enabled = parseBoolean(envEnabled, merged.ai.enabled);
   merged.ai.autoInitialize = parseBoolean(envAutoInit, merged.ai.autoInitialize);
 
-  if (envModelDir && envModelDir.trim()) {
-    merged.ai.modelDirectory = envModelDir.trim();
-  }
   if (envModelName && envModelName.trim()) {
-    merged.ai.modelName = envModelName.trim();
+    merged.ai.model = envModelName.trim();
   }
-  if (envModelPath && envModelPath.trim()) {
-    merged.ai.modelPath = envModelPath.trim();
+  if (envEmbeddingModel && envEmbeddingModel.trim()) {
+    merged.ai.embeddingModel = envEmbeddingModel.trim();
   }
 
   return merged;

@@ -10,9 +10,9 @@
     "strict": true,
     "skipLibCheck": true,
     "outDir": "dist",
-    "rootDir": "src",
+    "rootDir": ".",
     "types": ["node"]
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "ai/**/*", "filters/**/*"],
   "exclude": ["node_modules", "dist"]
 }

@@ -94,7 +94,8 @@ const STOPWORDS = new Set(
 );
 
 const NSFW_EXPLICIT_SET = new Set(NSFW_KEYWORD_GROUPS.explicit);
-const NSFW_MILD_SET = new Set(NSFW_KEYWORD_GROUPS.mild);
+const NSFW_ADULT_SET = new Set(NSFW_KEYWORD_GROUPS.adult);
+const NSFW_VIOLENT_SET = new Set(NSFW_KEYWORD_GROUPS.violent);
 
 function tokenize(text: string): string[] {
   return text
@@ -122,15 +123,19 @@ function filterKeywordsByMode(keywords: string[], mode: NSFWUserMode): string[] 
   }
 
   if (mode === "safe") {
-    return keywords.filter((word) => !NSFW_EXPLICIT_SET.has(word) && !NSFW_MILD_SET.has(word));
+    return keywords.filter(
+      (word) => !NSFW_EXPLICIT_SET.has(word) && !NSFW_ADULT_SET.has(word) && !NSFW_VIOLENT_SET.has(word)
+    );
   }
 
   if (mode === "moderate") {
-    return keywords.filter((word) => !NSFW_EXPLICIT_SET.has(word));
+    return keywords.filter((word) => !NSFW_EXPLICIT_SET.has(word) && !NSFW_VIOLENT_SET.has(word));
   }
 
-  if (mode === "only-nsfw") {
-    const focused = keywords.filter((word) => NSFW_EXPLICIT_SET.has(word) || NSFW_MILD_SET.has(word));
+  if (mode === "nsfw-only") {
+    const focused = keywords.filter(
+      (word) => NSFW_EXPLICIT_SET.has(word) || NSFW_ADULT_SET.has(word) || NSFW_VIOLENT_SET.has(word)
+    );
     return focused.length > 0 ? focused : keywords.slice(0, 6);
   }
 
@@ -164,7 +169,7 @@ function buildHighlight(doc: HeuristicDocSummary, mode: NSFWUserMode): string {
   if (description) {
     const analysis = analyzeTextForNSFW(description);
     const allowDescription =
-      mode === "only-nsfw" ||
+      mode === "nsfw-only" ||
       mode === "unrestricted" ||
       (mode === "moderate" && !analysis.hasExplicit) ||
       (mode === "safe" && !analysis.hasExplicit && !analysis.hasMild);
@@ -266,7 +271,7 @@ function buildSuggestionParagraph(keywords: string[]): string {
 }
 
 function buildMediaParagraph(mediaSummary: string | null, mode: NSFWUserMode): string {
-  if (mode === "only-nsfw") {
+  if (mode === "nsfw-only") {
     return (
       "NSFW Only mode is active. Focus on adult-tagged collections or creators and consider adding specific site names or years."
     );
@@ -312,7 +317,7 @@ export function buildHeuristicAISummary(
     : "No offline AI response was available.";
 
   const noticeTail =
-    mode === "only-nsfw"
+    mode === "nsfw-only"
       ? " Suggestions are generated directly from NSFW-filtered results."
       : " Suggestions are synthesized from the current search results.";
 

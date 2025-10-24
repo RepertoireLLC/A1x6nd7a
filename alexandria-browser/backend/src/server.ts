@@ -23,7 +23,7 @@ import { SAMPLE_ARCHIVE_DOCS, type SampleArchiveDoc } from "./data/sampleArchive
 import { SAMPLE_METADATA } from "./data/sampleMetadata";
 import { SAMPLE_CDX_SNAPSHOTS } from "./data/sampleCdxSnapshots";
 import { DEFAULT_SCRAPE_RESPONSE, SAMPLE_SCRAPE_RESULTS } from "./data/sampleScrapeResults";
-import { annotateRecord } from "./services/nsfwFilter";
+import { annotateRecord, containsNSFW } from "./services/nsfwFilter";
 import { buildHybridSearchExpression, suggestAlternativeQueries } from "./services/queryExpansion";
 import { scoreArchiveRecord, type SearchScoreBreakdown } from "./services/resultScoring";
 import {
@@ -39,12 +39,14 @@ import { getSpellCorrector, type SpellcheckResult } from "./services/spellCorrec
 import { isValidReportReason, sendReportEmail, type ReportSubmission } from "./services/reporting";
 import {
   configureLocalAI,
+  embedSearchText,
   generateAIResponse,
   generateContextualResponse,
   getLastAIOutcome,
   isLocalAIEnabled,
   initializeLocalAI,
   listAvailableLocalAIModels,
+  refineSearchQuery,
   type LocalAIContextRequest,
   type LocalAIConversationTurn,
   type LocalAIModelInventory,
@@ -106,6 +108,151 @@ type SearchPagination = {
   rows: number;
   total: number | null;
 };
+
+const RERANK_EMBED_DOC_LIMIT = 40;
+
+function vectorMagnitude(values: number[]): number {
+  let sum = 0;
+  for (const value of values) {
+    sum += value * value;
+  }
+  return Math.sqrt(sum);
+}
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length === 0 || b.length === 0) {
+    return 0;
+  }
+  const length = Math.min(a.length, b.length);
+  let dot = 0;
+  for (let index = 0; index < length; index += 1) {
+    dot += a[index] * b[index];
+  }
+  const denom = vectorMagnitude(a) * vectorMagnitude(b);
+  if (denom === 0) {
+    return 0;
+  }
+  return dot / denom;
+}
+
+function computeKeywordBoost(tokens: string[], text: string): number {
+  if (tokens.length === 0 || !text) {
+    return 0;
+  }
+  const haystack = text.toLowerCase();
+  let matches = 0;
+  for (const token of tokens) {
+    if (token.length < 3) {
+      continue;
+    }
+    if (haystack.includes(token)) {
+      matches += 1;
+    }
+  }
+  if (matches === 0) {
+    return 0;
+  }
+  return Math.min(0.25, matches / tokens.length);
+}
+
+function computeModeAdjustment(mode: NSFWUserMode, record: Record<string, unknown>): number {
+  const flagged = record.nsfw === true;
+  const severityRaw = record.nsfwLevel ?? record.nsfw_level;
+  const severity = typeof severityRaw === "string" ? severityRaw.toLowerCase() : null;
+
+  switch (mode) {
+    case "safe":
+      return flagged ? -0.8 : 0.15;
+    case "moderate":
+      return severity === "explicit" || severity === "violent" ? -0.45 : 0;
+    case "nsfw-only":
+      return flagged ? 0.4 : -0.6;
+    default:
+      return 0;
+  }
+}
+
+async function rerankDocuments(
+  docs: Array<Record<string, unknown>>,
+  query: string,
+  mode: NSFWUserMode
+): Promise<Array<Record<string, unknown>>> {
+  const trimmedQuery = query.trim();
+  if (!trimmedQuery || docs.length === 0) {
+    return docs;
+  }
+
+  const tokens = trimmedQuery
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+
+  let queryVector: number[] = [];
+  try {
+    queryVector = await embedSearchText(trimmedQuery);
+  } catch (error) {
+    console.warn("Unable to compute query embedding", error);
+    return docs;
+  }
+
+  if (queryVector.length === 0) {
+    return docs;
+  }
+
+  const limitedDocs = docs.slice(0, RERANK_EMBED_DOC_LIMIT);
+  const scored = await Promise.all(
+    limitedDocs.map(async (doc) => {
+      const strings: string[] = [];
+      const title = typeof doc.title === "string" ? doc.title : typeof doc["title"] === "string" ? (doc["title"] as string) : "";
+      if (title) {
+        strings.push(title);
+      }
+      const description = typeof doc.description === "string" ? doc.description : "";
+      if (description) {
+        strings.push(description);
+      }
+      const combined = strings.join(" ").trim();
+
+      let similarity = 0;
+      if (combined) {
+        try {
+          const docVector = await embedSearchText(combined);
+          similarity = cosineSimilarity(queryVector, docVector);
+        } catch (error) {
+          console.warn("Unable to compute document embedding", error);
+        }
+      }
+
+      const metadataScore =
+        typeof doc.score === "number" && Number.isFinite(doc.score)
+          ? (doc.score as number)
+          : 0;
+      const keywordBoost = computeKeywordBoost(tokens, combined || `${title}`);
+      const modeAdjustment = computeModeAdjustment(mode, doc);
+      const total = metadataScore * 0.55 + similarity * 0.35 + keywordBoost + modeAdjustment;
+
+      return {
+        doc,
+        total,
+        similarity,
+        keywordBoost,
+      };
+    })
+  );
+
+  const remaining = docs.slice(RERANK_EMBED_DOC_LIMIT).map((doc) => ({ doc, total: 0, similarity: 0, keywordBoost: 0 }));
+  const combinedScores = scored.concat(remaining);
+  combinedScores.sort((a, b) => b.total - a.total);
+
+  return combinedScores.map((entry) => {
+    const next = { ...entry.doc } as Record<string, unknown>;
+    next.semantic_score = entry.similarity;
+    next.ai_rank_score = entry.total;
+    next.keyword_boost = entry.keywordBoost;
+    return next;
+  });
+}
 
 type ArchiveSearchResponse = Record<string, unknown> & {
   response?: {
@@ -1586,6 +1733,22 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     return;
   }
 
+  let effectiveQuery = query;
+  let aiRefinedQuery: string | null = null;
+
+  if (aiModeEnabled) {
+    try {
+      const refined = await refineSearchQuery(query, nsfwUserMode);
+      if (refined && refined.trim() && refined.trim().toLowerCase() !== query.toLowerCase()) {
+        effectiveQuery = refined.trim();
+        aiRefinedQuery = effectiveQuery;
+      }
+    } catch (error) {
+      console.warn("AI refinement failed, falling back to user query", error);
+      effectiveQuery = query;
+    }
+  }
+
   let data: ArchiveSearchResponse | null = null;
   let usedFallback = false;
   let lastSearchError: unknown = null;
@@ -1610,7 +1773,7 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
   };
 
   try {
-    const attempts = buildArchiveSearchAttempts(query, safePage, safeRows, filterConfig);
+    const attempts = buildArchiveSearchAttempts(effectiveQuery, safePage, safeRows, filterConfig);
     const result = await executeArchiveSearchAttempts(attempts);
     data = result.payload;
     lastAttempt = result.attempt;
@@ -1635,7 +1798,7 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       return;
     }
 
-    data = performLocalArchiveSearch(query, safePage, safeRows, filterConfig, safeOffset);
+    data = performLocalArchiveSearch(effectiveQuery, safePage, safeRows, filterConfig, safeOffset);
     usedFallback = true;
     const fallbackInfo = describeArchiveFallback(lastSearchError);
     data.fallback_reason = fallbackInfo.reason;
@@ -1688,6 +1851,7 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       ];
 
       const withLinks = attachArchiveLinks(record);
+      const flagged = containsNSFW(withLinks);
 
       for (const field of possibleFields) {
         if (typeof field === "string") {
@@ -1705,7 +1869,11 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       if (combinedText) {
         combinedTexts.push(combinedText);
       }
-      return annotateRecord(withLinks);
+      const annotated = annotateRecord(withLinks);
+      if (flagged) {
+        annotated.nsfw = true;
+      }
+      return annotated;
     }
 
     return doc;
@@ -1713,7 +1881,7 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
 
   const scoredDocs = normalizedDocs.map((doc) => {
     if (doc && typeof doc === "object") {
-      const analysis = scoreArchiveRecord(doc, query);
+      const analysis = scoreArchiveRecord(doc, effectiveQuery);
       const enriched: Record<string, unknown> = {
         ...doc,
         score: analysis.breakdown.combinedScore,
@@ -1745,9 +1913,11 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
 
   const nsfwAdjustedDocs = filterByNSFWMode(filteredDocs, nsfwUserMode);
 
-  normalizedDocs = nsfwAdjustedDocs;
+  const rerankedDocs = await rerankDocuments(nsfwAdjustedDocs, effectiveQuery, nsfwUserMode);
 
-  const scoreValues = nsfwAdjustedDocs
+  normalizedDocs = rerankedDocs;
+
+  const scoreValues = rerankedDocs
     .map((doc) => {
       const raw = doc.score;
       if (typeof raw === "number" && Number.isFinite(raw)) {
@@ -1762,7 +1932,9 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   const highestScore = scoreValues.length > 0 ? Math.max(...scoreValues) : 0;
   const alternateSuggestions =
-    filteredDocs.length === 0 || highestScore < 0.35 ? suggestAlternativeQueries(query) : [];
+    filteredDocs.length === 0 || highestScore < 0.35
+      ? suggestAlternativeQueries(effectiveQuery)
+      : [];
 
   const summaryResults: ArchiveSearchResultSummary[] = normalizedDocs.map((doc) => {
     const record = doc && typeof doc === "object" ? (doc as Record<string, unknown>) : {};
@@ -1861,8 +2033,8 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
 
   let spellcheck: SpellcheckResult | null = null;
 
-  if (query.length > 0) {
-    const result = spellCorrector.checkQuery(query);
+  if (effectiveQuery.length > 0) {
+    const result = spellCorrector.checkQuery(effectiveQuery);
     const trimmedCorrected = result.correctedQuery.trim();
     const trimmedOriginal = result.originalQuery.trim();
     if (
@@ -1884,6 +2056,10 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       total: responseTotal
     }
   };
+
+  if (aiRefinedQuery) {
+    payload.ai_refined_query = aiRefinedQuery;
+  }
 
   if (alternateSuggestions.length > 0) {
     payload.alternate_queries = alternateSuggestions;
@@ -1918,7 +2094,7 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       aiOutcome = { status: "disabled", message: aiSummaryError, modelPath: null };
     } else {
       try {
-        const aiResponse = await generateAIResponse(query, { nsfwMode: nsfwUserMode });
+        const aiResponse = await generateAIResponse(effectiveQuery, { nsfwMode: nsfwUserMode });
         aiOutcome = getLastAIOutcome();
         const trimmed = typeof aiResponse === "string" ? aiResponse.trim() : "";
         if (trimmed) {
@@ -1954,7 +2130,7 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
     if (aiOutcome?.status !== "blocked") {
       const reason = aiSummaryError ?? aiOutcome?.message ?? null;
       if (!aiSummary || aiSummaryStatus !== "success") {
-        const heuristic = buildHeuristicAISummary(query, heuristicDocs, nsfwUserMode, reason);
+        const heuristic = buildHeuristicAISummary(effectiveQuery, heuristicDocs, nsfwUserMode, reason);
         if (heuristic) {
           aiSummary = heuristic.summary;
           aiSummaryStatus = "success";

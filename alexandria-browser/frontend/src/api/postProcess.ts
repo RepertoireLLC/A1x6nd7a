@@ -161,11 +161,11 @@ function matchesClientFilters(doc: ArchiveSearchDoc, filters: SearchFilters): bo
   }
 
   const nsfwMode = filters.nsfwMode;
-  if (nsfwMode && nsfwMode !== "off") {
+  if (nsfwMode && nsfwMode !== "unrestricted") {
     const isFlagged = doc.nsfw === true;
     const severity = (doc.nsfwLevel ?? doc.nsfw_level ?? "").toString().toLowerCase();
 
-    if (nsfwMode === "only") {
+    if (nsfwMode === "nsfw-only") {
       return isFlagged;
     }
 
@@ -173,7 +173,13 @@ function matchesClientFilters(doc: ArchiveSearchDoc, filters: SearchFilters): bo
       return false;
     }
 
-    if (nsfwMode === "moderate" && severity === "explicit") {
+    if (nsfwMode === "moderate") {
+      if (!isFlagged) {
+        return true;
+      }
+      if (severity === "mild") {
+        return true;
+      }
       return false;
     }
   }

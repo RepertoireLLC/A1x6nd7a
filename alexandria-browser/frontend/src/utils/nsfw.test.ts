@@ -27,20 +27,20 @@ describe("NSFW filtering helpers", () => {
   it("filters documents according to the selected mode", () => {
     const safeDocs = applyNSFWModeToDocs(SAMPLE_DOCS, "safe");
     const moderateDocs = applyNSFWModeToDocs(SAMPLE_DOCS, "moderate");
-    const onlyDocs = applyNSFWModeToDocs(SAMPLE_DOCS, "only");
-    const offDocs = applyNSFWModeToDocs(SAMPLE_DOCS, "off");
+    const nsfwOnlyDocs = applyNSFWModeToDocs(SAMPLE_DOCS, "nsfw-only");
+    const unrestrictedDocs = applyNSFWModeToDocs(SAMPLE_DOCS, "unrestricted");
 
     expect(safeDocs.map((doc) => doc.identifier)).toEqual(["safe-doc"]);
     expect(moderateDocs.map((doc) => doc.identifier)).toEqual(["safe-doc", "mild-doc"]);
-    expect(onlyDocs.map((doc) => doc.identifier)).toEqual(["mild-doc", "explicit-doc"]);
-    expect(offDocs.map((doc) => doc.identifier)).toEqual(["safe-doc", "mild-doc", "explicit-doc"]);
+    expect(nsfwOnlyDocs.map((doc) => doc.identifier)).toEqual(["mild-doc", "explicit-doc"]);
+    expect(unrestrictedDocs.map((doc) => doc.identifier)).toEqual(["safe-doc", "mild-doc", "explicit-doc"]);
   });
 
   it("reports hidden counts for safe and moderate modes only", () => {
     expect(countHiddenByMode(SAMPLE_DOCS, "safe")).toBe(2);
     expect(countHiddenByMode(SAMPLE_DOCS, "moderate")).toBe(1);
-    expect(countHiddenByMode(SAMPLE_DOCS, "off")).toBe(0);
-    expect(countHiddenByMode(SAMPLE_DOCS, "only")).toBe(0);
+    expect(countHiddenByMode(SAMPLE_DOCS, "unrestricted")).toBe(0);
+    expect(countHiddenByMode(SAMPLE_DOCS, "nsfw-only")).toBe(0);
   });
 
   it("evaluates individual documents against the active mode", () => {
@@ -50,19 +50,19 @@ describe("NSFW filtering helpers", () => {
 
     expect(shouldIncludeDoc(explicitDoc, "safe")).toBe(false);
     expect(shouldIncludeDoc(explicitDoc, "moderate")).toBe(false);
-    expect(shouldIncludeDoc(explicitDoc, "off")).toBe(true);
-    expect(shouldIncludeDoc(explicitDoc, "only")).toBe(true);
+    expect(shouldIncludeDoc(explicitDoc, "unrestricted")).toBe(true);
+    expect(shouldIncludeDoc(explicitDoc, "nsfw-only")).toBe(true);
 
     expect(shouldIncludeDoc(mildDoc, "moderate")).toBe(true);
-    expect(shouldIncludeDoc(mildDoc, "only")).toBe(true);
-    expect(shouldIncludeDoc(safeDoc, "only")).toBe(false);
+    expect(shouldIncludeDoc(mildDoc, "nsfw-only")).toBe(true);
+    expect(shouldIncludeDoc(safeDoc, "nsfw-only")).toBe(false);
   });
 
   it("maps stored NSFW filter modes to user-facing labels", () => {
     expect(getNSFWMode("safe")).toBe("safe");
     expect(getNSFWMode("moderate")).toBe("moderate");
-    expect(getNSFWMode("off")).toBe("unrestricted");
-    expect(getNSFWMode("only")).toBe("only-nsfw");
+    expect(getNSFWMode("unrestricted")).toBe("unrestricted");
+    expect(getNSFWMode("nsfw-only")).toBe("nsfw-only");
   });
 
   it("avoids false positives when annotating safe documents", () => {

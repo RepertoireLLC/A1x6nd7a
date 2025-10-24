@@ -3,11 +3,11 @@
  * These interfaces mirror the payloads returned by the backend API
  * so components can rely on a consistent shape when exchanging data.
  */
-export type NSFWSeverity = "mild" | "explicit";
+export type NSFWSeverity = "mild" | "explicit" | "violent";
 
-export type NSFWFilterMode = "safe" | "moderate" | "off" | "only";
+export type NSFWFilterMode = "safe" | "moderate" | "unrestricted" | "nsfw-only";
 
-export type NSFWUserMode = "safe" | "moderate" | "unrestricted" | "only-nsfw";
+export type NSFWUserMode = "safe" | "moderate" | "unrestricted" | "nsfw-only";
 
 export type SourceTrustLevel = "high" | "medium" | "low";
 
