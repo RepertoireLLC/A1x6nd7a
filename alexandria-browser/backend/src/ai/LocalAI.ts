@@ -25,6 +25,7 @@ export interface LocalAIModelInventory {
   modelDirectory: string;
   modelPaths: string[];
   directoryAccessible: boolean;
+  directoryError?: string | null;
 }
 
 export type LocalAIConversationRole = "user" | "assistant";
@@ -171,6 +172,7 @@ export async function listAvailableLocalAIModels(): Promise<LocalAIModelInventor
     modelDirectory: "virtual-cache",
     modelPaths: [configuredModel, configuredEmbeddingModel],
     directoryAccessible: true,
+    directoryError: null,
   };
 }
 
