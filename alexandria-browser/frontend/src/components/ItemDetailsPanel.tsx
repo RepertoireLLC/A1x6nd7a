@@ -253,7 +253,7 @@ export function ItemDetailsPanel({
           ) : null}
           {aiHelperStatus === "unavailable" ? (
             <p className="ai-item-helper-muted" role="status">
-              {aiHelperError || "Local AI model unavailable. Install a compatible model to enable quick help."}
+              {aiHelperError || "AI assistant unavailable. Install the transformer models locally to enable quick help."}
             </p>
           ) : null}
           {aiHelperStatus === "disabled" ? (

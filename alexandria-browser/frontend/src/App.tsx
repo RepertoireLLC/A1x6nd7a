@@ -1548,7 +1548,7 @@ function App() {
 
     if (data.status === "unavailable") {
       setAiDocHelperStatus("unavailable");
-      setAiDocHelperError(data.error ?? "Local AI model unavailable for document summaries.");
+      setAiDocHelperError(data.error ?? "AI assistant unavailable for document summaries.");
       return;
     }
 

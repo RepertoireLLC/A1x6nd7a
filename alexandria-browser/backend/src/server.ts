@@ -374,20 +374,34 @@ const configuredOutcome = configureAI({
   embeddingModel: runtimeAiConfig.embeddingModel,
 });
 
+function formatAiDetail(message: string | null | undefined): string {
+  const trimmed = typeof message === "string" ? message.trim() : "";
+  return trimmed.length > 0 ? trimmed : "No additional details were provided.";
+}
+
 if (runtimeAiConfig.enabled && runtimeAiConfig.autoInitialize) {
   void initializeAI().then((outcome) => {
     if (outcome.status === "ready") {
-      console.info("Local AI initialized using npm transformer models.");
+      console.info("Transformer AI engine initialized using @xenova/transformers.");
     } else if (outcome.status === "idle") {
-      console.info("Local AI auto-initialization skipped.", outcome.message ?? "");
+      console.info(
+        "Transformer AI auto-initialization skipped.",
+        formatAiDetail(outcome.message)
+      );
     } else {
-      console.warn("Local AI auto-initialization encountered an issue.", outcome.message);
+      console.warn(
+        "Transformer AI auto-initialization encountered an issue.",
+        formatAiDetail(outcome.message)
+      );
     }
   });
 } else if (!runtimeAiConfig.enabled) {
-  console.info("Local AI assistance disabled via server configuration.");
+  console.info("Transformer AI assistance disabled via server configuration.");
 } else if (configuredOutcome.status === "error") {
-  console.warn("Local AI configuration encountered an issue.", configuredOutcome.message);
+  console.warn(
+    "Transformer AI configuration encountered an issue.",
+    formatAiDetail(configuredOutcome.message)
+  );
 }
 
 const spellCorrector = getSpellCorrector();
@@ -2081,7 +2095,7 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
 
     if (!runtimeAiConfig.enabled || !isAIEnabled()) {
       aiSummaryStatus = "unavailable";
-      aiSummaryError = "Local AI assistance is disabled by the server configuration.";
+      aiSummaryError = "AI assistant is disabled by the server configuration.";
       const currentOutcome = getLastAIOutcome();
       if (currentOutcome.status === "idle" && currentOutcome.message) {
         aiOutcome = currentOutcome;
@@ -2100,14 +2114,15 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
           aiSummarySource = "model";
         } else if (aiOutcome.status === "error") {
           aiSummaryStatus = "error";
-          aiSummaryError = aiOutcome.message ?? "Local AI encountered an unexpected error.";
+          aiSummaryError = aiOutcome.message ?? "AI assistant encountered an unexpected error.";
         } else {
           aiSummaryStatus = "unavailable";
-          aiSummaryError = aiOutcome.message ?? "Local AI response is unavailable.";
+          aiSummaryError = aiOutcome.message ?? "AI assistant response is unavailable.";
         }
       } catch (error) {
         aiSummaryStatus = "error";
-        aiSummaryError = error instanceof Error ? error.message : "Local AI failed to generate a response.";
+        aiSummaryError =
+          error instanceof Error ? error.message : "AI assistant failed to generate a response.";
       }
     }
 
@@ -2226,7 +2241,7 @@ async function handleAIQuery({ req, res }: HandlerContext): Promise<void> {
       reply: null,
       error:
         disabledOutcome.message ??
-        "Local AI assistance is disabled by the server configuration.",
+        "AI assistant is disabled by the server configuration.",
       mode,
       outcome: disabledOutcome.status === "idle"
         ? { ...disabledOutcome }
@@ -2258,10 +2273,10 @@ async function handleAIQuery({ req, res }: HandlerContext): Promise<void> {
   if (!reply) {
     if (outcome.status === "error") {
       status = "error";
-      errorMessage = outcome.message ?? "Local AI failed to generate a response.";
+      errorMessage = outcome.message ?? "AI assistant failed to generate a response.";
     } else {
       status = "unavailable";
-      errorMessage = outcome.message ?? "Local AI response is unavailable.";
+      errorMessage = outcome.message ?? "AI assistant response is unavailable.";
     }
   }
 
