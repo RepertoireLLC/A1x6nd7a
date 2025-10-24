@@ -50,6 +50,10 @@ export interface ArchiveSearchDoc {
   publicdate?: string;
   creator?: string | string[];
   collection?: string | string[];
+  subject?: string | string[];
+  subjects?: string | string[];
+  uploader?: string | string[];
+  submitter?: string | string[];
   nsfw?: boolean;
   nsfwLevel?: NSFWSeverity;
   nsfw_level?: NSFWSeverity;

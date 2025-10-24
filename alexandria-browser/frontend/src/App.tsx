@@ -407,31 +407,6 @@ function App() {
   ]);
 
   useEffect(() => {
-    const trimmed = debouncedQuery.trim();
-    if (!autoSearchReadyRef.current || isLoading || isLoadingMore) {
-      return;
-    }
-    if (!trimmed) {
-      lastAutoQueryRef.current = null;
-      return;
-    }
-    if (trimmed === (activeQuery ?? "")) {
-      lastAutoQueryRef.current = trimmed;
-      return;
-    }
-    if (trimmed === lastAutoQueryRef.current) {
-      return;
-    }
-
-    lastAutoQueryRef.current = trimmed;
-    void performSearch(trimmed, 1, {
-      recordHistory: false,
-      preferCache: true,
-      cancelOngoing: true,
-    });
-  }, [debouncedQuery, activeQuery, performSearch, isLoading, isLoadingMore]);
-
-  useEffect(() => {
     saveHistory(history);
   }, [history]);
 
@@ -1356,6 +1331,31 @@ function App() {
       aiAssistantEnabled
     ]
   );
+
+  useEffect(() => {
+    const trimmed = debouncedQuery.trim();
+    if (!autoSearchReadyRef.current || isLoading || isLoadingMore) {
+      return;
+    }
+    if (!trimmed) {
+      lastAutoQueryRef.current = null;
+      return;
+    }
+    if (trimmed === (activeQuery ?? "")) {
+      lastAutoQueryRef.current = trimmed;
+      return;
+    }
+    if (trimmed === lastAutoQueryRef.current) {
+      return;
+    }
+
+    lastAutoQueryRef.current = trimmed;
+    void performSearch(trimmed, 1, {
+      recordHistory: false,
+      preferCache: true,
+      cancelOngoing: true,
+    });
+  }, [debouncedQuery, activeQuery, performSearch, isLoading, isLoadingMore]);
 
   const highestLoadedPage = useMemo(
     () => (loadedPages.length > 0 ? Math.max(...loadedPages) : 0),
