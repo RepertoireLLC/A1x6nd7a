@@ -1150,6 +1150,10 @@ function buildArchiveSearchRequestUrl(
   const filterExpressions = buildFilterExpressions(filters, options.includeFilters);
   const parts = [baseExpression, ...filterExpressions].filter((part) => part && part.length > 0);
 
+  const safeRows = Number.isFinite(rows) && rows > 0 ? rows : 20;
+  const safePage = Number.isFinite(page) && page > 0 ? page : 1;
+  const safeOffset = Math.max(0, (safePage - 1) * safeRows);
+
   const finalQuery =
     parts.length > 1
       ? parts.map((part) => (part.startsWith("(") && part.endsWith(")") ? part : `(${part})`)).join(" AND ")
@@ -1157,8 +1161,10 @@ function buildArchiveSearchRequestUrl(
 
   requestUrl.searchParams.set("q", finalQuery);
   requestUrl.searchParams.set("output", "json");
-  requestUrl.searchParams.set("page", String(page));
-  requestUrl.searchParams.set("rows", String(rows));
+  requestUrl.searchParams.set("page", String(safePage));
+  requestUrl.searchParams.set("rows", String(safeRows));
+  requestUrl.searchParams.set("start", String(safeOffset));
+  requestUrl.searchParams.set("offset", String(safeOffset));
   requestUrl.searchParams.set(
     "fl",
     [
@@ -1187,6 +1193,8 @@ function buildArchiveSearchAttempts(
   filters: ArchiveSearchFiltersInput
 ): ArchiveSearchAttempt[] {
   const trimmedQuery = query.trim();
+  const safeRows = Number.isFinite(rows) && rows > 0 ? rows : 20;
+  const safePage = Number.isFinite(page) && page > 0 ? page : 1;
 
   const createAttempt = (
     description: string,
@@ -1194,7 +1202,7 @@ function buildArchiveSearchAttempts(
     filterValue: ArchiveSearchFiltersInput,
     options: { includeFilters: boolean; includeFuzzy: boolean }
   ): ArchiveSearchAttempt => {
-    const url = buildArchiveSearchRequestUrl(queryValue, page, rows, filterValue, options);
+    const url = buildArchiveSearchRequestUrl(queryValue, safePage, safeRows, filterValue, options);
     const effectiveQuery = url.searchParams.get("q") ?? queryValue;
     return { description, url, query: effectiveQuery };
   };
@@ -1331,7 +1339,8 @@ function performLocalArchiveSearch(
   query: string,
   page: number,
   rows: number,
-  filters: ArchiveSearchFiltersInput
+  filters: ArchiveSearchFiltersInput,
+  offset?: number
 ): ArchiveSearchResponse {
   const tokens = query
     .toLowerCase()
@@ -1421,7 +1430,11 @@ function performLocalArchiveSearch(
 
   const safePage = Number.isFinite(page) && page > 0 ? page : 1;
   const safeRows = Number.isFinite(rows) && rows > 0 ? rows : 20;
-  const startIndex = (safePage - 1) * safeRows;
+  const safeOffset =
+    typeof offset === "number" && Number.isFinite(offset) && offset >= 0
+      ? Math.trunc(offset)
+      : (safePage - 1) * safeRows;
+  const startIndex = safeOffset;
 
   const docs = matches
     .slice(startIndex, startIndex + safeRows)
@@ -1512,10 +1525,18 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
 
   const pageParam = url.searchParams.get("page") ?? "1";
   const rowsParam = url.searchParams.get("rows") ?? "20";
+  const offsetParam = url.searchParams.get("offset") ?? "";
   const page = Number.parseInt(pageParam, 10);
   const rows = Number.parseInt(rowsParam, 10);
-  const safePage = Number.isFinite(page) && page > 0 ? page : 1;
+  const offsetValue = Number.parseInt(offsetParam, 10);
   const safeRows = Number.isFinite(rows) && rows > 0 ? rows : 20;
+  const hasValidOffset = Number.isFinite(offsetValue) && offsetValue >= 0;
+  const safePage = hasValidOffset
+    ? Math.max(1, Math.floor(offsetValue / safeRows) + 1)
+    : Number.isFinite(page) && page > 0
+    ? page
+    : 1;
+  const safeOffset = hasValidOffset ? offsetValue : (safePage - 1) * safeRows;
 
   const mediaTypeParam = url.searchParams.get("mediaType")?.trim().toLowerCase() ?? "";
   const yearFromParam = url.searchParams.get("yearFrom")?.trim() ?? "";
@@ -1614,7 +1635,7 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       return;
     }
 
-    data = performLocalArchiveSearch(query, safePage, safeRows, filterConfig);
+    data = performLocalArchiveSearch(query, safePage, safeRows, filterConfig, safeOffset);
     usedFallback = true;
     const fallbackInfo = describeArchiveFallback(lastSearchError);
     data.fallback_reason = fallbackInfo.reason;
@@ -1627,6 +1648,15 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
           lastSearchError instanceof Error ? lastSearchError.message : lastSearchError ?? "unknown"
       }
     );
+  }
+
+  if (data?.response) {
+    const responsePayload = data.response;
+    const startValue =
+      typeof responsePayload.start === "number" && Number.isFinite(responsePayload.start)
+        ? responsePayload.start
+        : safeOffset;
+    responsePayload.start = startValue;
   }
 
   if (

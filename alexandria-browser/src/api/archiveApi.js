@@ -117,9 +117,14 @@ const API_BASE_URL = resolveApiBaseUrl().replace(/\/$/, '');
 
 function buildSearchUrl(query, page, rows) {
   const url = new URL('/api/searchArchive', `${API_BASE_URL}/`);
+  const safeRows = Number.isFinite(Number(rows)) && Number(rows) > 0 ? Number(rows) : 10;
+  const safePage = Number.isFinite(Number(page)) && Number(page) > 0 ? Number(page) : 1;
+  const safeOffset = Math.max(0, (safePage - 1) * safeRows);
+
   url.searchParams.set('q', query);
-  url.searchParams.set('page', String(page));
-  url.searchParams.set('rows', String(rows));
+  url.searchParams.set('page', String(safePage));
+  url.searchParams.set('rows', String(safeRows));
+  url.searchParams.set('offset', String(safeOffset));
   return url.toString();
 }
 
@@ -525,7 +530,15 @@ export async function searchArchive(query, page = 1, rows = 10) {
     const title = fieldTexts.title || identifier;
     const description = fieldTexts.description;
     const mediatype = pickString(doc.mediatype, fallbackDoc.mediatype);
-
+    const yearValue = pickString(
+      doc.year,
+      fallbackDoc.year,
+      doc.date,
+      fallbackDoc.date,
+      doc.publicdate,
+      fallbackDoc.publicdate
+    );
+    
     const archiveCandidate = pickString(
       doc.archive_url,
       fallbackDoc.archive_url,
@@ -556,6 +569,18 @@ export async function searchArchive(query, page = 1, rows = 10) {
       ? fallbackDoc.nsfw_matches
       : [];
 
+    const thumbnailCandidate = pickString(
+      doc.thumbnail,
+      fallbackDoc.thumbnail,
+      fallbackDoc.image,
+      fallbackDoc.img,
+      fallbackDoc.icon,
+      fallbackDoc.item_tile
+    );
+    const thumbnailUrl =
+      (thumbnailCandidate && thumbnailCandidate.trim()) ||
+      (identifier ? `https://archive.org/services/img/${encodeURIComponent(identifier)}` : '');
+
     const truthRecord = { ...fallbackDoc, ...doc, identifier };
     const { score: truthScore, breakdown } = scoreRecordTruth(truthRecord, truthContext);
     const availability = resolveAvailability(truthRecord);
@@ -569,6 +594,8 @@ export async function searchArchive(query, page = 1, rows = 10) {
       originalUrl: originalUrl || null,
       downloads,
       mediatype: mediatype || 'unknown',
+      year: yearValue || null,
+      thumbnail: thumbnailUrl ? thumbnailUrl : null,
       nsfw: nsfwFlag,
       ...(nsfwLevel ? { nsfwLevel } : {}),
       ...(nsfwMatches.length > 0 ? { nsfwMatches } : {}),
@@ -580,6 +607,7 @@ export async function searchArchive(query, page = 1, rows = 10) {
     };
   });
 
+  // TODO: Future AI-enhanced ranking here.
   results.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 
   const datasetForFuzzy = results.map((doc) => doc.title || doc.identifier);

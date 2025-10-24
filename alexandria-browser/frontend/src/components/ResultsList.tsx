@@ -5,6 +5,7 @@ import { ResultCard } from "./ResultCard";
 import { PaginationControls } from "./PaginationControls";
 import { ImageResultGrid } from "./ImageResultGrid";
 import { LoadingIndicator } from "./LoadingIndicator";
+import { ResultsSkeletonList } from "./ResultsSkeletonList";
 import { StatusBanner } from "./StatusBanner";
 
 interface ResultsListProps {
@@ -68,7 +69,12 @@ export function ResultsList({
   loadMoreRef
 }: ResultsListProps) {
   if (isLoading) {
-    return <LoadingIndicator label="Searching the archives…" />;
+    return (
+      <div className="results-loading-state" aria-busy="true">
+        <LoadingIndicator label="Searching the archives…" />
+        <ResultsSkeletonList count={resultsPerPage} />
+      </div>
+    );
   }
 
   if (error) {
@@ -148,6 +154,9 @@ export function ResultsList({
           })}
         </ol>
       )}
+      {isLoadingMore && viewMode !== "images" ? (
+        <ResultsSkeletonList count={Math.min(resultsPerPage, 4)} variant="inline" />
+      ) : null}
       <PaginationControls
         currentPage={page}
         totalPages={totalPages}
