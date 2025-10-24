@@ -1,4 +1,4 @@
-export interface SampleArchiveDoc {
+export interface SampleArchiveDoc extends Record<string, unknown> {
   identifier: string;
   title: string;
   description?: string;
