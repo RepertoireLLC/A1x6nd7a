@@ -95,7 +95,7 @@ export interface SpellcheckPayload {
   corrections: SpellcheckCorrection[];
 }
 
-export interface ArchiveSearchResponse {
+export interface ArchiveSearchPayload {
   response?: {
     docs?: ArchiveSearchDoc[];
     numFound?: number;
@@ -117,6 +117,22 @@ export interface ArchiveSearchResponse {
   ai_summary_error?: string | null;
   ai_summary_source?: AISummarySource;
   ai_summary_notice?: string | null;
+}
+
+export type SearchModeSetting = "safe" | "moderate" | "no-restriction" | "nsfw-only";
+
+export interface ArchiveSearchResponse {
+  originalQuery: string;
+  finalQuery: string;
+  refinedByAI: boolean;
+  mode: SearchModeSetting;
+  results: ArchiveSearchResultSummary[];
+  error: string | null;
+  archive: ArchiveSearchPayload;
+  refinement?: {
+    source: "transformer" | "legacy" | "original";
+    categories: string[];
+  };
 }
 
 export interface ArchiveSearchResultSummary {

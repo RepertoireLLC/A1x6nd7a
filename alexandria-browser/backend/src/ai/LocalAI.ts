@@ -25,6 +25,7 @@ export interface LocalAIModelInventory {
   modelDirectory: string;
   modelPaths: string[];
   directoryAccessible: boolean;
+  directoryError?: string | null;
 }
 
 export type LocalAIConversationRole = "user" | "assistant";
@@ -76,6 +77,84 @@ function stripPrompt(prompt: string, output: string): string {
   }
   return output.trim();
 }
+
+// Normalize text for safe regex construction when filtering generated output.
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function removePromptArtifacts(
+  text: string,
+  prompt: string,
+  userMessage: string,
+  extraDirectives: string[] = []
+): string {
+  let output = text;
+  const patterns: RegExp[] = [];
+
+  const promptPattern = new RegExp(`^${escapeRegExp(prompt)}\s*`, "i");
+  patterns.push(promptPattern);
+
+  if (userMessage) {
+    patterns.push(new RegExp(`^${escapeRegExp(userMessage)}\s*`, "i"));
+    patterns.push(new RegExp(`^User:\s*${escapeRegExp(userMessage)}\s*`, "i"));
+  }
+
+  for (const directive of extraDirectives) {
+    if (directive.trim()) {
+      patterns.push(new RegExp(`^${escapeRegExp(directive.trim())}\s*`, "i"));
+    }
+  }
+
+  for (const pattern of patterns) {
+    output = output.replace(pattern, "");
+  }
+
+  output = output
+    .replace(/^User:\s*.+$/gim, "")
+    .replace(/^AI:\s*/gim, "")
+    .replace(/\s+AI:\s*$/i, "")
+    .trim();
+
+  return output;
+}
+
+// Collapse obvious repetition that lightweight local models sometimes emit
+// (e.g. repeating the same instruction or sentence across adjacent lines).
+function collapseRepeatedLines(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const cleaned: string[] = [];
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+    if (cleaned.length === 0 || cleaned[cleaned.length - 1] !== line) {
+      cleaned.push(line);
+    }
+  }
+
+  return cleaned.join("\n");
+}
+
+// Ensure the final AI response omits prompt echoes and redundant fragments so
+// the UI does not display repetitive instructions in place of a real answer.
+function finalizeAIOutput(
+  rawOutput: string,
+  prompt: string,
+  userMessage: string,
+  directives: string[]
+): string {
+  const withoutArtifacts = removePromptArtifacts(rawOutput, prompt, userMessage, directives);
+  const collapsed = collapseRepeatedLines(withoutArtifacts);
+  return collapsed.trim();
+}
+
+// Graceful message returned when the local model only echoes the prompt so the
+// assistant still provides a helpful response instead of blank output.
+const AI_FALLBACK_MESSAGE =
+  "I'm still getting warmed up. Please rephrase your request or try again in a moment.";
 
 function summarizeContext(request: LocalAIContextRequest): string {
   const lines: string[] = [];
@@ -171,6 +250,7 @@ export async function listAvailableLocalAIModels(): Promise<LocalAIModelInventor
     modelDirectory: "virtual-cache",
     modelPaths: [configuredModel, configuredEmbeddingModel],
     directoryAccessible: true,
+    directoryError: null,
   };
 }
 
@@ -202,8 +282,10 @@ export async function generateAIResponse(
     const prompt = `${instruction}\n${buildPrompt(nsfwMode, sanitizedMessage)}`;
     const output = await askAI(prompt);
     const reply = stripPrompt(prompt, output);
-    recordOutcome({ status: "success", model: configuredModel });
-    return reply || output;
+    const cleaned = finalizeAIOutput(reply || output, prompt, sanitizedMessage, [instruction]);
+    const finalMessage = cleaned || AI_FALLBACK_MESSAGE;
+    recordOutcome({ status: "success", model: configuredModel, message: cleaned ? undefined : finalMessage });
+    return finalMessage;
   } catch (error) {
     const messageText = error instanceof Error ? error.message : String(error);
     recordOutcome({ status: "error", message: messageText, model: configuredModel });
@@ -247,8 +329,10 @@ export async function generateContextualResponse(request: LocalAIContextRequest)
     }
     const output = await askAI(composedPrompt);
     const reply = stripPrompt(composedPrompt, output);
-    recordOutcome({ status: "success", model: configuredModel });
-    return reply || output;
+    const cleaned = finalizeAIOutput(reply || output, composedPrompt, baseMessage, [modeInstruction, modeLabel]);
+    const finalMessage = cleaned || AI_FALLBACK_MESSAGE;
+    recordOutcome({ status: "success", model: configuredModel, message: cleaned ? undefined : finalMessage });
+    return finalMessage;
   } catch (error) {
     const messageText = error instanceof Error ? error.message : String(error);
     recordOutcome({ status: "error", message: messageText, model: configuredModel });

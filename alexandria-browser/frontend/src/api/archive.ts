@@ -1,4 +1,5 @@
 import type {
+  ArchiveSearchPayload,
   ArchiveSearchResponse,
   LinkStatus,
   ArchiveMetadataResponse,
@@ -6,7 +7,8 @@ import type {
   ScrapeResponse,
   WaybackAvailabilityResponse,
   SavePageResponse,
-  SearchFilters
+  SearchFilters,
+  SearchModeSetting,
 } from "../types";
 import type { ReportSubmissionPayload, ReportResponse } from "../reporting";
 import { performFallbackArchiveSearch } from "../utils/fallbackSearch";
@@ -139,6 +141,20 @@ function resolveApiBaseUrl(): string {
 }
 
 export const API_BASE_URL = resolveApiBaseUrl();
+
+function mapModeToSetting(mode: string | undefined): SearchModeSetting {
+  const normalized = (mode ?? "").trim().toLowerCase();
+  if (normalized === "moderate") {
+    return "moderate";
+  }
+  if (normalized === "nsfw-only") {
+    return "nsfw-only";
+  }
+  if (normalized === "unrestricted" || normalized === "no-restriction" || normalized === "off") {
+    return "no-restriction";
+  }
+  return "safe";
+}
 
 export interface ApiErrorInfo {
   message: string;
@@ -543,7 +559,7 @@ function buildDirectArchiveSearchAttempts(
   });
 }
 
-async function fetchDirectArchiveAttempt(attempt: DirectArchiveSearchAttempt): Promise<ArchiveSearchResponse> {
+async function fetchDirectArchiveAttempt(attempt: DirectArchiveSearchAttempt): Promise<ArchiveSearchPayload> {
   let response: Response;
   try {
     response = await fetch(attempt.url.toString(), {
@@ -587,7 +603,7 @@ async function fetchDirectArchiveAttempt(attempt: DirectArchiveSearchAttempt): P
   }
 
   try {
-    return JSON.parse(trimmedBody) as ArchiveSearchResponse;
+    return JSON.parse(trimmedBody) as ArchiveSearchPayload;
   } catch (error) {
     const preview = trimmedBody.slice(0, HTML_PREVIEW_LIMIT).replace(/\s+/g, " ").trim();
     throw new DirectArchiveSearchError("Failed to parse Internet Archive search response.", {
@@ -602,7 +618,7 @@ async function executeDirectArchiveSearch(
   page: number,
   rows: number,
   filters: SearchFilters
-): Promise<{ payload: ArchiveSearchResponse; attempt: DirectArchiveSearchAttempt }> {
+): Promise<{ payload: ArchiveSearchPayload; attempt: DirectArchiveSearchAttempt }> {
   const safeRows = Number.isFinite(rows) && rows > 0 ? rows : 20;
   const safePage = Number.isFinite(page) && page > 0 ? page : 1;
   const safeOffset = Math.max(0, (safePage - 1) * safeRows);
@@ -616,7 +632,7 @@ async function executeDirectArchiveSearch(
 
     try {
       const payload = await fetchDirectArchiveAttempt(attempt);
-      const augmented: ArchiveSearchResponse = {
+      const augmented: ArchiveSearchPayload = {
         ...payload,
         search_strategy: attempt.description,
         search_strategy_query: attempt.query
@@ -629,7 +645,7 @@ async function executeDirectArchiveSearch(
           ? normalizedResponse.start
           : safeOffset;
 
-      const payloadWithStart: ArchiveSearchResponse = {
+      const payloadWithStart: ArchiveSearchPayload = {
         ...processed,
         response: {
           ...normalizedResponse,
@@ -754,23 +770,27 @@ export async function searchArchive(
 
   if (requestResult.ok) {
     const payload = requestResult.data;
+    const archivePayload = payload.archive;
     if (!archiveApiSuccessLogged) {
       console.info("Archive API fully connected. Live search 100% operational.");
       archiveApiSuccessLogged = true;
     }
-    if (payload.fallback) {
-      if (payload.fallback_message) {
-        console.warn("Archive search fell back to offline dataset:", payload.fallback_message);
+    if (archivePayload?.fallback) {
+      if (archivePayload.fallback_message) {
+        console.warn("Archive search fell back to offline dataset:", archivePayload.fallback_message);
       } else {
         console.warn("Archive search fell back to offline dataset.");
       }
-      if (payload.fallback_reason) {
-        console.warn("Offline fallback reason:", payload.fallback_reason);
+      if (archivePayload.fallback_reason) {
+        console.warn("Offline fallback reason:", archivePayload.fallback_reason);
       }
     }
-    if (payload.search_strategy && payload.search_strategy !== "primary search with fuzzy expansion") {
-      const strategyDetails = payload.search_strategy_query?.trim();
-      console.info("Archive search completed using fallback strategy:", payload.search_strategy);
+    if (
+      archivePayload?.search_strategy &&
+      archivePayload.search_strategy !== "primary search with fuzzy expansion"
+    ) {
+      const strategyDetails = archivePayload.search_strategy_query?.trim();
+      console.info("Archive search completed using fallback strategy:", archivePayload.search_strategy);
       if (strategyDetails) {
         console.info("Retry used simplified query:", strategyDetails);
       }
@@ -798,7 +818,16 @@ export async function searchArchive(
       subject: filters.subject?.trim(),
     };
     const { payload } = await executeDirectArchiveSearch(sanitizedQuery, safePage, safeRows, directFilters);
-    return { ok: true, data: payload, status: 200 };
+    const directResponse: ArchiveSearchResponse = {
+      originalQuery: sanitizedQuery,
+      finalQuery: sanitizedQuery,
+      refinedByAI: false,
+      mode: mapModeToSetting(filters.nsfwMode),
+      results: Array.isArray(payload.results) ? payload.results : [],
+      error: null,
+      archive: payload,
+    };
+    return { ok: true, data: directResponse, status: 200 };
   } catch (directError) {
     lastError = directError;
     console.error("Direct Internet Archive search failed.", directError);
@@ -807,7 +836,16 @@ export async function searchArchive(
   if (OFFLINE_FALLBACK_ENABLED) {
     console.warn("Search request failed, using local fallback dataset.", lastError);
     const fallbackPayload = performFallbackArchiveSearch(sanitizedQuery, safePage, safeRows, filters);
-    return { ok: true, data: fallbackPayload, status: 200 };
+    const fallbackResponse: ArchiveSearchResponse = {
+      originalQuery: sanitizedQuery,
+      finalQuery: sanitizedQuery,
+      refinedByAI: false,
+      mode: mapModeToSetting(filters.nsfwMode),
+      results: Array.isArray(fallbackPayload.results) ? fallbackPayload.results : [],
+      error: null,
+      archive: fallbackPayload,
+    };
+    return { ok: true, data: fallbackResponse, status: 200 };
   }
 
   const friendlyError = createFriendlySearchError(lastError);

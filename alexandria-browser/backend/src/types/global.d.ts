@@ -39,3 +39,11 @@ declare module "node-llama-cpp" {
     dispose(): Promise<void>;
   }
 }
+
+declare module "@xenova/transformers" {
+  export function pipeline(
+    task: string,
+    model?: string,
+    options?: Record<string, unknown>
+  ): Promise<unknown>;
+}
