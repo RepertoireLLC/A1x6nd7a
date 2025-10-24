@@ -61,15 +61,34 @@ async function runSelfCheck() {
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
 
-    if (!aiResponse.ok) {
+    if (aiResponse.status === 410) {
+      let payload = null;
+      try {
+        const parsed = await aiResponse.json();
+        if (parsed && typeof parsed === "object") {
+          payload = parsed;
+        }
+      } catch (error) {
+        console.warn("⚠️ AI endpoint returned 410 without JSON payload", error);
+      }
+
+      const message = payload && typeof payload.error === "string" ? payload.error : "";
+      if (!/search-only mode|interpret searches/i.test(message)) {
+        console.error("❌ AI endpoint returned 410 but did not advertise search-only mode.");
+        return;
+      }
+
+      console.log("✅ Conversational AI endpoints correctly return 410 to indicate search-only mode.");
+    } else if (!aiResponse.ok) {
       console.error(`❌ AI endpoint responded with status ${aiResponse.status}.`);
       return;
-    }
-
-    const aiPayload = await aiResponse.json();
-    if (aiPayload.status === "error") {
-      console.error("❌ AI endpoint reported an internal error.");
-      return;
+    } else {
+      const aiPayload = await aiResponse.json();
+      if (aiPayload.status === "error") {
+        console.error("❌ AI endpoint reported an internal error.");
+        return;
+      }
+      console.log("✅ Conversational AI endpoint responded successfully (legacy behaviour).");
     }
 
     const searchResponse = await fetch(
@@ -122,8 +141,8 @@ async function runSelfCheck() {
     }
 
     success = true;
-    console.log("✅ AI working");
-    console.log("✅ Alexandria AI Mode integrated successfully — no existing functionality was broken.");
+    console.log("✅ AI search interpretation active");
+    console.log("✅ Alexandria AI Search mode integrated successfully — no existing functionality was broken.");
   } catch (error) {
     console.error("❌ error", error instanceof Error ? error.message : error);
   } finally {

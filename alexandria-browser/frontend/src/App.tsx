@@ -16,7 +16,6 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { LiveStatusCard } from "./components/LiveStatusCard";
 import { WaybackAvailabilityCard } from "./components/WaybackAvailabilityCard";
 import { AiAssistantPanel } from "./components/AiAssistantPanel";
-import { AiChatPanel } from "./components/AiChatPanel";
 import {
   searchArchive,
   checkLinkStatus,
@@ -27,7 +26,6 @@ import {
   getWaybackAvailability,
   submitReport
 } from "./api/archive";
-import { fetchAIStatus, submitAIQuery, type AIQueryContext } from "./api/ai";
 import {
   loadBookmarks,
   loadHistory,
@@ -56,10 +54,7 @@ import type {
   WaybackAvailabilityResponse,
   AISummaryStatus,
   AISummarySource,
-  BackendAISummaryStatus,
-  AIAvailabilityStatus,
-  AIChatMessage,
-  AIDocumentHelperStatus
+  BackendAISummaryStatus
 } from "./types";
 import { ItemDetailsPanel } from "./components/ItemDetailsPanel";
 import type { ReportSubmissionPayload } from "./reporting";
@@ -88,16 +83,6 @@ function extractDocSummaryText(description: ArchiveSearchDoc["description"] | un
   }
 
   return null;
-}
-
-function createAiChatMessage(role: AIChatMessage["role"], content: string, error = false): AIChatMessage {
-  return {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-    role,
-    content,
-    createdAt: Date.now(),
-    error,
-  };
 }
 
 const RESULTS_PER_PAGE_OPTIONS = [10, 20, 50];
@@ -303,19 +288,8 @@ function App() {
   const [aiSummaryError, setAiSummaryError] = useState<string | null>(null);
   const [aiSummaryNotice, setAiSummaryNotice] = useState<string | null>(null);
   const [aiSummarySource, setAiSummarySource] = useState<AISummarySource | null>(null);
+  const [aiAppliedFilters, setAiAppliedFilters] = useState<Record<string, string> | null>(null);
   const [aiPanelCollapsed, setAiPanelCollapsed] = useState(false);
-  const [aiAvailability, setAiAvailability] = useState<AIAvailabilityStatus>(() =>
-    settings.aiAssistantEnabled ? "unknown" : "disabled"
-  );
-  const [aiChatMessages, setAiChatMessages] = useState<AIChatMessage[]>([]);
-  const [aiChatSending, setAiChatSending] = useState(false);
-  const [aiChatError, setAiChatError] = useState<string | null>(null);
-  const [aiNavigationLoading, setAiNavigationLoading] = useState(false);
-  const [aiDocHelperStatus, setAiDocHelperStatus] = useState<AIDocumentHelperStatus>(() =>
-    settings.aiAssistantEnabled ? "idle" : "disabled"
-  );
-  const [aiDocHelperMessage, setAiDocHelperMessage] = useState<string | null>(null);
-  const [aiDocHelperError, setAiDocHelperError] = useState<string | null>(null);
   const initialHistory = useRef<SearchHistoryEntry[]>(loadHistory());
   const initialBookmarks = useRef<BookmarkEntry[]>(loadBookmarks());
   const initialBlacklist = useRef<string[]>(loadBlacklist());
@@ -330,9 +304,7 @@ function App() {
     return position >= 0 ? position : 0;
   });
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<"bookmarks" | "history" | "settings" | "assistant">(
-    "bookmarks"
-  );
+  const [sidebarTab, setSidebarTab] = useState<"bookmarks" | "history" | "settings">("bookmarks");
   const [liveStatus, setLiveStatus] = useState<LinkStatus | null>(null);
   const [selectedDoc, setSelectedDoc] = useState<ArchiveSearchDoc | null>(null);
   const [metadataState, setMetadataState] = useState<{
@@ -420,65 +392,6 @@ function App() {
   }, [bookmarks]);
 
   useEffect(() => {
-    if (!aiAssistantEnabled) {
-      return;
-    }
-
-    let cancelled = false;
-
-    const evaluateStatus = async () => {
-      const statusResult = await fetchAIStatus();
-      if (cancelled) {
-        return;
-      }
-
-      if (!statusResult.ok) {
-        setAiAvailability("error");
-        return;
-      }
-
-      const { enabled, outcome, models, directoryAccessible } = statusResult.data;
-
-      if (!enabled || outcome.status === "disabled") {
-        setAiAvailability("disabled");
-        return;
-      }
-
-      if (!directoryAccessible && models.length === 0) {
-        setAiAvailability("unavailable");
-        return;
-      }
-
-      switch (outcome.status) {
-        case "error":
-          setAiAvailability("error");
-          return;
-        case "missing-model":
-          setAiAvailability("unavailable");
-          return;
-        case "blocked":
-          setAiAvailability("unavailable");
-          return;
-        default:
-          break;
-      }
-
-      if (models.length === 0) {
-        setAiAvailability("unavailable");
-        return;
-      }
-
-      setAiAvailability("ready");
-    };
-
-    void evaluateStatus();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [aiAssistantEnabled]);
-
-  useEffect(() => {
     blacklistRef.current = blacklist;
     saveBlacklist(blacklist);
   }, [blacklist]);
@@ -491,12 +404,14 @@ function App() {
       setAiSummaryNotice(null);
       setAiSummarySource(null);
       setAiPanelCollapsed(false);
+      setAiAppliedFilters(null);
     } else if (aiSummaryStatus === "disabled") {
       setAiSummaryStatus("unavailable");
       setAiSummaryNotice(null);
       setAiSummarySource(null);
+      setAiAppliedFilters(null);
     }
-  }, [aiAssistantEnabled, aiSummaryStatus, aiAvailability]);
+  }, [aiAssistantEnabled, aiSummaryStatus]);
 
   useEffect(() => {
     if (blacklist.length === 0) {
@@ -661,37 +576,6 @@ function App() {
       cancelled = true;
     };
   }, [selectedDoc]);
-
-  useEffect(() => {
-    if (!aiAssistantEnabled) {
-      setAiAvailability("disabled");
-      setAiDocHelperStatus("disabled");
-      return;
-    }
-
-    switch (aiSummaryStatus) {
-      case "success":
-        setAiAvailability("ready");
-        break;
-      case "error":
-        setAiAvailability("error");
-        break;
-      case "unavailable":
-        setAiAvailability("unavailable");
-        break;
-      case "disabled":
-        setAiAvailability("disabled");
-        break;
-      case "loading":
-        setAiAvailability("unknown");
-        break;
-      default:
-        if (aiAvailability === "disabled") {
-          setAiAvailability("unknown");
-        }
-        break;
-    }
-  }, [aiAssistantEnabled, aiSummaryStatus]);
 
   const suggestionList = useMemo(() => {
     const historyQueries = history.map((entry) => entry.query);
@@ -858,21 +742,19 @@ function App() {
           setFilterNotice(null);
           setLoadedPages([]);
           setReachedEnd(true);
+          setAiAppliedFilters(null);
           if (aiAssistantEnabled) {
             setAiSummary(null);
             setAiSummaryStatus("error");
             setAiSummaryError(message);
             setAiSummaryNotice(null);
             setAiSummarySource(null);
-            setAiAvailability("error");
-            setAiChatError(message);
           } else {
             setAiSummary(null);
             setAiSummaryStatus("disabled");
             setAiSummaryError(null);
             setAiSummaryNotice(null);
             setAiSummarySource(null);
-            setAiAvailability("disabled");
           }
         } else {
           setLoadMoreError(message);
@@ -915,8 +797,7 @@ function App() {
           setAiSummaryError(null);
           setAiSummaryNotice(null);
           setAiSummarySource(null);
-          setAiAvailability("unknown");
-          setAiChatError(null);
+          setAiAppliedFilters(null);
         }
       } else if (isFirstPage) {
         setAiSummaryStatus("disabled");
@@ -924,11 +805,8 @@ function App() {
         setAiSummaryError(null);
         setAiSummaryNotice(null);
         setAiSummarySource(null);
-        setAiAvailability("disabled");
+        setAiAppliedFilters(null);
       }
-      setAiDocHelperStatus(aiAssistantEnabled ? "idle" : "disabled");
-      setAiDocHelperMessage(null);
-      setAiDocHelperError(null);
 
       const fetchFilters = {
         mediaType,
@@ -990,13 +868,14 @@ function App() {
               .filter((entry, index, array) => entry.length > 0 && array.indexOf(entry) === index)
           : [];
 
-        if (
+        const interpretedQueryDiffers = Boolean(
           aiAssistantEnabled &&
-          payload.refinedByAI &&
-          normalizedOriginalQuery &&
-          normalizedFinalQuery &&
-          normalizedFinalQuery.toLowerCase() !== normalizedOriginalQuery.toLowerCase()
-        ) {
+            normalizedOriginalQuery &&
+            normalizedFinalQuery &&
+            normalizedFinalQuery.toLowerCase() !== normalizedOriginalQuery.toLowerCase(),
+        );
+
+        if (aiAssistantEnabled && payload.refinedByAI && interpretedQueryDiffers) {
           setAiOriginalQuery(normalizedOriginalQuery);
           setAiRefinedQuery(normalizedFinalQuery);
           setAiRefinementTopics(refinedCategories);
@@ -1004,6 +883,19 @@ function App() {
           setAiOriginalQuery(normalizedOriginalQuery || null);
           setAiRefinedQuery(null);
           setAiRefinementTopics([]);
+        }
+
+        let normalizedAppliedFilters: Record<string, string> | null = null;
+        if (aiAssistantEnabled) {
+          const rawAppliedFilters = archivePayload.ai_applied_filters;
+          if (rawAppliedFilters && typeof rawAppliedFilters === "object") {
+            const entries = Object.entries(rawAppliedFilters)
+              .filter(([, value]) => typeof value === "string" && value.trim().length > 0)
+              .map(([key, value]) => [key, (value as string).trim()]);
+            if (entries.length > 0) {
+              normalizedAppliedFilters = Object.fromEntries(entries);
+            }
+          }
         }
 
         const session = searchSessionRef.current;
@@ -1070,8 +962,15 @@ function App() {
           const summarySource: AISummarySource | null =
             rawSource === "model" || rawSource === "heuristic" ? (rawSource as AISummarySource) : null;
 
+          const hasAppliedFilters = Boolean(normalizedAppliedFilters);
+
           if (summaryText) {
             nextStatus = "success";
+          }
+
+          if (hasAppliedFilters || interpretedQueryDiffers) {
+            nextStatus = "success";
+            nextError = null;
           }
 
           setAiSummary(summaryText);
@@ -1079,25 +978,14 @@ function App() {
           setAiSummaryError(nextError);
           setAiSummaryNotice(summaryNotice);
           setAiSummarySource(summarySource);
-          if (nextStatus === "success") {
-            setAiAvailability("ready");
-            setAiChatError(null);
-          } else if (nextStatus === "error") {
-            setAiAvailability("error");
-            setAiChatError(nextError);
-          } else if (nextStatus === "unavailable") {
-            setAiAvailability("unavailable");
-            if (nextError) {
-              setAiChatError(nextError);
-            }
-          }
+          setAiAppliedFilters(normalizedAppliedFilters);
         } else {
           setAiSummary(null);
           setAiSummaryStatus("disabled");
           setAiSummaryError(null);
           setAiSummaryNotice(null);
           setAiSummarySource(null);
-          setAiAvailability("disabled");
+          setAiAppliedFilters(null);
         }
 
         if (archivePayload.fallback) {
@@ -1413,206 +1301,6 @@ function App() {
       (totalResults === null || totalResultsLoaded < totalResults),
     [hasSearched, reachedEnd, totalPages, highestLoadedPage, totalResults, totalResultsLoaded]
   );
-
-  const handleClearAiChat = useCallback(() => {
-    setAiChatMessages([]);
-    setAiChatError(null);
-  }, []);
-
-  const handleSendAiChat = useCallback(
-    async (rawInput: string, mode: "chat" | "navigation" = "chat") => {
-      if (!aiAssistantEnabled) {
-        setAiChatError("Enable AI Mode to use the AI assistant.");
-        return;
-      }
-
-      const trimmed = rawInput.trim();
-      if (!trimmed) {
-        return;
-      }
-
-      const userMessage = createAiChatMessage("user", trimmed);
-      const chatHistory = aiChatMessages
-        .filter((message) => message.role === "assistant" || message.role === "user")
-        .map((message) => ({
-          role: message.role === "assistant" ? "assistant" : "user",
-          content: message.content,
-        }));
-
-      setAiChatMessages((previous) => [...previous, userMessage]);
-      setAiChatSending(true);
-      setAiChatError(null);
-
-      const effectiveQuery = activeQuery || query;
-      const context: AIQueryContext = {};
-      if (effectiveQuery) {
-        context.activeQuery = effectiveQuery;
-      }
-      if (history.length > 0) {
-        context.navigationTrail = history
-          .slice(0, 5)
-          .map((entry) => entry.query)
-          .filter((value) => value.trim().length > 0);
-      }
-      if (selectedDoc) {
-        const docTitle = selectedDoc.title || selectedDoc.identifier;
-        context.documentTitle = docTitle;
-        const docSummary = extractDocSummaryText(selectedDoc.description);
-        if (docSummary) {
-          context.documentSummary = docSummary.slice(0, 400);
-        }
-        const docUrl =
-          selectedDoc.archive_url ?? selectedDoc.links?.archive ?? selectedDoc.original_url ?? undefined;
-        if (docUrl) {
-          context.currentUrl = docUrl;
-        }
-      }
-
-      try {
-        const result = await submitAIQuery({
-          message: trimmed,
-          mode,
-          query: effectiveQuery,
-          context: Object.keys(context).length > 0 ? context : undefined,
-          history: chatHistory,
-          nsfwMode: resolveUserNSFWMode(nsfwMode),
-        });
-
-        if (!result.ok) {
-          const errorMessage = result.error.message?.trim() || "AI assistant request failed.";
-          setAiChatError(errorMessage);
-          setAiAvailability("error");
-          setAiChatMessages((previous) => [...previous, createAiChatMessage("system", errorMessage, true)]);
-          return;
-        }
-
-        const data = result.data;
-        const replyText = data.reply?.trim() ?? "";
-
-        if (replyText) {
-          setAiChatMessages((previous) => [...previous, createAiChatMessage("assistant", replyText)]);
-        }
-
-        if (data.status === "success") {
-          setAiAvailability("ready");
-          setAiChatError(null);
-        } else if (data.status === "unavailable") {
-          setAiAvailability("unavailable");
-          if (data.error) {
-            setAiChatError(data.error);
-            setAiChatMessages((previous) => [...previous, createAiChatMessage("system", data.error, true)]);
-          }
-        } else if (data.status === "disabled") {
-          setAiAvailability("disabled");
-          if (data.error) {
-            setAiChatError(data.error);
-          }
-        } else if (data.status === "error") {
-          const errorMessage = data.error?.trim() || "AI assistant encountered an error.";
-          setAiAvailability("error");
-          setAiChatError(errorMessage);
-          setAiChatMessages((previous) => [...previous, createAiChatMessage("system", errorMessage, true)]);
-        }
-      } finally {
-        setAiChatSending(false);
-      }
-    },
-    [aiAssistantEnabled, aiChatMessages, activeQuery, query, history, selectedDoc, nsfwMode]
-  );
-
-  const handleRequestNavigationTips = useCallback(async () => {
-    if (!aiAssistantEnabled) {
-      setAiChatError("Enable AI Mode to request navigation tips.");
-      return;
-    }
-
-    const baseQuery = activeQuery || query;
-    const navigationPrompt = baseQuery
-      ? `Provide two concise navigation suggestions for continuing research on "${baseQuery}".`
-      : "Provide navigation suggestions for my current research topic.";
-
-    setAiNavigationLoading(true);
-    await handleSendAiChat(navigationPrompt, "navigation");
-    setAiNavigationLoading(false);
-  }, [aiAssistantEnabled, activeQuery, query, handleSendAiChat]);
-
-  useEffect(() => {
-    if (!selectedDoc) {
-      setAiDocHelperMessage(null);
-      setAiDocHelperError(null);
-      setAiDocHelperStatus(aiAssistantEnabled ? "idle" : "disabled");
-      return;
-    }
-
-    setAiDocHelperMessage(null);
-    setAiDocHelperError(null);
-    setAiDocHelperStatus(aiAssistantEnabled ? "idle" : "disabled");
-  }, [selectedDoc, aiAssistantEnabled]);
-
-  const handleAskAiAboutDocument = useCallback(async () => {
-    if (!aiAssistantEnabled || !selectedDoc) {
-      return;
-    }
-
-    setAiDocHelperStatus("loading");
-    setAiDocHelperError(null);
-
-    const effectiveQuery = activeQuery || query;
-    const context: AIQueryContext = {
-      documentTitle: selectedDoc.title || selectedDoc.identifier,
-    };
-    const summaryText = extractDocSummaryText(selectedDoc.description);
-    if (summaryText) {
-      context.documentSummary = summaryText.slice(0, 500);
-    }
-    const docUrl = selectedDoc.archive_url ?? selectedDoc.links?.archive ?? selectedDoc.original_url ?? undefined;
-    if (docUrl) {
-      context.currentUrl = docUrl;
-    }
-    if (effectiveQuery) {
-      context.activeQuery = effectiveQuery;
-    }
-
-    const result = await submitAIQuery({
-      message: "Summarize the selected archive item and explain how it relates to the research topic.",
-      mode: "document",
-      query: effectiveQuery,
-      context,
-      nsfwMode: resolveUserNSFWMode(nsfwMode),
-    });
-
-    if (!result.ok) {
-      const errorMessage = result.error.message?.trim() || "AI helper unavailable for this item.";
-      setAiDocHelperStatus("error");
-      setAiDocHelperError(errorMessage);
-      return;
-    }
-
-    const data = result.data;
-    const replyText = data.reply?.trim() ?? "";
-
-    if (data.status === "success" && replyText) {
-      setAiDocHelperStatus("success");
-      setAiDocHelperMessage(replyText);
-      setAiDocHelperError(null);
-      return;
-    }
-
-    if (data.status === "unavailable") {
-      setAiDocHelperStatus("unavailable");
-      setAiDocHelperError(data.error ?? "Local AI model unavailable for document summaries.");
-      return;
-    }
-
-    if (data.status === "disabled") {
-      setAiDocHelperStatus("disabled");
-      setAiDocHelperError(data.error ?? "AI helper disabled by configuration.");
-      return;
-    }
-
-    setAiDocHelperStatus("error");
-    setAiDocHelperError(data.error ?? "AI helper could not generate a response.");
-  }, [aiAssistantEnabled, selectedDoc, activeQuery, query, nsfwMode]);
 
   useEffect(() => {
     if (bootstrapped.current || !settings.lastQuery) {
@@ -2119,15 +1807,8 @@ function App() {
     setAiSummaryError(null);
     setAiSummaryNotice(null);
     setAiSummarySource(null);
+    setAiAppliedFilters(null);
     setAiPanelCollapsed(false);
-    setAiAvailability(defaults.aiAssistantEnabled ? "unknown" : "disabled");
-    setAiChatMessages([]);
-    setAiChatSending(false);
-    setAiChatError(null);
-    setAiNavigationLoading(false);
-    setAiDocHelperStatus(defaults.aiAssistantEnabled ? "idle" : "disabled");
-    setAiDocHelperMessage(null);
-    setAiDocHelperError(null);
     searchSessionRef.current = null;
   };
 
@@ -2138,29 +1819,20 @@ function App() {
       setAiPanelCollapsed(false);
       setAiSummaryNotice(null);
       setAiSummarySource(null);
-      setAiAvailability("unknown");
-      setAiDocHelperStatus("idle");
-      setSidebarTab("assistant");
       setAiOriginalQuery(null);
       setAiRefinedQuery(null);
       setAiRefinementTopics([]);
+      setAiAppliedFilters(null);
     } else {
       setAiSummary(null);
       setAiSummaryError(null);
       setAiSummaryStatus("disabled");
       setAiSummaryNotice(null);
       setAiSummarySource(null);
-      setAiAvailability("disabled");
-      setAiChatMessages([]);
-      setAiChatSending(false);
-      setAiChatError(null);
-      setAiNavigationLoading(false);
-      setAiDocHelperStatus("disabled");
-      setAiDocHelperMessage(null);
-      setAiDocHelperError(null);
       setAiOriginalQuery(null);
       setAiRefinedQuery(null);
       setAiRefinementTopics([]);
+      setAiAppliedFilters(null);
     }
   };
 
@@ -2276,24 +1948,6 @@ function App() {
       onResetPreferences={resetPreferences}
       aiAssistantEnabled={aiAssistantEnabled}
       onToggleAI={handleToggleAiAssistant}
-    />
-  );
-
-  const assistantPanel = (
-    <AiChatPanel
-      enabled={aiAssistantEnabled}
-      availability={aiAvailability}
-      messages={aiChatMessages}
-      isSending={aiChatSending}
-      onSend={(message) => {
-        void handleSendAiChat(message);
-      }}
-      onClear={handleClearAiChat}
-      onRequestNavigation={() => {
-        void handleRequestNavigationTips();
-      }}
-      navigationLoading={aiNavigationLoading}
-      error={aiChatError}
     />
   );
 
@@ -2465,6 +2119,9 @@ function App() {
         notice={aiSummaryNotice}
         source={aiSummarySource}
         collapsed={aiPanelCollapsed}
+        originalQuery={aiOriginalQuery}
+        refinedQuery={aiRefinedQuery}
+        appliedFilters={aiAppliedFilters}
         onToggleCollapse={() => setAiPanelCollapsed((previous) => !previous)}
       />
 
@@ -2512,17 +2169,15 @@ function App() {
         onClose={() => setSidebarOpen(false)}
         onSelectTab={setSidebarTab}
         bookmarks={bookmarks}
-      history={history}
-      onSelectHistoryItem={(value) => {
-        setSidebarOpen(false);
-        handleSuggestionClick(value);
-      }}
-      onRemoveHistoryItem={handleRemoveHistoryItem}
-      onRemoveBookmark={removeBookmark}
-      settingsPanel={settingsPanel}
-      assistantPanel={assistantPanel}
-      showAssistantTab={aiAssistantEnabled}
-    />
+        history={history}
+        onSelectHistoryItem={(value) => {
+          setSidebarOpen(false);
+          handleSuggestionClick(value);
+        }}
+        onRemoveHistoryItem={handleRemoveHistoryItem}
+        onRemoveBookmark={removeBookmark}
+        settingsPanel={settingsPanel}
+      />
 
       {selectedDoc ? (
         <ItemDetailsPanel
@@ -2537,13 +2192,6 @@ function App() {
           relatedFallback={relatedFallback}
           relatedError={relatedError}
           onClose={closeDetails}
-          aiEnabled={aiAssistantEnabled}
-          aiHelperStatus={aiDocHelperStatus}
-          aiHelperMessage={aiDocHelperMessage}
-          aiHelperError={aiDocHelperError}
-          onRequestAiHelper={() => {
-            void handleAskAiAboutDocument();
-          }}
         />
       ) : null}
     </div>

@@ -3,17 +3,15 @@ import type { BookmarkEntry, SearchHistoryEntry } from "../types";
 
 interface SidebarProps {
   isOpen: boolean;
-  activeTab: "bookmarks" | "history" | "settings" | "assistant";
+  activeTab: "bookmarks" | "history" | "settings";
   onClose: () => void;
-  onSelectTab: (tab: "bookmarks" | "history" | "settings" | "assistant") => void;
+  onSelectTab: (tab: "bookmarks" | "history" | "settings") => void;
   bookmarks: BookmarkEntry[];
   history: SearchHistoryEntry[];
   onSelectHistoryItem: (query: string) => void;
   onRemoveHistoryItem: (query: string) => void;
   onRemoveBookmark: (identifier: string) => void;
   settingsPanel: ReactNode;
-  assistantPanel?: ReactNode;
-  showAssistantTab?: boolean;
 }
 
 /**
@@ -29,9 +27,7 @@ export function Sidebar({
   onSelectHistoryItem,
   onRemoveHistoryItem,
   onRemoveBookmark,
-  settingsPanel,
-  assistantPanel,
-  showAssistantTab = false
+  settingsPanel
 }: SidebarProps) {
   return (
     <aside className={`sidebar${isOpen ? " sidebar-open" : ""}`} aria-hidden={!isOpen}>
@@ -56,15 +52,6 @@ export function Sidebar({
         >
           History
         </button>
-        {showAssistantTab ? (
-          <button
-            type="button"
-            className={activeTab === "assistant" ? "active" : ""}
-            onClick={() => onSelectTab("assistant")}
-          >
-            Assistant
-          </button>
-        ) : null}
         <button
           type="button"
           className={activeTab === "settings" ? "active" : ""}
@@ -129,7 +116,6 @@ export function Sidebar({
             ))}
           </ul>
         ) : null}
-        {activeTab === "assistant" ? assistantPanel : null}
         {activeTab === "settings" ? settingsPanel : null}
       </div>
     </aside>

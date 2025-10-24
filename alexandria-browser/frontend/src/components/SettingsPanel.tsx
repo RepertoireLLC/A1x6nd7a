@@ -51,7 +51,7 @@ export function SettingsPanel({
         </select>
       </label>
       <label className="setting-row">
-        <span>AI Search Assistant</span>
+        <span>AI-assisted search</span>
         <input
           type="checkbox"
           checked={aiAssistantEnabled}
@@ -59,7 +59,7 @@ export function SettingsPanel({
         />
       </label>
       <p className="setting-description">
-        When enabled, Alexandria will use a local model (if installed) to suggest improved queries.
+        When enabled, Alexandria interprets natural-language requests and builds optimized Internet Archive searches.
       </p>
       <button type="button" className="danger" onClick={onClearHistory}>
         Clear history
