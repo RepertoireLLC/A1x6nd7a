@@ -4,15 +4,15 @@ import type { ArchiveSearchDoc, NSFWFilterMode, NSFWUserMode } from "../types";
 import { applyNSFWModeToDocs } from "./nsfw";
 
 interface KeywordConfig {
-  categories?: {
-    explicit?: unknown;
-    mild?: unknown;
-  };
+  explicit?: unknown;
+  adult?: unknown;
+  violent?: unknown;
 }
 
 type KeywordSets = {
   explicit: string[];
-  mild: string[];
+  adult: string[];
+  violent: string[];
 };
 
 function normalizeKeywordList(input: unknown): string[] {
@@ -29,33 +29,29 @@ function normalizeKeywordList(input: unknown): string[] {
 }
 
 function parseKeywordConfig(payload: KeywordConfig): KeywordSets {
-  if (!payload.categories || typeof payload.categories !== "object") {
-    return { explicit: [], mild: [] };
-  }
+  const explicit = normalizeKeywordList(payload.explicit);
+  const adult = normalizeKeywordList(payload.adult).filter((keyword) => !explicit.includes(keyword));
+  const violent = normalizeKeywordList(payload.violent);
 
-  const explicit = normalizeKeywordList((payload.categories as Record<string, unknown>).explicit);
-  const mild = normalizeKeywordList((payload.categories as Record<string, unknown>).mild);
-  const explicitSet = new Set(explicit);
-  const filteredMild = mild.filter((keyword) => !explicitSet.has(keyword));
-
-  return { explicit, mild: filteredMild };
+  return { explicit, adult, violent };
 }
 
 const KEYWORD_SETS = parseKeywordConfig(keywordPayload as KeywordConfig);
 
 export const NSFW_MODE_KEYWORDS: Readonly<KeywordSets> = {
   explicit: KEYWORD_SETS.explicit,
-  mild: KEYWORD_SETS.mild,
+  adult: KEYWORD_SETS.adult,
+  violent: KEYWORD_SETS.violent,
 };
 
 export function getNSFWMode(mode: NSFWFilterMode): NSFWUserMode {
   switch (mode) {
     case "moderate":
       return "moderate";
-    case "off":
+    case "unrestricted":
       return "unrestricted";
-    case "only":
-      return "only-nsfw";
+    case "nsfw-only":
+      return "nsfw-only";
     default:
       return "safe";
   }
@@ -69,10 +65,10 @@ export function mapUserModeToFilterMode(mode: NSFWUserMode): NSFWFilterMode {
   switch (mode) {
     case "moderate":
       return "moderate";
-    case "only-nsfw":
-      return "only";
+    case "nsfw-only":
+      return "nsfw-only";
     case "unrestricted":
-      return "off";
+      return "unrestricted";
     default:
       return "safe";
   }

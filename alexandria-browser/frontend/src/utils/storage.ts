@@ -12,7 +12,7 @@ const BOOKMARKS_KEY = "alexandria-browser-bookmarks";
 const REPORT_BLACKLIST_KEY = "alexandria-browser-report-blacklist";
 
 // ADD: Default preference snapshot used when initializing or resetting stored settings.
-const NSFW_MODE_VALUES: readonly NSFWFilterMode[] = ["safe", "moderate", "off", "only"];
+const NSFW_MODE_VALUES: readonly NSFWFilterMode[] = ["safe", "moderate", "unrestricted", "nsfw-only"];
 
 function normalizeMode(value: unknown, fallback: unknown): NSFWFilterMode {
   if (typeof value === "string") {
@@ -20,15 +20,15 @@ function normalizeMode(value: unknown, fallback: unknown): NSFWFilterMode {
     if (NSFW_MODE_VALUES.includes(lowered as NSFWFilterMode)) {
       return lowered as NSFWFilterMode;
     }
-    if (lowered === "unrestricted" || lowered === "none" || lowered === "no_filter") {
-      return "off";
+    if (lowered === "unrestricted" || lowered === "off" || lowered === "none" || lowered === "no_filter") {
+      return "unrestricted";
     }
-    if (lowered === "only-nsfw" || lowered === "only_nsfw" || lowered === "nsfw") {
-      return "only";
+    if (lowered === "nsfw-only" || lowered === "only-nsfw" || lowered === "only_nsfw" || lowered === "nsfw") {
+      return "nsfw-only";
     }
   }
   if (typeof fallback === "boolean") {
-    return fallback ? "safe" : "off";
+    return fallback ? "safe" : "unrestricted";
   }
   return "safe";
 }
@@ -100,7 +100,7 @@ export function loadSettings(): StoredSettings {
     ...DEFAULT_SETTINGS,
     ...stored,
     nsfwMode: resolvedMode,
-    filterNSFW: resolvedMode !== "off",
+    filterNSFW: resolvedMode !== "unrestricted",
     nsfwAcknowledged,
     aiAssistantEnabled
   };
@@ -115,7 +115,7 @@ export function saveSettings(settings: StoredSettings) {
   writeJSON(SETTINGS_KEY, {
     ...settings,
     nsfwMode,
-    filterNSFW: nsfwMode !== "off",
+    filterNSFW: nsfwMode !== "unrestricted",
     nsfwAcknowledged,
     aiAssistantEnabled: Boolean(settings.aiAssistantEnabled),
     collection: settings.collection ?? "",

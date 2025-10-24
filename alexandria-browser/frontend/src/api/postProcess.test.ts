@@ -77,7 +77,7 @@ describe("postProcessDirectSearchPayload", () => {
       language: "",
       sourceTrust: "any",
       availability: "archived-only",
-      nsfwMode: "off",
+      nsfwMode: "unrestricted",
     };
 
     const result = postProcessDirectSearchPayload(payload, "historic archive", relaxedFilters);

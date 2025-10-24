@@ -1,6 +1,6 @@
 export type LinkStatus = "online" | "archived-only" | "offline";
 
-export type NSFWFilterMode = "safe" | "moderate" | "off" | "only";
+export type NSFWFilterMode = "safe" | "moderate" | "unrestricted" | "nsfw-only";
 
 export type SourceTrustLevel = "high" | "medium" | "low";
 
@@ -79,11 +79,17 @@ export function normalizeNsfwMode(value: string | undefined): NSFWFilterMode | n
   if (normalized === "moderate") {
     return "moderate";
   }
-  if (normalized === "only" || normalized === "only_nsfw" || normalized === "only-nsfw" || normalized === "nsfw") {
-    return "only";
+  if (
+    normalized === "nsfw-only" ||
+    normalized === "only" ||
+    normalized === "only_nsfw" ||
+    normalized === "only-nsfw" ||
+    normalized === "nsfw"
+  ) {
+    return "nsfw-only";
   }
   if (normalized === "unrestricted" || normalized === "off" || normalized === "none" || normalized === "disabled") {
-    return "off";
+    return "unrestricted";
   }
   return null;
 }
@@ -106,7 +112,7 @@ export function extractLanguageList(record: Record<string, unknown>): string[] {
 }
 
 export function matchesNsfwMode(record: Record<string, unknown>, mode: NSFWFilterMode): boolean {
-  if (mode === "off") {
+  if (mode === "unrestricted") {
     return true;
   }
 
@@ -114,7 +120,7 @@ export function matchesNsfwMode(record: Record<string, unknown>, mode: NSFWFilte
   const severityRaw = record.nsfwLevel ?? record.nsfw_level;
   const severity = typeof severityRaw === "string" ? severityRaw.toLowerCase() : null;
 
-  if (mode === "only") {
+  if (mode === "nsfw-only") {
     return isFlagged;
   }
 
@@ -123,7 +129,10 @@ export function matchesNsfwMode(record: Record<string, unknown>, mode: NSFWFilte
   }
 
   if (mode === "moderate") {
-    return severity !== "explicit";
+    if (!isFlagged) {
+      return true;
+    }
+    return severity === "mild";
   }
 
   return true;
