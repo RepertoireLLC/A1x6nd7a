@@ -1,4 +1,4 @@
-import keywordPayload from "../../../src/config/nsfwKeywords.json" assert { type: "json" };
+import keywordPayload from "../../../shared/nsfwKeywords.json" assert { type: "json" };
 
 import type { ArchiveSearchDoc, NSFWFilterMode, NSFWUserMode } from "../types";
 import { applyNSFWModeToDocs } from "./nsfw";

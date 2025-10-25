@@ -1,5 +1,7 @@
 import nodemailer from "nodemailer";
 
+import { getEnv } from "../utils/env";
+
 export const REPORT_REASON_VALUES = [
   "inappropriate-content",
   "copyright-violation",
@@ -33,15 +35,6 @@ export interface ReportDispatchResult {
 }
 
 let cachedTransport: nodemailer.Transporter | null = null;
-
-function getEnv(name: string): string | undefined {
-  const value = process.env[name];
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
 
 function parsePort(value: string | undefined): number | undefined {
   if (!value) {
