@@ -8,6 +8,9 @@ import {
   shouldSuppressAIResponse,
   type NSFWUserMode,
 } from "../utils/nsfwMode";
+import { applyDefaultOnnxLogSettings } from "./onnxLogging";
+
+applyDefaultOnnxLogSettings();
 
 export type LocalAIOutcomeStatus =
   | "idle"
@@ -278,7 +281,11 @@ async function loadModel(): Promise<GPT4AllInstance | null> {
       }
       const modelName = path.basename(modelFile);
       const modelDir = path.dirname(modelFile);
-      const instance = new GPT4AllCtor(modelName, { modelPath: modelDir });
+      const instance = new GPT4AllCtor(modelName, {
+        modelPath: modelDir,
+        verbose: false,
+        allowDownload: false,
+      });
       await instance.init();
       await instance.open();
       cachedModel = instance;
