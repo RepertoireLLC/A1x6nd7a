@@ -59,6 +59,14 @@ export interface LocalAIResponseOptions {
   nsfwMode?: string;
 }
 
+export interface LocalAISearchInsights {
+  summary: string;
+  interpretation: string | null;
+  keywords: string[];
+  refinedQuery: string | null;
+  collectionHint: string | null;
+}
+
 interface GPT4AllInstance {
   init: () => Promise<void>;
   open: () => Promise<void>;
@@ -78,6 +86,23 @@ const DEFAULT_PROMPT_OPTIONS = {
   repeatPenalty: 1.05,
   repeatLastN: 256
 };
+
+const SECTION_SPLIT_PATTERN = /\r?\n\s*\r?\n/;
+const BULLET_PREFIX_PATTERN = /^\s*(?:[-*•\u2022]|\d{1,2}[.)])\s*/;
+const KEYWORD_SPLIT_PATTERN = /[,;•·]+/;
+const DIRECTIVE_PREFIX_PATTERN = /^(?:try|consider|explore|search(?:\s+for)?|look(?:\s+(?:for|into))?|focus(?:\s+on)?|use|add|include|combine|apply|refine|investigate|review|check)\s+/i;
+
+function collapseWhitespace(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function isLikelyRefinedQuery(candidate: string): boolean {
+  const words = candidate.split(/\s+/).filter(Boolean);
+  if (words.length < 2 || words.length > 8) {
+    return false;
+  }
+  return candidate.length <= 120;
+}
 
 const ENV_MODEL_DIR = process.env.ALEXANDRIA_AI_MODEL_DIR?.trim() || "";
 const ENV_MODEL_PATH = process.env.ALEXANDRIA_AI_MODEL_PATH?.trim() || "";
@@ -298,6 +323,165 @@ async function runExclusive<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
+function stripBulletPrefix(line: string): string {
+  return line.replace(BULLET_PREFIX_PATTERN, "").trim();
+}
+
+function normalizeKeywordSegment(segment: string): string {
+  let working = segment.replace(/^[–\-]\s*/, "").trim();
+  working = working.replace(/^(?:and|or)\s+/i, "").trim();
+  working = working.replace(/[.!?]+$/g, "").trim();
+  working = working.replace(/\bfor\s+(?:context|reference|background)\s*$/i, "").trim();
+  return collapseWhitespace(working);
+}
+
+function extractQuotedPhrases(text: string): string[] {
+  const normalizedQuotes = text.replace(/[“”]/g, '"');
+  const matches = normalizedQuotes.matchAll(/"([^"\n]{2,})"/g);
+  const phrases: string[] = [];
+  for (const match of matches) {
+    const content = collapseWhitespace(match[1]);
+    if (content) {
+      phrases.push(content);
+    }
+  }
+  return phrases;
+}
+
+function parseKeywordLine(line: string): { keywords: string[]; refinedQuery: string | null } {
+  const bulletless = stripBulletPrefix(line.replace(/\r/g, " "));
+  if (!bulletless) {
+    return { keywords: [], refinedQuery: null };
+  }
+
+  let working = bulletless.replace(/[“”]/g, '"').trim();
+  const quotedPhrases = extractQuotedPhrases(working);
+  let refinedQuery: string | null = quotedPhrases.length > 0 ? quotedPhrases[0] : null;
+
+  if (quotedPhrases.length > 0) {
+    working = working.replace(/"([^"\n]{2,})"/g, (_match, group: string) => group);
+  }
+
+  const labelMatch = working.match(/^(?:refined(?:\s+search)?|better\s+query|search(?:\s+terms?)?|query(?:\s+idea)?|focus)\s*[:\-]\s*(.+)$/i);
+  if (labelMatch && labelMatch[1]) {
+    const labelContent = collapseWhitespace(labelMatch[1]);
+    if (!refinedQuery && labelContent && isLikelyRefinedQuery(labelContent)) {
+      refinedQuery = labelContent;
+    }
+    working = labelMatch[1];
+  }
+
+  let cleaned = working.trim().replace(/[.!?]+$/g, "").trim();
+
+  let iterations = 0;
+  while (DIRECTIVE_PREFIX_PATTERN.test(cleaned) && iterations < 4) {
+    cleaned = cleaned.replace(DIRECTIVE_PREFIX_PATTERN, "").trim();
+    iterations += 1;
+  }
+
+  cleaned = cleaned.replace(/^(?:the\s+)?phrase\s+/i, "");
+  cleaned = cleaned.replace(/^(?:terms?\s+(?:like|such\s+as)|keywords?\s+(?:like|such\s+as))\s+/i, "");
+  cleaned = cleaned.replace(/\([^)]*\)$/g, "").trim();
+  cleaned = cleaned.replace(/^[–\-]\s*/, "").trim();
+
+  const segments = cleaned
+    .split(KEYWORD_SPLIT_PATTERN)
+    .map((segment) => normalizeKeywordSegment(segment))
+    .filter((segment) => segment.length > 0 && segment.length <= 120);
+
+  return {
+    keywords: [...quotedPhrases, ...segments],
+    refinedQuery,
+  };
+}
+
+function parseKeywordsSection(section: string): { keywords: string[]; refinedQuery: string | null } {
+  if (!section || !section.trim()) {
+    return { keywords: [], refinedQuery: null };
+  }
+
+  const lines = section
+    .replace(/\r/g, "\n")
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  const keywords: string[] = [];
+  const seen = new Set<string>();
+  let refinedQuery: string | null = null;
+
+  for (const line of lines) {
+    const { keywords: lineKeywords, refinedQuery: lineRefined } = parseKeywordLine(line);
+    for (const keyword of lineKeywords) {
+      const normalized = collapseWhitespace(keyword);
+      if (!normalized) {
+        continue;
+      }
+      const lowercase = normalized.toLowerCase();
+      if (seen.has(lowercase)) {
+        continue;
+      }
+      seen.add(lowercase);
+      keywords.push(normalized);
+    }
+    if (!refinedQuery && lineRefined) {
+      const normalizedRefined = collapseWhitespace(lineRefined);
+      if (normalizedRefined && isLikelyRefinedQuery(normalizedRefined)) {
+        refinedQuery = normalizedRefined;
+      }
+    }
+  }
+
+  return { keywords, refinedQuery };
+}
+
+export function parseModelSearchResponse(text: string): LocalAISearchInsights | null {
+  if (!text || !text.trim()) {
+    return null;
+  }
+
+  const normalized = text.replace(/\r\n/g, "\n").trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const sections = normalized
+    .split(SECTION_SPLIT_PATTERN)
+    .map((section) => section.trim())
+    .filter((section) => section.length > 0);
+
+  if (sections.length === 0) {
+    return {
+      summary: normalized,
+      interpretation: null,
+      keywords: [],
+      refinedQuery: null,
+      collectionHint: null,
+    };
+  }
+
+  const interpretationSection = sections[0] ?? "";
+  const interpretation = collapseWhitespace(interpretationSection) || null;
+
+  const keywordSection = sections.length >= 2 ? sections[1] : "";
+  const { keywords, refinedQuery } = parseKeywordsSection(keywordSection);
+
+  let collectionHint: string | null = null;
+  if (sections.length >= 3) {
+    const combined = sections.slice(2).join(" ");
+    const normalizedHint = collapseWhitespace(combined);
+    collectionHint = normalizedHint || null;
+  }
+
+  return {
+    summary: normalized,
+    interpretation,
+    keywords,
+    refinedQuery: refinedQuery ?? null,
+    collectionHint,
+  };
+}
+
 function buildPrompt(query: string, mode: NSFWUserMode): string {
   const trimmed = query.trim();
   const guidance = buildNSFWPromptInstruction(mode);
@@ -381,6 +565,29 @@ export async function generateAIResponse(
     };
     return null;
   }
+}
+
+export async function generateAISearchInsights(
+  query: string,
+  options?: LocalAIResponseOptions
+): Promise<LocalAISearchInsights | null> {
+  const response = await generateAIResponse(query, options);
+  if (!response) {
+    return null;
+  }
+
+  const parsed = parseModelSearchResponse(response);
+  if (parsed) {
+    return parsed;
+  }
+
+  return {
+    summary: response,
+    interpretation: null,
+    keywords: [],
+    refinedQuery: null,
+    collectionHint: null,
+  };
 }
 
 function coerceHistory(history: LocalAIConversationTurn[] | undefined): LocalAIConversationTurn[] {

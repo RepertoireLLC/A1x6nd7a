@@ -38,12 +38,14 @@ import { isValidReportReason, sendReportEmail, type ReportSubmission } from "./s
 import {
   configureLocalAI,
   generateAIResponse,
+  generateAISearchInsights,
   generateContextualResponse,
   getLastAIOutcome,
   initializeLocalAI,
   type LocalAIContextRequest,
   type LocalAIConversationTurn,
   type LocalAIOutcome,
+  type LocalAISearchInsights,
 } from "./ai/LocalAI";
 import { buildHeuristicAISummary, type HeuristicDocSummary } from "./ai/heuristicSummaries";
 import { loadRuntimeConfig } from "./config/runtimeConfig";
@@ -1780,6 +1782,7 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
 
   if (aiModeEnabled) {
     let aiOutcome: LocalAIOutcome | null = null;
+    let modelInsights: LocalAISearchInsights | null = null;
 
     if (!runtimeAiConfig.enabled) {
       aiSummaryStatus = "unavailable";
@@ -1787,11 +1790,12 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       aiOutcome = { status: "disabled", message: aiSummaryError, modelPath: null };
     } else {
       try {
-        const aiResponse = await generateAIResponse(query, { nsfwMode: nsfwUserMode });
+        modelInsights = await generateAISearchInsights(query, { nsfwMode: nsfwUserMode });
         aiOutcome = getLastAIOutcome();
-        const trimmed = typeof aiResponse === "string" ? aiResponse.trim() : "";
-        if (trimmed) {
-          aiSummary = trimmed;
+        const summaryText = modelInsights?.summary ?? null;
+        const trimmedSummary = typeof summaryText === "string" ? summaryText.trim() : "";
+        if (trimmedSummary) {
+          aiSummary = summaryText ?? trimmedSummary;
           aiSummaryStatus = "success";
           aiSummaryError = null;
           aiSummarySource = "model";
@@ -1814,6 +1818,32 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
             aiSummaryError = aiOutcome.message ?? null;
           }
         }
+
+        if (modelInsights) {
+          const interpretationCandidate = modelInsights.interpretation?.trim() ?? "";
+          if (interpretationCandidate) {
+            aiSearchInterpretation = interpretationCandidate;
+          }
+
+          const keywordSuggestions = Array.isArray(modelInsights.keywords)
+            ? modelInsights.keywords.map((keyword) => keyword.trim()).filter((keyword) => keyword.length > 0)
+            : [];
+          if (keywordSuggestions.length > 0) {
+            aiSearchKeywords = keywordSuggestions;
+          }
+
+          const refinedCandidate = modelInsights.refinedQuery?.trim() ?? "";
+          if (refinedCandidate) {
+            const normalizedOriginal = query.trim().toLowerCase();
+            aiSearchRefinedQuery =
+              refinedCandidate.toLowerCase() === normalizedOriginal ? null : refinedCandidate;
+          }
+
+          const collectionCandidate = modelInsights.collectionHint?.trim() ?? "";
+          if (collectionCandidate) {
+            aiSearchCollectionHint = collectionCandidate;
+          }
+        }
       } catch (error) {
         aiSummaryStatus = "error";
         aiSummaryError = error instanceof Error ? error.message : "Local AI failed to generate a response.";
@@ -1824,17 +1854,43 @@ async function handleSearch({ res, url }: HandlerContext): Promise<void> {
       const reason = aiSummaryError ?? aiOutcome?.message ?? null;
       const heuristic = buildHeuristicAISummary(query, heuristicDocs, nsfwUserMode, reason);
       if (heuristic) {
-        aiSearchInterpretation = heuristic.interpretation;
-        aiSearchKeywords = heuristic.keywordSuggestions.slice(0, 6);
-        const refinedCandidate = heuristic.refinedQuery?.trim() ?? "";
-        if (refinedCandidate) {
+        const heuristicInterpretation = heuristic.interpretation?.trim() ?? "";
+        if (!aiSearchInterpretation && heuristicInterpretation) {
+          aiSearchInterpretation = heuristicInterpretation;
+        }
+
+        if (heuristic.keywordSuggestions.length > 0) {
+          const existingKeywords = new Set(
+            aiSearchKeywords.map((keyword) => keyword.trim().toLowerCase()).filter((keyword) => keyword.length > 0)
+          );
+          for (const keyword of heuristic.keywordSuggestions) {
+            const trimmedKeyword = typeof keyword === "string" ? keyword.trim() : "";
+            if (!trimmedKeyword) {
+              continue;
+            }
+            const lowerKeyword = trimmedKeyword.toLowerCase();
+            if (existingKeywords.has(lowerKeyword)) {
+              continue;
+            }
+            aiSearchKeywords.push(trimmedKeyword);
+            existingKeywords.add(lowerKeyword);
+            if (aiSearchKeywords.length >= 6) {
+              break;
+            }
+          }
+        }
+
+        const heuristicRefined = heuristic.refinedQuery?.trim() ?? "";
+        if (!aiSearchRefinedQuery && heuristicRefined) {
           const normalizedOriginal = query.trim().toLowerCase();
           aiSearchRefinedQuery =
-            refinedCandidate.toLowerCase() === normalizedOriginal ? null : refinedCandidate;
-        } else {
-          aiSearchRefinedQuery = null;
+            heuristicRefined.toLowerCase() === normalizedOriginal ? null : heuristicRefined;
         }
-        aiSearchCollectionHint = heuristic.collectionHint;
+
+        const heuristicCollection = heuristic.collectionHint?.trim() ?? "";
+        if (!aiSearchCollectionHint && heuristicCollection) {
+          aiSearchCollectionHint = heuristicCollection;
+        }
 
         if (!aiSummary || aiSummaryStatus !== "success") {
           aiSummary = heuristic.summary;
@@ -1989,7 +2045,8 @@ async function handleAIQuery({ req, res }: HandlerContext): Promise<void> {
 
   let reply: string | null = null;
   if (mode === "search") {
-    reply = await generateAIResponse(sanitizedQuery, { nsfwMode: nsfwUserMode });
+    const insights = await generateAISearchInsights(sanitizedQuery, { nsfwMode: nsfwUserMode });
+    reply = insights?.summary ?? null;
   } else {
     const request: LocalAIContextRequest = {
       mode,
