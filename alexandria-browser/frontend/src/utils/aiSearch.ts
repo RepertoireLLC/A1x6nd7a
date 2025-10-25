@@ -5,6 +5,9 @@ const PLANNER_OVERALL_TIMEOUT_MS = 5000;
 const RUNTIME_WAIT_MS = 2000;
 const RUNTIME_POLL_INTERVAL_MS = 120;
 const PRIMARY_MODELS = ["gpt-5", "gpt-5-mini", "gpt-4o"] as const;
+const DEFAULT_API_ORIGIN = "https://api.puter.com";
+
+let attemptedApiSignIn = false;
 
 function getRuntime(): PuterRuntime | null {
   if (typeof window === "undefined") {
@@ -114,6 +117,66 @@ function coerceResponseText(value: unknown): string | null {
   }
 
   return null;
+}
+
+function hasAuthToken(runtime: PuterRuntime): boolean {
+  return typeof runtime.authToken === "string" && runtime.authToken.trim().length > 0;
+}
+
+function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
+  return typeof value === "object" && value !== null && "then" in (value as Record<string, unknown>);
+}
+
+async function checkSignedIn(runtime: PuterRuntime): Promise<boolean> {
+  if (hasAuthToken(runtime)) {
+    return true;
+  }
+
+  const auth = runtime.auth;
+  if (!auth?.isSignedIn) {
+    return false;
+  }
+
+  try {
+    const result = auth.isSignedIn();
+    if (typeof result === "boolean") {
+      return result;
+    }
+    if (isPromiseLike<boolean>(result)) {
+      return await result;
+    }
+  } catch (error) {
+    console.warn("Unable to determine Puter auth state", error);
+  }
+
+  return false;
+}
+
+async function ensureApiAccess(runtime: PuterRuntime): Promise<PuterRuntime> {
+  if (hasAuthToken(runtime)) {
+    return runtime;
+  }
+
+  const signedIn = await checkSignedIn(runtime);
+  if (signedIn && hasAuthToken(runtime)) {
+    return runtime;
+  }
+
+  if (attemptedApiSignIn) {
+    return runtime;
+  }
+
+  attemptedApiSignIn = true;
+
+  if (runtime.auth?.signIn) {
+    try {
+      await runtime.auth.signIn({ attempt_temp_user_creation: true });
+    } catch (error) {
+      console.warn("Puter sign-in prompt was dismissed or failed", error);
+    }
+  }
+
+  return runtime;
 }
 
 function extractJsonCandidate(payload: string): Record<string, unknown> | null {
@@ -226,24 +289,110 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
 }
 
 async function invokeModel(runtime: PuterRuntime, prompt: string, model: string): Promise<string | null> {
-  if (!runtime.ai || typeof runtime.ai.chat !== "function") {
-    return null;
+  if (runtime.ai && typeof runtime.ai.chat === "function") {
+    try {
+      const response = await withTimeout(
+        runtime.ai.chat(prompt, {
+          model,
+          temperature: 0.2,
+          max_tokens: 220,
+        }),
+        REQUEST_TIMEOUT_MS
+      );
+      const coerced = coerceResponseText(response);
+      if (coerced) {
+        return coerced;
+      }
+    } catch (error) {
+      console.warn(`AI planner chat call failed for model ${model}`, error);
+    }
   }
 
-  try {
-    const response = await withTimeout(
-      runtime.ai.chat(prompt, {
-        model,
-        temperature: 0.2,
-        max_tokens: 220,
-      }),
-      REQUEST_TIMEOUT_MS
-    );
-    return coerceResponseText(response);
-  } catch (error) {
-    console.warn(`AI planner call failed for model ${model}`, error);
-    return null;
+  if (runtime.drivers && typeof runtime.drivers.call === "function") {
+    try {
+      const response = await withTimeout(
+        runtime.drivers.call("puter-chat-completion", "ai-chat", "complete", {
+          messages: [{ content: prompt }],
+          model,
+          temperature: 0.2,
+          max_tokens: 220,
+        }),
+        REQUEST_TIMEOUT_MS
+      );
+      const coerced = coerceResponseText(response);
+      if (coerced) {
+        return coerced;
+      }
+    } catch (error) {
+      console.warn(`AI planner driver call failed for model ${model}`, error);
+    }
   }
+
+  const authToken = runtime.authToken?.trim();
+  const apiOrigin = runtime.APIOrigin?.trim() || DEFAULT_API_ORIGIN;
+  if (authToken) {
+    try {
+      // Fallback to the documented drivers/call API used in HeyPuter/puter.
+      const response = await withTimeout(
+        fetch(`${apiOrigin}/drivers/call`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "text/plain;actually=json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            interface: "puter-chat-completion",
+            service: "ai-chat",
+            method: "complete",
+            args: {
+              messages: [{ content: prompt }],
+              model,
+              temperature: 0.2,
+              max_tokens: 220,
+            },
+          }),
+        }),
+        REQUEST_TIMEOUT_MS
+      );
+
+      if (!response.ok) {
+        console.warn(`AI planner direct API call failed for model ${model}`, {
+          status: response.status,
+          statusText: response.statusText,
+        });
+      } else {
+        const contentType = response.headers.get("content-type") ?? "";
+        if (contentType.includes("application/json")) {
+          const payload = await response.json();
+          const candidate =
+            (payload && typeof payload === "object" && "result" in payload
+              ? (payload as Record<string, unknown>).result
+              : payload) ?? payload;
+          const coerced = coerceResponseText(candidate);
+          if (coerced) {
+            return coerced;
+          }
+          try {
+            return JSON.stringify(candidate);
+          } catch (jsonError) {
+            console.warn("Unable to serialise Puter driver response", jsonError, {
+              candidate,
+            });
+          }
+        } else {
+          const text = await response.text();
+          const extracted = extractJsonCandidate(text);
+          if (extracted) {
+            return JSON.stringify(extracted);
+          }
+        }
+      }
+    } catch (error) {
+      console.warn(`AI planner API fetch failed for model ${model}`, error);
+    }
+  }
+
+  return null;
 }
 
 async function attemptPlan(
@@ -284,7 +433,11 @@ function buildPlannerPrompt(query: string): string {
 
 export function isPuterReady(): boolean {
   const runtime = getRuntime();
-  return Boolean(runtime?.ai && typeof runtime.ai.chat === "function");
+  return Boolean(
+    runtime &&
+      ((runtime.ai && typeof runtime.ai.chat === "function") ||
+        (runtime.drivers && typeof runtime.drivers.call === "function"))
+  );
 }
 
 export async function planArchiveQuery(query: string): Promise<AiSearchPlan | null> {
@@ -295,9 +448,17 @@ export async function planArchiveQuery(query: string): Promise<AiSearchPlan | nu
 
   const immediateRuntime = getRuntime();
   const runtime = immediateRuntime ?? (await waitForRuntime());
-  if (!runtime?.ai || typeof runtime.ai.chat !== "function") {
+  if (!runtime) {
     return null;
   }
+
+  const hasChat = runtime.ai && typeof runtime.ai.chat === "function";
+  const hasDriver = runtime.drivers && typeof runtime.drivers.call === "function";
+  if (!hasChat && !hasDriver) {
+    return null;
+  }
+
+  await ensureApiAccess(runtime);
 
   const prompt = buildPlannerPrompt(trimmed);
   const attempts = PRIMARY_MODELS.map((model) =>

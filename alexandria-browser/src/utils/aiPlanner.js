@@ -3,6 +3,9 @@ const PLANNER_OVERALL_TIMEOUT_MS = 5000;
 const RUNTIME_WAIT_MS = 2000;
 const RUNTIME_POLL_INTERVAL_MS = 120;
 const PRIMARY_MODELS = ['gpt-5', 'gpt-5-mini', 'gpt-4o'];
+const DEFAULT_API_ORIGIN = 'https://api.puter.com';
+
+let attemptedApiSignIn = false;
 
 function getRuntime() {
   if (typeof window === 'undefined') {
@@ -95,6 +98,66 @@ function coerceResponseText(value) {
     }
   }
   return null;
+}
+
+function hasAuthToken(runtime) {
+  return typeof runtime?.authToken === 'string' && runtime.authToken.trim().length > 0;
+}
+
+function isPromiseLike(value) {
+  return value && typeof value === 'object' && typeof value.then === 'function';
+}
+
+async function checkSignedIn(runtime) {
+  if (hasAuthToken(runtime)) {
+    return true;
+  }
+
+  const auth = runtime?.auth;
+  if (!auth || typeof auth.isSignedIn !== 'function') {
+    return false;
+  }
+
+  try {
+    const result = auth.isSignedIn();
+    if (typeof result === 'boolean') {
+      return result;
+    }
+    if (isPromiseLike(result)) {
+      return await result;
+    }
+  } catch (error) {
+    console.warn('Unable to determine Puter auth state', error);
+  }
+
+  return false;
+}
+
+async function ensureApiAccess(runtime) {
+  if (hasAuthToken(runtime)) {
+    return runtime;
+  }
+
+  const signedIn = await checkSignedIn(runtime);
+  if (signedIn && hasAuthToken(runtime)) {
+    return runtime;
+  }
+
+  if (attemptedApiSignIn) {
+    return runtime;
+  }
+
+  attemptedApiSignIn = true;
+
+  if (runtime?.auth && typeof runtime.auth.signIn === 'function') {
+    try {
+      await runtime.auth.signIn({ attempt_temp_user_creation: true });
+    } catch (error) {
+      console.warn('Puter sign-in prompt was dismissed or failed', error);
+    }
+  }
+
+  return runtime;
 }
 
 function extractJsonCandidate(payload) {
@@ -211,23 +274,110 @@ function withTimeout(promise, timeoutMs) {
 }
 
 async function invokeModel(runtime, prompt, model) {
-  if (!runtime.ai || typeof runtime.ai.chat !== 'function') {
-    return null;
+  if (runtime.ai && typeof runtime.ai.chat === 'function') {
+    try {
+      const response = await withTimeout(
+        runtime.ai.chat(prompt, {
+          model,
+          temperature: 0.2,
+          max_tokens: 220,
+        }),
+        REQUEST_TIMEOUT_MS
+      );
+      const coerced = coerceResponseText(response);
+      if (coerced) {
+        return coerced;
+      }
+    } catch (error) {
+      console.warn(`AI planner chat call failed for model ${model}`, error);
+    }
   }
-  try {
-    const response = await withTimeout(
-      runtime.ai.chat(prompt, {
-        model,
-        temperature: 0.2,
-        max_tokens: 220,
-      }),
-      REQUEST_TIMEOUT_MS
-    );
-    return coerceResponseText(response);
-  } catch (error) {
-    console.warn(`AI planner call failed for model ${model}`, error);
-    return null;
+
+  if (runtime.drivers && typeof runtime.drivers.call === 'function') {
+    try {
+      const response = await withTimeout(
+        runtime.drivers.call('puter-chat-completion', 'ai-chat', 'complete', {
+          messages: [{ content: prompt }],
+          model,
+          temperature: 0.2,
+          max_tokens: 220,
+        }),
+        REQUEST_TIMEOUT_MS
+      );
+      const coerced = coerceResponseText(response);
+      if (coerced) {
+        return coerced;
+      }
+    } catch (error) {
+      console.warn(`AI planner driver call failed for model ${model}`, error);
+    }
   }
+
+  const authToken = runtime?.authToken?.trim();
+  const apiOrigin = runtime?.APIOrigin?.trim() || DEFAULT_API_ORIGIN;
+  if (authToken) {
+    try {
+      // Fallback to the documented drivers/call API used in HeyPuter/puter.
+      const response = await withTimeout(
+        fetch(`${apiOrigin}/drivers/call`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'text/plain;actually=json',
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            interface: 'puter-chat-completion',
+            service: 'ai-chat',
+            method: 'complete',
+            args: {
+              messages: [{ content: prompt }],
+              model,
+              temperature: 0.2,
+              max_tokens: 220,
+            },
+          }),
+        }),
+        REQUEST_TIMEOUT_MS
+      );
+
+      if (!response.ok) {
+        console.warn(`AI planner direct API call failed for model ${model}`, {
+          status: response.status,
+          statusText: response.statusText,
+        });
+      } else {
+        const contentType = response.headers.get('content-type') ?? '';
+        if (contentType.includes('application/json')) {
+          const payload = await response.json();
+          const candidate =
+            payload && typeof payload === 'object' && 'result' in payload
+              ? payload.result
+              : payload;
+          const coerced = coerceResponseText(candidate);
+          if (coerced) {
+            return coerced;
+          }
+          try {
+            return JSON.stringify(candidate);
+          } catch (jsonError) {
+            console.warn('Unable to serialise Puter driver response', jsonError, {
+              candidate,
+            });
+          }
+        } else {
+          const text = await response.text();
+          const extracted = extractJsonCandidate(text);
+          if (extracted) {
+            return JSON.stringify(extracted);
+          }
+        }
+      }
+    } catch (error) {
+      console.warn(`AI planner API fetch failed for model ${model}`, error);
+    }
+  }
+
+  return null;
 }
 
 async function attemptPlan(runtime, sourceQuery, prompt, model) {
@@ -246,7 +396,11 @@ async function attemptPlan(runtime, sourceQuery, prompt, model) {
 
 export function isPuterReady() {
   const runtime = getRuntime();
-  return Boolean(runtime && runtime.ai && typeof runtime.ai.chat === 'function');
+  return Boolean(
+    runtime &&
+      ((runtime.ai && typeof runtime.ai.chat === 'function') ||
+        (runtime.drivers && typeof runtime.drivers.call === 'function'))
+  );
 }
 
 export async function planArchiveQuery(query) {
@@ -256,9 +410,17 @@ export async function planArchiveQuery(query) {
   }
 
   const runtime = getRuntime() ?? (await waitForRuntime());
-  if (!runtime || !runtime.ai || typeof runtime.ai.chat !== 'function') {
+  if (!runtime) {
     return null;
   }
+
+  const hasChat = runtime.ai && typeof runtime.ai.chat === 'function';
+  const hasDriver = runtime.drivers && typeof runtime.drivers.call === 'function';
+  if (!hasChat && !hasDriver) {
+    return null;
+  }
+
+  await ensureApiAccess(runtime);
 
   const prompt = buildPlannerPrompt(trimmed);
 
