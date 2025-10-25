@@ -1,5 +1,6 @@
 import { getWaybackAvailability, searchArchive } from "../api/archive";
 import type { ArchiveSearchDoc, NSFWFilterMode, SearchFilters } from "../types";
+import type { StructuredArchivePlan } from "./prompt";
 
 export interface IAItem {
   identifier: string;
@@ -28,52 +29,84 @@ interface IAQuery {
 
 const VALID_MEDIA_TYPES = new Set(["texts", "audio", "movies", "software", "image", "web"]);
 
-function parsePlan(plan?: string): ParsedPlan {
+type PlanInput = string | StructuredArchivePlan | undefined | null;
+
+function parsePlan(plan?: PlanInput): ParsedPlan {
   if (!plan) {
     return { mediatypes: [], include: [], exclude: [] };
   }
 
   const parsed: ParsedPlan = { mediatypes: [], include: [], exclude: [] };
-  const lines = plan
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  if (typeof plan === "string") {
+    const lines = plan
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
 
-  for (const line of lines) {
-    const [rawKey, ...rest] = line.split(":");
-    if (!rawKey || rest.length === 0) {
-      continue;
-    }
-    const key = rawKey.toLowerCase().trim();
-    const value = rest.join(":").trim();
-    if (!value) {
-      continue;
-    }
+    for (const line of lines) {
+      const [rawKey, ...rest] = line.split(":");
+      if (!rawKey || rest.length === 0) {
+        continue;
+      }
+      const key = rawKey.toLowerCase().trim();
+      const value = rest.join(":").trim();
+      if (!value) {
+        continue;
+      }
 
-    if (key === "topic") {
-      parsed.topic = value;
-    } else if (key === "mediatypes") {
-      const parts = value
-        .split(/[,\s]+/)
-        .map((part) => part.trim().toLowerCase())
-        .filter((part) => VALID_MEDIA_TYPES.has(part));
-      parsed.mediatypes.push(...parts);
-    } else if (key === "years") {
-      if (value.toLowerCase() !== "any") {
-        parsed.years = value;
-      }
-    } else if (key === "filters") {
-      const segments = value.split(/[;,]+/).map((segment) => segment.trim());
-      for (const segment of segments) {
-        if (!segment) {
-          continue;
+      if (key === "topic") {
+        parsed.topic = value;
+      } else if (key === "mediatypes") {
+        const parts = value
+          .split(/[,\s]+/)
+          .map((part) => part.trim().toLowerCase())
+          .filter((part) => VALID_MEDIA_TYPES.has(part));
+        parsed.mediatypes.push(...parts);
+      } else if (key === "years") {
+        if (value.toLowerCase() !== "any") {
+          parsed.years = value;
         }
-        if (/^(-|exclude)/i.test(segment)) {
-          parsed.exclude.push(segment.replace(/^(-|exclude[:\s]+)/i, "").trim());
-        } else {
-          parsed.include.push(segment.replace(/^include[:\s]+/i, "").trim());
+      } else if (key === "filters") {
+        const segments = value.split(/[;,]+/).map((segment) => segment.trim());
+        for (const segment of segments) {
+          if (!segment) {
+            continue;
+          }
+          if (/^(-|exclude)/i.test(segment)) {
+            parsed.exclude.push(segment.replace(/^(-|exclude[:\s]+)/i, "").trim());
+          } else {
+            parsed.include.push(segment.replace(/^include[:\s]+/i, "").trim());
+          }
         }
       }
+    }
+  } else {
+    if (plan.topic) {
+      parsed.topic = plan.topic;
+    }
+    if (Array.isArray(plan.mediatypes)) {
+      parsed.mediatypes.push(
+        ...plan.mediatypes
+          .map((value) => value.trim().toLowerCase())
+          .filter((value) => VALID_MEDIA_TYPES.has(value))
+      );
+    }
+    if (plan.years && plan.years.toLowerCase() !== "any") {
+      parsed.years = plan.years;
+    }
+    if (Array.isArray(plan.include)) {
+      parsed.include.push(
+        ...plan.include
+          .map((value) => value.trim())
+          .filter(Boolean)
+      );
+    }
+    if (Array.isArray(plan.exclude)) {
+      parsed.exclude.push(
+        ...plan.exclude
+          .map((value) => value.trim())
+          .filter(Boolean)
+      );
     }
   }
 
@@ -193,7 +226,7 @@ function buildFilterClauses(include: string[], exclude: string[]): string[] {
 export function buildIAQuery(
   userText: string,
   nsfwMode: NSFWFilterMode,
-  aiPlan?: string
+  aiPlan?: PlanInput
 ): IAQuery {
   const plan = parsePlan(aiPlan);
   const combinedMedia = new Set<string>(plan.mediatypes);

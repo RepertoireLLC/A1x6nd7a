@@ -3,7 +3,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { NSFWFilterMode } from "../types";
 import { buildIAQuery, fetchIAResults, type IAItem } from "./archive";
 import { applyNSFWFilter } from "./nsfw";
-import { toAIInstruction } from "./prompt";
+import {
+  ARCHIVE_PLAN_TOOL,
+  coerceStructuredPlan,
+  structuredPlanToText,
+  toAIInstruction,
+  toStructuredPlanPrompt,
+  type StructuredArchivePlan,
+} from "./prompt";
 
 interface ChatMessage {
   id: string;
@@ -75,7 +82,7 @@ export function AIChatWindow({ initialPrompt, nsfwMode }: AIChatWindowProps) {
   const [hasMore, setHasMore] = useState(false);
   const [pending, setPending] = useState(false);
   const [lastQuery, setLastQuery] = useState<string | null>(null);
-  const [lastPlan, setLastPlan] = useState<string | null>(null);
+  const [lastPlan, setLastPlan] = useState<string | StructuredArchivePlan | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const lastInitialPrompt = useRef<string | null>(null);
   const previousNsfwModeRef = useRef<NSFWFilterMode>(nsfwMode);
@@ -101,48 +108,97 @@ export function AIChatWindow({ initialPrompt, nsfwMode }: AIChatWindowProps) {
     );
   }, []);
 
+  interface PlanComputation {
+    summary: string;
+    payload: string | StructuredArchivePlan;
+  }
+
   const generatePlan = useCallback(
     async (
       query: string,
       mode: NSFWFilterMode,
       onStream?: (partial: string, streaming: boolean) => void
-    ) => {
+    ): Promise<PlanComputation> => {
       const globalScope: any = typeof window !== "undefined" ? (window as any) : undefined;
       const puterAI = globalScope?.puter?.ai;
       if (!puterAI?.chat) {
         throw new Error("Puter AI is not available. Ensure the AI service is reachable and try again.");
       }
 
-      try {
-        const stream = await puterAI.chat(toAIInstruction(query, mode), {
-          stream: true,
-          model: "gpt-5-nano",
-          temperature: 0.2
-        });
-        let buffer = "";
-        for await (const part of stream) {
-          if (typeof part?.text === "string") {
-            buffer += part.text;
-            if (onStream) {
-              onStream(buffer, true);
+      let streamedSummary = "";
+      if (onStream) {
+        try {
+          const stream = await puterAI.chat(toAIInstruction(query, mode), {
+            stream: true,
+            model: "gpt-5-nano",
+            temperature: 0.2,
+            max_tokens: 400
+          });
+          for await (const part of stream) {
+            if (typeof part?.text === "string") {
+              streamedSummary += part.text;
+              onStream(streamedSummary.trim() || "Analyzing your request…", true);
             }
           }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(message || "AI planning failed during streaming. Please try again.");
         }
-        const plan = buffer.trim();
-        if (!plan) {
-          throw new Error("AI planning returned an empty response. Please try again.");
+      }
+
+      let structuredPlan: StructuredArchivePlan | null = null;
+      try {
+        const response = await puterAI.chat(toStructuredPlanPrompt(query, mode), {
+          model: "gpt-5-mini",
+          temperature: 0.1,
+          max_tokens: 500,
+          tools: ARCHIVE_PLAN_TOOL
+        });
+        const toolCall = response?.message?.tool_calls?.find(
+          (call: any) => call?.function?.name === "create_archive_plan"
+        );
+        if (!toolCall?.function?.arguments) {
+          throw new Error("AI planning did not provide structured instructions.");
         }
-        return plan;
+        let parsedArguments: unknown = null;
+        try {
+          parsedArguments = JSON.parse(toolCall.function.arguments);
+        } catch (parseError) {
+          const message = parseError instanceof Error ? parseError.message : String(parseError);
+          throw new Error(`AI planning returned invalid JSON: ${message}`);
+        }
+        structuredPlan = coerceStructuredPlan(parsedArguments);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(message || "AI planning failed. Please try again.");
       }
+
+      if (!structuredPlan) {
+        throw new Error("AI planning returned no structured instructions. Please try again.");
+      }
+
+      const structuredSummary = structuredPlanToText(structuredPlan);
+      const finalSummary = (streamedSummary.trim() || structuredSummary).trim();
+      if (!finalSummary) {
+        throw new Error("AI planning returned no usable details. Please try again.");
+      }
+
+      if (onStream) {
+        onStream(finalSummary, false);
+      }
+
+      return { summary: finalSummary, payload: structuredPlan ?? finalSummary };
     },
     []
   );
 
   const runInitialSearch = useCallback(
-    async (query: string, plan: string, mode: NSFWFilterMode, summaryPrefix?: string) => {
+    async (
+      query: string,
+      plan: string | StructuredArchivePlan,
+      mode: NSFWFilterMode,
+      summaryPrefix?: string
+    ) => {
       setLastQuery(query);
       setLastPlan(plan);
       const params = buildIAQuery(query, mode, plan);
@@ -168,7 +224,7 @@ export function AIChatWindow({ initialPrompt, nsfwMode }: AIChatWindowProps) {
       }
       try {
         const plan = await generatePlan(lastQuery, mode);
-        await runInitialSearch(lastQuery, plan, mode, `Updated results for ${readableLabel}.`);
+        await runInitialSearch(lastQuery, plan.payload, mode, `Updated results for ${readableLabel}.`);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         pushMessage({
@@ -213,13 +269,13 @@ export function AIChatWindow({ initialPrompt, nsfwMode }: AIChatWindowProps) {
       pushMessage({ id: planMessageId, role: "assistant", text: "Analyzing your request…", streaming: true });
 
       try {
-        const planText = await generatePlan(trimmed, nsfwMode, (partial, streaming) => {
+        const planResult = await generatePlan(trimmed, nsfwMode, (partial, streaming) => {
           const display = partial.trim() || "Analyzing your request…";
           setMessageText(planMessageId, display, streaming);
         });
-        setMessageText(planMessageId, `Search plan:\n${planText}`, false);
+        setMessageText(planMessageId, `Search plan:\n${planResult.summary}`, false);
 
-        await runInitialSearch(trimmed, planText, nsfwMode);
+        await runInitialSearch(trimmed, planResult.payload, nsfwMode);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setMessageText(planMessageId, `Unable to complete AI planning: ${message}`, false);
