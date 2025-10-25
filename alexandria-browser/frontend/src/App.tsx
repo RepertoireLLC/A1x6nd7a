@@ -37,6 +37,7 @@ import {
 } from "./utils/storage";
 import { isLikelyUrl, isYearValid, normalizeYear } from "./utils/validators";
 import type {
+  AiSearchPlan,
   ArchiveMetadataResponse,
   ArchiveSearchDoc,
   BookmarkEntry,
@@ -59,6 +60,7 @@ import {
   countHiddenByMode,
   shouldIncludeDoc
 } from "./utils/nsfw";
+import { planArchiveQuery } from "./utils/aiSearch";
 
 const RESULTS_PER_PAGE_OPTIONS = [10, 20, 50];
 const MEDIA_TYPE_OPTIONS = [
@@ -155,10 +157,18 @@ function App() {
   const [relatedError, setRelatedError] = useState<string | null>(null);
   const [waybackDetails, setWaybackDetails] = useState<WaybackAvailabilityResponse | null>(null);
   const [waybackError, setWaybackError] = useState<string | null>(null);
+  const [aiPlannerSummary, setAiPlannerSummary] = useState<AiSearchPlan | null>(null);
 
   const resultsContainerRef = useRef<HTMLDivElement | null>(null);
   const bootstrapped = useRef(false);
   const blacklistRef = useRef<string[]>(initialBlacklist.current);
+  const aiPlannerRef = useRef<AiSearchPlan | null>(null);
+  const aiPlannerSourceRef = useRef<string | null>(null);
+  const resetAiPlanner = useCallback(() => {
+    aiPlannerRef.current = null;
+    aiPlannerSourceRef.current = null;
+    setAiPlannerSummary(null);
+  }, []);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -313,10 +323,15 @@ function App() {
   );
 
   const performSearch = useCallback(
-    async (searchQuery: string, pageNumber: number, options?: { recordHistory?: boolean; rowsOverride?: number }) => {
+    async (
+      searchQuery: string,
+      pageNumber: number,
+      options?: { recordHistory?: boolean; rowsOverride?: number; skipAiPlanner?: boolean }
+    ) => {
       const rows = options?.rowsOverride ?? resultsPerPage;
       const safeQuery = searchQuery.trim();
       if (!safeQuery) {
+        resetAiPlanner();
         setError("Please enter a search query.");
         setFallbackNotice(null);
         return;
@@ -334,6 +349,50 @@ function App() {
 
       const normalizedYearFrom = normalizeYear(yearFrom);
       const normalizedYearTo = normalizeYear(yearTo);
+      const shouldUseAiPlanner = !isLikelyUrl(safeQuery) && options?.skipAiPlanner !== true;
+      let planner: AiSearchPlan | null = aiPlannerRef.current;
+      let finalQuery = safeQuery;
+
+      if (shouldUseAiPlanner) {
+        const isNewSource = aiPlannerSourceRef.current !== safeQuery;
+        if (isNewSource) {
+          aiPlannerSourceRef.current = safeQuery;
+          aiPlannerRef.current = null;
+          planner = null;
+          setAiPlannerSummary(null);
+        }
+
+        if (!planner) {
+          try {
+            const planned = await planArchiveQuery(safeQuery);
+            if (planned) {
+              const normalizedPlan =
+                planned.source === safeQuery ? planned : { ...planned, source: safeQuery };
+              planner = normalizedPlan;
+              aiPlannerRef.current = normalizedPlan;
+              aiPlannerSourceRef.current = safeQuery;
+              setAiPlannerSummary(normalizedPlan);
+            } else if (isNewSource) {
+              setAiPlannerSummary(null);
+            }
+          } catch (plannerError) {
+            console.warn("AI query planner failed", plannerError);
+            if (isNewSource) {
+              setAiPlannerSummary(null);
+            }
+          }
+        } else {
+          setAiPlannerSummary(planner);
+        }
+
+        if (planner?.optimizedQuery.trim()) {
+          finalQuery = planner.optimizedQuery.trim();
+        }
+      } else {
+        aiPlannerRef.current = null;
+        aiPlannerSourceRef.current = safeQuery;
+        setAiPlannerSummary(null);
+      }
 
       try {
         if (!isYearValid(yearFrom) || !isYearValid(yearTo)) {
@@ -343,7 +402,7 @@ function App() {
           throw new Error("The start year cannot be later than the end year.");
         }
 
-        const result = await searchArchive(safeQuery, pageNumber, rows, {
+        const result = await searchArchive(finalQuery, pageNumber, rows, {
           mediaType,
           yearFrom: normalizedYearFrom,
           yearTo: normalizedYearTo
@@ -511,7 +570,7 @@ function App() {
         setIsLoading(false);
       }
     },
-    [resultsPerPage, mediaType, yearFrom, yearTo]
+    [resultsPerPage, mediaType, yearFrom, yearTo, resetAiPlanner]
   );
 
   useEffect(() => {
@@ -570,6 +629,7 @@ function App() {
   const handleSubmit = async () => {
     const trimmed = query.trim();
     if (!trimmed) {
+      resetAiPlanner();
       return;
     }
     setQuery(trimmed);
@@ -812,6 +872,7 @@ function App() {
   };
 
   const goHome = () => {
+    resetAiPlanner();
     setQuery("");
     setActiveQuery(null);
     setResults([]);
@@ -855,6 +916,7 @@ function App() {
     setSuggestionCorrections([]);
     setLiveStatus(null);
     setSelectedDoc(null);
+    resetAiPlanner();
     const trimmedQuery = defaults.lastQuery.trim();
     setQuery(trimmedQuery);
     setActiveQuery(null);
@@ -1026,6 +1088,7 @@ function App() {
           onReport={handleReportSubmission}
           suggestionNode={suggestionNode}
           notice={fallbackNotice}
+          aiSummary={aiPlannerSummary}
           viewMode={mediaType === "image" ? "images" : "default"}
           hiddenCount={hiddenResultCount}
         />

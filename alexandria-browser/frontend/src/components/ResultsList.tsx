@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { ArchiveSearchDoc, LinkStatus, NSFWFilterMode } from "../types";
+import type { AiSearchPlan, ArchiveSearchDoc, LinkStatus, NSFWFilterMode } from "../types";
 import type { ReportSubmitHandler } from "../reporting";
 import { ResultCard } from "./ResultCard";
 import { PaginationControls } from "./PaginationControls";
@@ -29,6 +29,7 @@ interface ResultsListProps {
   notice?: string | null;
   viewMode?: "default" | "images";
   hiddenCount?: number;
+  aiSummary?: AiSearchPlan | null;
 }
 
 /**
@@ -55,7 +56,8 @@ export function ResultsList({
   suggestionNode,
   notice,
   viewMode = "default",
-  hiddenCount = 0
+  hiddenCount = 0,
+  aiSummary = null
 }: ResultsListProps) {
   if (isLoading) {
     return <LoadingIndicator label="Searching the archives…" />;
@@ -73,6 +75,34 @@ export function ResultsList({
     return (
       <>
         {suggestionNode}
+        {aiSummary ? (
+          <StatusBanner
+            tone="info"
+            title="AI-optimized search"
+            message={`Refined query: ${aiSummary.optimizedQuery}`}
+          >
+            <div className="ai-plan-details">
+              {aiSummary.keywords.length > 0 ? (
+                <div className="ai-plan-keywords" role="list">
+                  {aiSummary.keywords.map((keyword, index) => (
+                    <span key={`${keyword}-${index}`} className="ai-plan-keyword" role="listitem">
+                      {keyword}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              {aiSummary.rationale ? (
+                <p className="ai-plan-rationale">{aiSummary.rationale}</p>
+              ) : null}
+              <p className="ai-plan-footnote">
+                Model: {aiSummary.model ?? "gpt-5"}
+                {typeof aiSummary.confidence === "number"
+                  ? ` · Confidence ${(aiSummary.confidence * 100).toFixed(0)}%`
+                  : null}
+              </p>
+            </div>
+          </StatusBanner>
+        ) : null}
         <StatusBanner tone="warning" message="No archive results found. Try refining your query." />
       </>
     );
@@ -84,6 +114,34 @@ export function ResultsList({
   return (
     <>
       {suggestionNode}
+      {aiSummary ? (
+        <StatusBanner
+          tone="info"
+          title="AI-optimized search"
+          message={`Refined query: ${aiSummary.optimizedQuery}`}
+        >
+          <div className="ai-plan-details">
+            {aiSummary.keywords.length > 0 ? (
+              <div className="ai-plan-keywords" role="list">
+                {aiSummary.keywords.map((keyword, index) => (
+                  <span key={`${keyword}-${index}`} className="ai-plan-keyword" role="listitem">
+                    {keyword}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            {aiSummary.rationale ? (
+              <p className="ai-plan-rationale">{aiSummary.rationale}</p>
+            ) : null}
+            <p className="ai-plan-footnote">
+              Model: {aiSummary.model ?? "gpt-5"}
+              {typeof aiSummary.confidence === "number"
+                ? ` · Confidence ${(aiSummary.confidence * 100).toFixed(0)}%`
+                : null}
+            </p>
+          </div>
+        </StatusBanner>
+      ) : null}
       {notice ? <StatusBanner tone="warning" message={notice} /> : null}
       <div className="results-summary">
         Showing {startIndex} – {endIndex} of {totalResults ?? "?"} preserved records

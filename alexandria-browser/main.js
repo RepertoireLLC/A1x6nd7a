@@ -5,11 +5,19 @@ import { createPaginationControls } from './src/components/PaginationControls.js
 import { createSettingsModal } from './src/components/SettingsModal.js';
 import { applyNSFWFilter, getKeywords, NSFW_MODES } from './src/utils/nsfwFilter.js';
 import { loadSettings, saveSettings, resetSettings } from './src/utils/settingsStorage.js';
+import { planArchiveQuery } from './src/utils/aiPlanner.js';
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50];
 const NSFW_MODE_VALUES = new Set(Object.values(NSFW_MODES));
 const ADULT_CONFIRM_MESSAGE =
   'Switching to this mode may display adult content. Please confirm you are 18 years or older to continue.';
+
+function looksLikeUrl(value) {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  return /^https?:\/\//i.test(trimmed);
+}
 
 function normalizeModeValue(value) {
   if (typeof value !== 'string') {
@@ -42,7 +50,8 @@ const state = {
   error: null,
   suggestion: null,
   nsfwMode: initialNSFWMode,
-  keywords: []
+  keywords: [],
+  aiPlan: null
 };
 
 const app = document.getElementById('app');
@@ -68,6 +77,11 @@ header.appendChild(searchForm);
 const suggestionContainer = document.createElement('div');
 suggestionContainer.className = 'did-you-mean';
 app.appendChild(suggestionContainer);
+
+const aiPlanBanner = document.createElement('div');
+aiPlanBanner.className = 'ai-plan-banner';
+aiPlanBanner.style.display = 'none';
+app.appendChild(aiPlanBanner);
 
 const loadingIndicator = document.createElement('div');
 loadingIndicator.className = 'loading-indicator';
@@ -129,6 +143,74 @@ function renderSuggestion() {
   suggestionContainer.appendChild(suggestionButton);
 }
 
+function renderAiPlan() {
+  aiPlanBanner.innerHTML = '';
+  const plan = state.aiPlan;
+  if (!plan) {
+    aiPlanBanner.style.display = 'none';
+    return;
+  }
+
+  aiPlanBanner.style.display = 'block';
+
+  const card = document.createElement('div');
+  card.className = 'ai-plan-card';
+
+  const header = document.createElement('div');
+  header.className = 'ai-plan-header';
+  const icon = document.createElement('span');
+  icon.className = 'ai-plan-icon';
+  icon.textContent = '✨';
+  const summary = document.createElement('div');
+  summary.className = 'ai-plan-summary';
+  const title = document.createElement('div');
+  title.className = 'ai-plan-title';
+  title.textContent = 'AI-optimized search';
+  const queryLine = document.createElement('div');
+  queryLine.className = 'ai-plan-query';
+  queryLine.textContent = `Refined query: ${plan.optimizedQuery}`;
+  summary.appendChild(title);
+  summary.appendChild(queryLine);
+  header.appendChild(icon);
+  header.appendChild(summary);
+  card.appendChild(header);
+
+  if (Array.isArray(plan.keywords) && plan.keywords.length > 0) {
+    const keywordsWrap = document.createElement('div');
+    keywordsWrap.className = 'ai-plan-keywords';
+    plan.keywords.forEach((keyword, index) => {
+      const chip = document.createElement('span');
+      chip.className = 'ai-plan-keyword';
+      chip.textContent = keyword;
+      chip.setAttribute('data-index', String(index));
+      keywordsWrap.appendChild(chip);
+    });
+    card.appendChild(keywordsWrap);
+  }
+
+  if (plan.rationale) {
+    const rationale = document.createElement('p');
+    rationale.className = 'ai-plan-rationale';
+    rationale.textContent = plan.rationale;
+    card.appendChild(rationale);
+  }
+
+  const footnote = document.createElement('p');
+  footnote.className = 'ai-plan-footnote';
+  const confidence =
+    typeof plan.confidence === 'number' && Number.isFinite(plan.confidence)
+      ? Math.round(plan.confidence * 100)
+      : null;
+  const footnoteParts = [`Model: ${plan.model || 'gpt-5'}`];
+  if (confidence !== null) {
+    footnoteParts.push(`Confidence ${confidence}%`);
+  }
+  footnote.textContent = footnoteParts.join(' · ');
+  card.appendChild(footnote);
+
+  aiPlanBanner.appendChild(card);
+}
+
 function renderResults() {
   resultsContainer.innerHTML = '';
   messageContainer.innerHTML = '';
@@ -171,11 +253,44 @@ function renderPagination() {
 }
 
 async function runSearch(showLoader = true) {
-  if (!state.query) return;
+  const trimmed = typeof state.query === 'string' ? state.query.trim() : '';
+  if (!trimmed) {
+    state.aiPlan = null;
+    renderAiPlan();
+    return;
+  }
   if (showLoader) setLoading(true);
   state.error = null;
+
+  let finalQuery = trimmed;
+  const shouldUsePlanner = !looksLikeUrl(trimmed);
+
+  if (shouldUsePlanner) {
+    let plan = state.aiPlan;
+    if (!plan || plan.source !== trimmed) {
+      try {
+        plan = await planArchiveQuery(trimmed);
+      } catch (plannerError) {
+        console.warn('AI planner unavailable', plannerError);
+        plan = null;
+      }
+    }
+
+    if (plan && typeof plan.optimizedQuery === 'string' && plan.optimizedQuery.trim()) {
+      const normalizedPlan = plan.source === trimmed ? plan : { ...plan, source: trimmed };
+      state.aiPlan = normalizedPlan;
+      finalQuery = normalizedPlan.optimizedQuery.trim();
+    } else {
+      state.aiPlan = null;
+    }
+  } else {
+    state.aiPlan = null;
+  }
+
+  renderAiPlan();
+
   try {
-    const { results, total, suggestion } = await searchArchive(state.query, state.page, state.pageSize);
+    const { results, total, suggestion } = await searchArchive(finalQuery, state.page, state.pageSize);
     state.total = total;
     state.suggestion = suggestion;
     state.rawResults = results;
@@ -190,6 +305,7 @@ async function runSearch(showLoader = true) {
   } finally {
     if (showLoader) setLoading(false);
     renderSuggestion();
+    renderAiPlan();
     renderResults();
     renderPagination();
   }
@@ -255,6 +371,7 @@ const settingsModal = createSettingsModal({
     );
     state.pageSize = defaults.pageSize;
     state.page = 1;
+    state.aiPlan = null;
     persistSettings();
     settingsModal.setNSFWMode(state.nsfwMode);
     settingsModal.setPageSize(state.pageSize);
@@ -266,9 +383,11 @@ const settingsModal = createSettingsModal({
         ? state.rawResults
         : state.results.map(({ nsfw, nsfwLevel, nsfwMatches, ...rest }) => rest);
       state.results = await applyNSFWFilter(baseResults, state.nsfwMode);
+      renderAiPlan();
       renderResults();
       renderPagination();
     } else {
+      renderAiPlan();
       renderPagination();
     }
   },

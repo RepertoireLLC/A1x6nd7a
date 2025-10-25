@@ -47,6 +47,21 @@ export interface SpellcheckPayload {
   corrections: SpellcheckCorrection[];
 }
 
+export interface AiSearchPlan {
+  /** Original user-entered query that produced this plan. */
+  source: string;
+  /** Optimized query string to send to the Internet Archive search endpoint. */
+  optimizedQuery: string;
+  /** Keywords or phrases the AI recommends emphasizing. */
+  keywords: string[];
+  /** Short natural-language explanation of the chosen terms. */
+  rationale?: string;
+  /** Model identifier returned by Puter.ai if available. */
+  model?: string;
+  /** Confidence score from 0-1 when provided by the model. */
+  confidence?: number;
+}
+
 export interface ArchiveSearchResponse {
   response?: {
     docs?: ArchiveSearchDoc[];

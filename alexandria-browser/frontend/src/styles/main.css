@@ -436,6 +436,43 @@ html[data-theme="light"] datalist option {
   font-size: 0.95rem;
 }
 
+.ai-plan-details {
+  margin-top: 0.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  color: var(--harmonia-text-muted);
+  font-size: 0.88rem;
+}
+
+.ai-plan-keywords {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.ai-plan-keyword {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--harmonia-radius-pill);
+  background: color-mix(in srgb, var(--harmonia-accent) 18%, transparent);
+  border: var(--harmonia-border-weight) solid color-mix(in srgb, var(--harmonia-accent) 32%, transparent);
+  font-size: 0.78rem;
+  letter-spacing: 0.03em;
+}
+
+.ai-plan-rationale {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.ai-plan-footnote {
+  margin: 0;
+  font-size: 0.75rem;
+  color: color-mix(in srgb, var(--harmonia-text-muted) 92%, transparent);
+}
+
 .search-button-loading {
   display: inline-flex;
   align-items: center;

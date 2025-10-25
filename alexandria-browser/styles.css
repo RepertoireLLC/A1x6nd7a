@@ -446,6 +446,80 @@ header h1 {
   cursor: pointer;
 }
 
+.ai-plan-banner {
+  display: none;
+}
+
+.ai-plan-card {
+  margin: 0.75rem 0 0;
+  background: linear-gradient(135deg, rgba(30, 64, 175, 0.4), rgba(2, 132, 199, 0.2));
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  border-radius: 24px;
+  padding: 1.25rem 1.4rem;
+  box-shadow: 0 18px 44px rgba(8, 47, 73, 0.45);
+  backdrop-filter: blur(8px);
+}
+
+.ai-plan-header {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin-bottom: 0.55rem;
+}
+
+.ai-plan-icon {
+  font-size: 1.4rem;
+}
+
+.ai-plan-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.ai-plan-title {
+  font-size: 0.9rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(190, 242, 100, 0.9);
+}
+
+.ai-plan-query {
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+}
+
+.ai-plan-keywords {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0.35rem 0 0.6rem;
+}
+
+.ai-plan-keyword {
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.28);
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  font-size: 0.8rem;
+  letter-spacing: 0.03em;
+  color: var(--text-color);
+}
+
+.ai-plan-rationale {
+  margin: 0 0 0.5rem;
+  color: rgba(148, 163, 184, 0.92);
+  line-height: 1.6;
+}
+
+.ai-plan-footnote {
+  margin: 0;
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.75);
+}
+
 @media (max-width: 600px) {
   body {
     padding: 1.5rem 1rem 3rem;
