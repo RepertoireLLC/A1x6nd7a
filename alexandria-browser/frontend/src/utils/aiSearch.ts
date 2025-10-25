@@ -1,6 +1,7 @@
 import type { AiSearchPlan } from "../types";
 
-const REQUEST_TIMEOUT_MS = 5000;
+const REQUEST_TIMEOUT_MS = 4500;
+const PLANNER_OVERALL_TIMEOUT_MS = 5000;
 const RUNTIME_WAIT_MS = 2000;
 const RUNTIME_POLL_INTERVAL_MS = 120;
 const PRIMARY_MODELS = ["gpt-5", "gpt-5-mini", "gpt-4o"] as const;
@@ -245,6 +246,25 @@ async function invokeModel(runtime: PuterRuntime, prompt: string, model: string)
   }
 }
 
+async function attemptPlan(
+  runtime: PuterRuntime,
+  sourceQuery: string,
+  prompt: string,
+  model: string
+): Promise<AiSearchPlan | null> {
+  const text = await invokeModel(runtime, prompt, model);
+  if (!text) {
+    return null;
+  }
+
+  const jsonPayload = extractJsonCandidate(text);
+  if (!jsonPayload) {
+    return null;
+  }
+
+  return buildPlanFromPayload(sourceQuery, model, jsonPayload);
+}
+
 function buildPlannerPrompt(query: string): string {
   return [
     "You are the Alexandria Browser query planner.",
@@ -280,21 +300,50 @@ export async function planArchiveQuery(query: string): Promise<AiSearchPlan | nu
   }
 
   const prompt = buildPlannerPrompt(trimmed);
+  const attempts = PRIMARY_MODELS.map((model) =>
+    attemptPlan(runtime, trimmed, prompt, model).catch((error) => {
+      console.warn(`AI planner attempt failed for model ${model}`, error);
+      return null;
+    })
+  );
 
-  for (const model of PRIMARY_MODELS) {
-    const text = await invokeModel(runtime, prompt, model);
-    if (!text) {
-      continue;
+  const aggregatedPromise = new Promise<AiSearchPlan | null>((resolve) => {
+    if (attempts.length === 0) {
+      resolve(null);
+      return;
     }
-    const jsonPayload = extractJsonCandidate(text);
-    if (!jsonPayload) {
-      continue;
-    }
-    const plan = buildPlanFromPayload(trimmed, model, jsonPayload);
-    if (plan) {
-      return plan;
-    }
+
+    let settled = false;
+    let remaining = attempts.length;
+
+    attempts.forEach((attempt) => {
+      attempt
+        .then((plan) => {
+          if (settled) {
+            return;
+          }
+
+          if (plan) {
+            settled = true;
+            resolve(plan);
+            return;
+          }
+        })
+        .finally(() => {
+          remaining -= 1;
+
+          if (!settled && remaining === 0) {
+            settled = true;
+            resolve(null);
+          }
+        });
+    });
+  });
+
+  try {
+    return await withTimeout(aggregatedPromise, PLANNER_OVERALL_TIMEOUT_MS);
+  } catch (error) {
+    console.warn("AI planner overall timeout", error);
+    return null;
   }
-
-  return null;
 }

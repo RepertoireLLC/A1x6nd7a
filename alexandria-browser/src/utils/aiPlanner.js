@@ -1,4 +1,5 @@
-const REQUEST_TIMEOUT_MS = 5000;
+const REQUEST_TIMEOUT_MS = 4500;
+const PLANNER_OVERALL_TIMEOUT_MS = 5000;
 const RUNTIME_WAIT_MS = 2000;
 const RUNTIME_POLL_INTERVAL_MS = 120;
 const PRIMARY_MODELS = ['gpt-5', 'gpt-5-mini', 'gpt-4o'];
@@ -229,6 +230,20 @@ async function invokeModel(runtime, prompt, model) {
   }
 }
 
+async function attemptPlan(runtime, sourceQuery, prompt, model) {
+  const text = await invokeModel(runtime, prompt, model);
+  if (!text) {
+    return null;
+  }
+
+  const payload = extractJsonCandidate(text);
+  if (!payload) {
+    return null;
+  }
+
+  return buildPlanFromPayload(sourceQuery, model, payload);
+}
+
 export function isPuterReady() {
   const runtime = getRuntime();
   return Boolean(runtime && runtime.ai && typeof runtime.ai.chat === 'function');
@@ -247,20 +262,50 @@ export async function planArchiveQuery(query) {
 
   const prompt = buildPlannerPrompt(trimmed);
 
-  for (const model of PRIMARY_MODELS) {
-    const text = await invokeModel(runtime, prompt, model);
-    if (!text) {
-      continue;
-    }
-    const payload = extractJsonCandidate(text);
-    if (!payload) {
-      continue;
-    }
-    const plan = buildPlanFromPayload(trimmed, model, payload);
-    if (plan) {
-      return plan;
-    }
-  }
+  const attempts = PRIMARY_MODELS.map((model) =>
+    attemptPlan(runtime, trimmed, prompt, model).catch((error) => {
+      console.warn(`AI planner attempt failed for model ${model}`, error);
+      return null;
+    })
+  );
 
-  return null;
+  const aggregatedPromise = new Promise((resolve) => {
+    if (!attempts.length) {
+      resolve(null);
+      return;
+    }
+
+    let settled = false;
+    let remaining = attempts.length;
+
+    attempts.forEach((attempt) => {
+      attempt
+        .then((plan) => {
+          if (settled) {
+            return;
+          }
+
+          if (plan) {
+            settled = true;
+            resolve(plan);
+            return;
+          }
+        })
+        .finally(() => {
+          remaining -= 1;
+
+          if (!settled && remaining === 0) {
+            settled = true;
+            resolve(null);
+          }
+        });
+    });
+  });
+
+  try {
+    return await withTimeout(aggregatedPromise, PLANNER_OVERALL_TIMEOUT_MS);
+  } catch (error) {
+    console.warn('AI planner overall timeout', error);
+    return null;
+  }
 }
