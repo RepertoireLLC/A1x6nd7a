@@ -1,5 +1,7 @@
 import { useMemo } from "react";
 
+import type { SearchMode } from "../types/search";
+
 interface SearchBarProps {
   value: string;
   suggestions: string[];
@@ -7,6 +9,8 @@ interface SearchBarProps {
   onSubmit: () => void;
   onSelectSuggestion: (suggestion: string) => void;
   isLoading?: boolean;
+  searchMode?: SearchMode;
+  onSearchModeChange?: (mode: SearchMode) => void;
 }
 
 /**
@@ -18,7 +22,9 @@ export function SearchBar({
   onChange,
   onSubmit,
   onSelectSuggestion,
-  isLoading = false
+  isLoading = false,
+  searchMode,
+  onSearchModeChange
 }: SearchBarProps) {
   const suggestionSet = useMemo(() => Array.from(new Set(suggestions)), [suggestions]);
 
@@ -47,6 +53,19 @@ export function SearchBar({
           placeholder="Seek the Alexandria archives or paste a URL"
           aria-label="Search the web and archives"
         />
+        {searchMode && onSearchModeChange ? (
+          <label className="search-mode-select">
+            <span className="sr-only">Search Mode</span>
+            <select
+              value={searchMode}
+              onChange={(event) => onSearchModeChange(event.target.value as SearchMode)}
+              aria-label="Search Mode"
+            >
+              <option value="legacy">Legacy Search</option>
+              <option value="ai">AI Assisted</option>
+            </select>
+          </label>
+        ) : null}
         <button
           type="button"
           className="search-button harmonia-glow-button"

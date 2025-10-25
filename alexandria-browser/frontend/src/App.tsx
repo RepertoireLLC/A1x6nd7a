@@ -17,6 +17,7 @@ import { LiveStatusCard } from "./components/LiveStatusCard";
 import { WaybackAvailabilityCard } from "./components/WaybackAvailabilityCard";
 import { AiAssistantPanel } from "./components/AiAssistantPanel";
 import { AiChatPanel } from "./components/AiChatPanel";
+import { AIChatWindow } from "./ai/AIChatWindow";
 import {
   searchArchive,
   checkLinkStatus,
@@ -59,6 +60,7 @@ import type {
   AIAvailabilityStatus,
   AIChatMessage
 } from "./types";
+import type { SearchMode } from "./types/search";
 import { ItemDetailsPanel } from "./components/ItemDetailsPanel";
 import type { ReportSubmissionPayload } from "./reporting";
 import { annotateDocs, annotateScrapeItems, applyNSFWModeToScrape, shouldIncludeDoc } from "./utils/nsfw";
@@ -329,6 +331,10 @@ function App() {
   const [aiRefinedQuery, setAiRefinedQuery] = useState<string | null>(null);
   const [aiRefinementTopics, setAiRefinementTopics] = useState<string[]>([]);
   const [aiAssistantEnabled, setAiAssistantEnabled] = useState(() => Boolean(settings.aiAssistantEnabled));
+  const [searchMode, setSearchMode] = useState<SearchMode>(() => settings.searchMode ?? "legacy");
+  const [aiChatSession, setAiChatSession] = useState(0);
+  const [aiPrompt, setAiPrompt] = useState<string | null>(null);
+  const isLegacyMode = searchMode === "legacy";
   const [aiSummary, setAiSummary] = useState<string | null>(null);
   const [aiSummaryStatus, setAiSummaryStatus] = useState<AISummaryStatus>(() =>
     settings.aiAssistantEnabled ? "unavailable" : "disabled"
@@ -452,7 +458,8 @@ function App() {
       collection,
       uploader,
       subject,
-      aiAssistantEnabled
+      aiAssistantEnabled,
+      searchMode
     };
     saveSettings(settingsPayload);
   }, [
@@ -470,7 +477,8 @@ function App() {
     collection,
     uploader,
     subject,
-    aiAssistantEnabled
+    aiAssistantEnabled,
+    searchMode
   ]);
 
   useEffect(() => {
@@ -1364,7 +1372,7 @@ function App() {
 
   useEffect(() => {
     const trimmed = debouncedQuery.trim();
-    if (!autoSearchReadyRef.current || isLoading || isLoadingMore) {
+    if (!isLegacyMode || !autoSearchReadyRef.current || isLoading || isLoadingMore) {
       return;
     }
     if (!trimmed) {
@@ -1385,7 +1393,14 @@ function App() {
       preferCache: true,
       cancelOngoing: true,
     });
-  }, [debouncedQuery, activeQuery, performSearch, isLoading, isLoadingMore]);
+  }, [
+    debouncedQuery,
+    activeQuery,
+    performSearch,
+    isLoading,
+    isLoadingMore,
+    isLegacyMode
+  ]);
 
   const highestLoadedPage = useMemo(
     () => (loadedPages.length > 0 ? Math.max(...loadedPages) : 0),
@@ -1402,6 +1417,9 @@ function App() {
   );
 
   useEffect(() => {
+    if (!isLegacyMode) {
+      return;
+    }
     if (bootstrapped.current || !settings.lastQuery) {
       if (!settings.lastQuery) {
         autoSearchReadyRef.current = true;
@@ -1416,7 +1434,12 @@ function App() {
     }).finally(() => {
       autoSearchReadyRef.current = true;
     });
-  }, [performSearch, settings.lastQuery, settings.resultsPerPage]);
+  }, [
+    performSearch,
+    settings.lastQuery,
+    settings.resultsPerPage,
+    isLegacyMode
+  ]);
 
   useEffect(() => {
     if (filteredResults.length === 0 || fallbackNotice) {
@@ -1518,6 +1541,18 @@ function App() {
     }
   }, [selectedDoc, nsfwMode]);
 
+  const triggerAiConversation = useCallback(
+    (prompt: string) => {
+      const trimmedPrompt = prompt.trim();
+      if (!trimmedPrompt) {
+        return;
+      }
+      setAiPrompt(trimmedPrompt);
+      setAiChatSession((previous) => previous + 1);
+    },
+    []
+  );
+
   const handleSubmit = async () => {
     const trimmed = query.trim();
     if (!trimmed) {
@@ -1525,10 +1560,34 @@ function App() {
     }
     setQuery(trimmed);
     setActiveQuery(trimmed);
-    await performSearch(trimmed, 1);
+    if (isLegacyMode) {
+      await performSearch(trimmed, 1);
+    } else {
+      triggerAiConversation(trimmed);
+    }
   };
 
+  const handleSearchModeChange = useCallback(
+    (mode: SearchMode) => {
+      if (mode === searchMode) {
+        return;
+      }
+      setSearchMode(mode);
+      if (mode === "ai") {
+        const seed = (query || activeQuery || "").trim();
+        if (seed) {
+          setActiveQuery(seed);
+          triggerAiConversation(seed);
+        }
+      }
+    },
+    [searchMode, query, activeQuery, triggerAiConversation]
+  );
+
   const handlePageChange = async (direction: "previous" | "next") => {
+    if (!isLegacyMode) {
+      return;
+    }
     if (!activeQuery || isLoading || isLoadingMore) {
       return;
     }
@@ -1545,6 +1604,9 @@ function App() {
   };
 
   const handleLoadMore = useCallback(async () => {
+    if (!isLegacyMode) {
+      return;
+    }
     if (!activeQuery || isLoading || isLoadingMore || !hasMoreResults) {
       return;
     }
@@ -1560,7 +1622,8 @@ function App() {
     hasMoreResults,
     highestLoadedPage,
     totalPages,
-    performSearch
+    performSearch,
+    isLegacyMode
   ]);
 
   useEffect(() => {
@@ -1592,7 +1655,7 @@ function App() {
       return;
     }
     setResultsPerPage(value);
-    if (activeQuery) {
+    if (isLegacyMode && activeQuery) {
       void performSearch(activeQuery, 1, { recordHistory: false, rowsOverride: value });
     }
   };
@@ -1634,7 +1697,7 @@ function App() {
   };
 
   const applyFilters = () => {
-    if (!activeQuery) {
+    if (!isLegacyMode || !activeQuery) {
       return;
     }
     void performSearch(activeQuery, 1, { recordHistory: false });
@@ -1760,7 +1823,11 @@ function App() {
   const handleSuggestionClick = (nextQuery: string) => {
     setQuery(nextQuery);
     setActiveQuery(nextQuery);
-    void performSearch(nextQuery, 1);
+    if (isLegacyMode) {
+      void performSearch(nextQuery, 1);
+    } else {
+      triggerAiConversation(nextQuery);
+    }
   };
 
   const handleRemoveHistoryItem = useCallback((targetQuery: string) => {
@@ -1809,7 +1876,11 @@ function App() {
     setHistoryIndex(nextIndex);
     setQuery(entry.query);
     setActiveQuery(entry.query);
-    void performSearch(entry.query, 1, { recordHistory: false });
+    if (isLegacyMode) {
+      void performSearch(entry.query, 1, { recordHistory: false });
+    } else {
+      triggerAiConversation(entry.query);
+    }
   };
 
   const goForward = () => {
@@ -1821,10 +1892,20 @@ function App() {
     setHistoryIndex(nextIndex);
     setQuery(entry.query);
     setActiveQuery(entry.query);
-    void performSearch(entry.query, 1, { recordHistory: false });
+    if (isLegacyMode) {
+      void performSearch(entry.query, 1, { recordHistory: false });
+    } else {
+      triggerAiConversation(entry.query);
+    }
   };
 
   const refresh = () => {
+    if (!isLegacyMode) {
+      if (activeQuery) {
+        triggerAiConversation(activeQuery);
+      }
+      return;
+    }
     if (activeQuery) {
       void performSearch(activeQuery, page, { recordHistory: false });
     }
@@ -1853,6 +1934,8 @@ function App() {
     setAiAvailability(defaults.aiAssistantEnabled ? "unknown" : "disabled");
     setAiChatMessages([]);
     setAiChatSending(false);
+    setAiPrompt(null);
+    setAiChatSession((previous) => previous + 1);
     setAiChatError(null);
     setAiStatusMessage(null);
     aiStatusRequestRef.current += 1;
@@ -1914,6 +1997,9 @@ function App() {
     setAiSummarySource(null);
     setAiAppliedFilters(null);
     setAiPanelCollapsed(false);
+    setSearchMode(defaults.searchMode);
+    setAiPrompt(null);
+    setAiChatSession((previous) => previous + 1);
     searchSessionRef.current = null;
   };
 
@@ -2262,6 +2348,8 @@ function App() {
           onSubmit={handleSubmit}
           onSelectSuggestion={handleSuggestionClick}
           isLoading={isLoading}
+          searchMode={searchMode}
+          onSearchModeChange={handleSearchModeChange}
         />
       </BrowserNav>
 
@@ -2418,34 +2506,42 @@ function App() {
       ) : null}
 
       <section className="results-container" aria-live="polite" ref={resultsContainerRef}>
-        <ResultsList
-          results={filteredResults}
-          statuses={statuses}
-          nsfwMode={nsfwMode}
-          isLoading={isLoading}
-          error={error}
-          hasSearched={hasSearched}
-          page={page}
-          totalPages={totalPages}
-          totalResults={totalResults}
-          resultsPerPage={resultsPerPage}
-          onPageChange={handlePageChange}
-          onToggleBookmark={toggleBookmark}
-          onOpenDetails={openDetails}
-          bookmarkedIds={bookmarkedIdentifiers}
-          onSaveSnapshot={handleSaveSnapshot}
-          saveMeta={saveMeta}
-          onReport={handleReportSubmission}
-          suggestionNode={suggestionNode}
-          notice={combinedNotice}
-          viewMode={mediaType === "image" ? "images" : "default"}
-          isLoadingMore={isLoadingMore}
-          loadMoreError={loadMoreError}
-          onLoadMore={handleLoadMore}
-          hasMore={hasMoreResults}
-          loadedPages={loadedPages.length}
-          loadMoreRef={loadMoreSentinelRef}
-        />
+        {isLegacyMode ? (
+          <ResultsList
+            results={filteredResults}
+            statuses={statuses}
+            nsfwMode={nsfwMode}
+            isLoading={isLoading}
+            error={error}
+            hasSearched={hasSearched}
+            page={page}
+            totalPages={totalPages}
+            totalResults={totalResults}
+            resultsPerPage={resultsPerPage}
+            onPageChange={handlePageChange}
+            onToggleBookmark={toggleBookmark}
+            onOpenDetails={openDetails}
+            bookmarkedIds={bookmarkedIdentifiers}
+            onSaveSnapshot={handleSaveSnapshot}
+            saveMeta={saveMeta}
+            onReport={handleReportSubmission}
+            suggestionNode={suggestionNode}
+            notice={combinedNotice}
+            viewMode={mediaType === "image" ? "images" : "default"}
+            isLoadingMore={isLoadingMore}
+            loadMoreError={loadMoreError}
+            onLoadMore={handleLoadMore}
+            hasMore={hasMoreResults}
+            loadedPages={loadedPages.length}
+            loadMoreRef={loadMoreSentinelRef}
+          />
+        ) : (
+          <AIChatWindow
+            key={aiChatSession}
+            initialPrompt={(aiPrompt ?? query)?.trim() || ""}
+            nsfwMode={nsfwMode}
+          />
+        )}
       </section>
 
       <Sidebar
