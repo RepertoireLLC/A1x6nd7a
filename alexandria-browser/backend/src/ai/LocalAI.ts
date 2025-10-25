@@ -70,24 +70,52 @@ export interface LocalAISearchInsights {
   collectionHint: string | null;
 }
 
-interface GPT4AllInstance {
-  init: () => Promise<void>;
-  open: () => Promise<void>;
-  prompt: (prompt: string, options?: Record<string, unknown>) => Promise<string>;
-  close?: () => Promise<void>;
+interface GPT4AllInferenceModel {
+  modelName?: string;
+  generate?: (
+    input: string | LocalAIConversationTurn[],
+    options?: Record<string, unknown>
+  ) => Promise<{ text?: string } | null | undefined>;
+  prompt?: (prompt: string, options?: Record<string, unknown>) => Promise<string>;
+  dispose?: () => void;
 }
 
-type GPT4AllConstructor = new (modelName: string, options?: Record<string, unknown>) => GPT4AllInstance;
+interface GPT4AllCompletionChoice {
+  message?: { content?: string | null } | null;
+}
+
+interface GPT4AllCompletionResult {
+  choices?: GPT4AllCompletionChoice[] | null;
+}
+
+interface GPT4AllModuleBindings {
+  loadModel: (modelName: string, options?: Record<string, unknown>) => Promise<GPT4AllInferenceModel>;
+  createCompletion?: (
+    provider: GPT4AllInferenceModel,
+    input: string | LocalAIConversationTurn[],
+    options?: Record<string, unknown>
+  ) => Promise<GPT4AllCompletionResult>;
+}
 
 const MODEL_EXTENSIONS = new Set([".bin", ".gguf", ".ggml"]);
-const DEFAULT_PROMPT_OPTIONS = {
+const DEFAULT_COMPLETION_OPTIONS = {
   temp: 0.25,
   topK: 40,
   topP: 0.9,
   minP: 0.05,
-  maxTokens: 320,
   repeatPenalty: 1.05,
-  repeatLastN: 256
+  repeatLastN: 256,
+  nPredict: 320,
+};
+
+const LEGACY_PROMPT_OPTIONS = {
+  temp: DEFAULT_COMPLETION_OPTIONS.temp,
+  topK: DEFAULT_COMPLETION_OPTIONS.topK,
+  topP: DEFAULT_COMPLETION_OPTIONS.topP,
+  minP: DEFAULT_COMPLETION_OPTIONS.minP,
+  repeatPenalty: DEFAULT_COMPLETION_OPTIONS.repeatPenalty,
+  repeatLastN: DEFAULT_COMPLETION_OPTIONS.repeatLastN,
+  maxTokens: DEFAULT_COMPLETION_OPTIONS.nPredict,
 };
 
 const SECTION_SPLIT_PATTERN = /\r?\n\s*\r?\n/;
@@ -119,12 +147,13 @@ let configuredModelDir = ENV_MODEL_DIR || path.resolve(process.cwd(), "models");
 let configuredModelPath = ENV_MODEL_PATH;
 let configuredModelName = ENV_MODEL_NAME;
 
-let cachedModel: GPT4AllInstance | null = null;
+let cachedModel: GPT4AllInferenceModel | null = null;
 let modelReady = false;
-let loadPromise: Promise<GPT4AllInstance | null> | null = null;
+let loadPromise: Promise<GPT4AllInferenceModel | null> | null = null;
 let lastOutcome: LocalAIOutcome = { status: isAIGloballyEnabled() ? "idle" : "disabled" };
 let lastModelPath: string | null = null;
 let activeInference: Promise<void> | null = null;
+let cachedBindings: GPT4AllModuleBindings | null = null;
 
 function isAIGloballyEnabled(): boolean {
   if (ENV_DISABLE_LOCAL_AI) {
@@ -195,23 +224,39 @@ async function findModelFile(): Promise<string | null> {
   return null;
 }
 
-function resolveGpt4AllConstructor(module: unknown): GPT4AllConstructor | null {
-  if (!module || typeof module !== "object") {
+async function resolveGpt4AllBindings(): Promise<GPT4AllModuleBindings | null> {
+  if (cachedBindings) {
+    return cachedBindings;
+  }
+
+  try {
+    const imported = (await import("gpt4all")) as Record<string, unknown>;
+    const loadModelCandidate = imported.loadModel;
+    if (typeof loadModelCandidate !== "function") {
+      throw new Error("GPT4All loadModel() export was not found.");
+    }
+
+    const createCompletionCandidate = imported.createCompletion;
+    cachedBindings = {
+      loadModel: loadModelCandidate.bind(imported),
+      createCompletion:
+        typeof createCompletionCandidate === "function"
+          ? createCompletionCandidate.bind(imported)
+          : undefined,
+    };
+    return cachedBindings;
+  } catch (error) {
+    console.warn("Failed to resolve GPT4All bindings", error);
+    lastOutcome = {
+      status: "error",
+      message:
+        error instanceof Error
+          ? error.message
+          : "Unable to resolve GPT4All bindings for the local AI model.",
+    };
+    cachedBindings = null;
     return null;
   }
-
-  const record = module as Record<string, unknown>;
-  const directCandidate = record.GPT4All;
-  if (typeof directCandidate === "function") {
-    return directCandidate as GPT4AllConstructor;
-  }
-
-  const defaultCandidate = record.default;
-  if (typeof defaultCandidate === "function") {
-    return defaultCandidate as GPT4AllConstructor;
-  }
-
-  return null;
 }
 
 function sanitizeDirectory(dir: string | undefined): string {
@@ -249,7 +294,7 @@ export function configureLocalAI(options: LocalAIConfiguration): LocalAIOutcome 
   return getLastAIOutcome();
 }
 
-async function loadModel(): Promise<GPT4AllInstance | null> {
+async function loadModel(): Promise<GPT4AllInferenceModel | null> {
   if (!isAIGloballyEnabled()) {
     markDisabled();
     return null;
@@ -273,21 +318,29 @@ async function loadModel(): Promise<GPT4AllInstance | null> {
       return null;
     }
 
+    const bindings = await resolveGpt4AllBindings();
+    if (!bindings) {
+      cachedModel = null;
+      modelReady = false;
+      lastModelPath = null;
+      return null;
+    }
+
     try {
-      const imported = await import("gpt4all");
-      const GPT4AllCtor = resolveGpt4AllConstructor(imported);
-      if (!GPT4AllCtor) {
-        throw new Error("Failed to load GPT4All constructor from module export.");
-      }
       const modelName = path.basename(modelFile);
       const modelDir = path.dirname(modelFile);
-      const instance = new GPT4AllCtor(modelName, {
+      const loadOptions: Record<string, unknown> = {
         modelPath: modelDir,
         verbose: false,
         allowDownload: false,
-      });
-      await instance.init();
-      await instance.open();
+      };
+
+      const configCandidate = path.join(modelDir, "models3.json");
+      if (await fileExists(configCandidate)) {
+        loadOptions.modelConfigFile = configCandidate;
+      }
+
+      const instance = await bindings.loadModel(modelName, loadOptions);
       cachedModel = instance;
       modelReady = true;
       lastModelPath = modelFile;
@@ -328,6 +381,55 @@ async function runExclusive<T>(operation: () => Promise<T>): Promise<T> {
     release();
     activeInference = null;
   }
+}
+
+async function runModelCompletion(
+  model: GPT4AllInferenceModel,
+  prompt: string
+): Promise<string> {
+  const sanitized = prompt.trim();
+  if (!sanitized) {
+    return "";
+  }
+
+  const bindings = await resolveGpt4AllBindings();
+  if (bindings?.createCompletion) {
+    const result = await bindings.createCompletion(model, sanitized, {
+      ...DEFAULT_COMPLETION_OPTIONS,
+      verbose: false,
+    });
+    const choice = result?.choices?.[0];
+    const content = choice?.message?.content;
+    if (typeof content === "string") {
+      const trimmed = content.trim();
+      if (trimmed) {
+        return trimmed;
+      }
+    }
+  }
+
+  if (typeof model.generate === "function") {
+    const generation = await model.generate(sanitized, {
+      ...DEFAULT_COMPLETION_OPTIONS,
+      verbose: false,
+    });
+    const text = generation && typeof generation === "object" ? (generation as { text?: string }).text : undefined;
+    if (typeof text === "string") {
+      const trimmed = text.trim();
+      if (trimmed) {
+        return trimmed;
+      }
+    }
+  }
+
+  if (typeof model.prompt === "function") {
+    const raw = await model.prompt(sanitized, LEGACY_PROMPT_OPTIONS);
+    if (typeof raw === "string") {
+      return raw.trim();
+    }
+  }
+
+  return "";
 }
 
 function stripBulletPrefix(line: string): string {
@@ -548,8 +650,7 @@ export async function generateAIResponse(
 
     const response = await runExclusive(async () => {
       const prompt = buildPrompt(sanitized, nsfwMode);
-      const raw = await model.prompt(prompt, DEFAULT_PROMPT_OPTIONS);
-      return typeof raw === "string" ? raw.trim() : "";
+      return runModelCompletion(model, prompt);
     });
 
     if (!response) {
@@ -722,8 +823,7 @@ export async function generateContextualResponse(request: LocalAIContextRequest)
 
     const response = await runExclusive(async () => {
       const prompt = buildContextualPrompt({ ...request, message: sanitizedMessage }, nsfwMode);
-      const raw = await model.prompt(prompt, DEFAULT_PROMPT_OPTIONS);
-      return typeof raw === "string" ? raw.trim() : "";
+      return runModelCompletion(model, prompt);
     });
 
     if (!response) {
@@ -768,9 +868,18 @@ export function getLastAIOutcome(): LocalAIOutcome {
 }
 
 export function resetLocalAIState(): void {
+  if (cachedModel && typeof cachedModel.dispose === "function") {
+    try {
+      cachedModel.dispose();
+    } catch (error) {
+      console.warn("Failed to dispose cached GPT4All model", error);
+    }
+  }
   cachedModel = null;
   modelReady = false;
   loadPromise = null;
+  cachedBindings = null;
   lastModelPath = null;
+  activeInference = null;
   lastOutcome = { status: isAIGloballyEnabled() ? "idle" : "disabled" };
 }
