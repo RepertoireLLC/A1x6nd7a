@@ -1,3 +1,5 @@
+import type { SearchMode } from "./types/search";
+
 /**
  * Shared type definitions for the Alexandria Browser frontend.
  * These interfaces mirror the payloads returned by the backend API
@@ -253,6 +255,7 @@ export interface StoredSettings {
   uploader?: string;
   subject?: string;
   aiAssistantEnabled?: boolean;
+  searchMode: SearchMode;
 }
 
 export interface SearchFilters {
