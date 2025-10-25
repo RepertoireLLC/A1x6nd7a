@@ -5,7 +5,7 @@ import type {
   ScrapeItem
 } from "../types";
 
-import keywordPayload from "../../../src/config/nsfwKeywords.json" assert { type: "json" };
+import keywordPayload from "../../../shared/nsfwKeywords.json" assert { type: "json" };
 import { detectKeywordMatches } from "./nsfwKeywordMatcher";
 
 interface KeywordConfig {
