@@ -966,12 +966,12 @@ function isNetworkError(error: unknown): boolean {
 }
 
 function shouldUseOfflineFallback(error: unknown): boolean {
-  if (isNetworkError(error)) {
-    return true;
-  }
-
   if (!offlineFallbackEnabled) {
     return false;
+  }
+
+  if (isNetworkError(error)) {
+    return true;
   }
 
   if (error instanceof ArchiveSearchResponseError) {
