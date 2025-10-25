@@ -4,6 +4,7 @@ import type {
   StoredSettings,
   NSFWFilterMode
 } from "../types";
+import type { SearchMode } from "../types/search";
 
 const SETTINGS_KEY = "alexandria-browser-settings";
 const HISTORY_KEY = "alexandria-browser-history";
@@ -13,6 +14,7 @@ const REPORT_BLACKLIST_KEY = "alexandria-browser-report-blacklist";
 
 // ADD: Default preference snapshot used when initializing or resetting stored settings.
 const NSFW_MODE_VALUES: readonly NSFWFilterMode[] = ["safe", "moderate", "unrestricted", "nsfw-only"];
+const SEARCH_MODE_VALUES: readonly SearchMode[] = ["legacy", "ai"];
 
 function normalizeMode(value: unknown, fallback: unknown): NSFWFilterMode {
   if (typeof value === "string") {
@@ -33,6 +35,16 @@ function normalizeMode(value: unknown, fallback: unknown): NSFWFilterMode {
   return "safe";
 }
 
+function normalizeSearchMode(value: unknown): SearchMode {
+  if (typeof value === "string") {
+    const lowered = value.toLowerCase();
+    if (SEARCH_MODE_VALUES.includes(lowered as SearchMode)) {
+      return lowered as SearchMode;
+    }
+  }
+  return "legacy";
+}
+
 export const DEFAULT_SETTINGS: StoredSettings = {
   theme: "light",
   filterNSFW: true,
@@ -49,7 +61,8 @@ export const DEFAULT_SETTINGS: StoredSettings = {
   collection: "",
   uploader: "",
   subject: "",
-  aiAssistantEnabled: false
+  aiAssistantEnabled: false,
+  searchMode: "legacy"
 };
 
 /**
@@ -96,13 +109,15 @@ export function loadSettings(): StoredSettings {
   const nsfwAcknowledged = typeof stored?.nsfwAcknowledged === "boolean" ? stored.nsfwAcknowledged : false;
   const resolvedMode = nsfwAcknowledged ? nsfwMode : "safe";
   const aiAssistantEnabled = typeof stored?.aiAssistantEnabled === "boolean" ? stored.aiAssistantEnabled : false;
+  const searchMode = normalizeSearchMode((stored as Partial<StoredSettings>).searchMode);
   return {
     ...DEFAULT_SETTINGS,
     ...stored,
     nsfwMode: resolvedMode,
     filterNSFW: resolvedMode !== "unrestricted",
     nsfwAcknowledged,
-    aiAssistantEnabled
+    aiAssistantEnabled,
+    searchMode
   };
 }
 
@@ -112,6 +127,7 @@ export function loadSettings(): StoredSettings {
 export function saveSettings(settings: StoredSettings) {
   const nsfwMode = normalizeMode(settings.nsfwMode, settings.filterNSFW);
   const nsfwAcknowledged = Boolean(settings.nsfwAcknowledged);
+  const searchMode = normalizeSearchMode(settings.searchMode);
   writeJSON(SETTINGS_KEY, {
     ...settings,
     nsfwMode,
@@ -120,7 +136,8 @@ export function saveSettings(settings: StoredSettings) {
     aiAssistantEnabled: Boolean(settings.aiAssistantEnabled),
     collection: settings.collection ?? "",
     uploader: settings.uploader ?? "",
-    subject: settings.subject ?? ""
+    subject: settings.subject ?? "",
+    searchMode
   });
 }
 
