@@ -71,7 +71,7 @@ function normalizeKeywordPayload(payload) {
 async function loadBaseKeywords() {
   if (baseKeywordsCache) return baseKeywordsCache;
   try {
-    const response = await fetch('./src/config/nsfwKeywords.json');
+    const response = await fetch('./shared/nsfwKeywords.json');
     if (!response.ok) throw new Error('Failed to load NSFW keywords');
     const data = await response.json();
     baseKeywordsCache = normalizeKeywordPayload(data);

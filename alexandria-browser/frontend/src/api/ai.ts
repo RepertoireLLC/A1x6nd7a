@@ -56,6 +56,7 @@ function buildQueryUrl(): string {
 
 function buildStatusUrl(): string {
   const url = new URL("/api/ai/status", `${API_BASE_URL}/`);
+  url.searchParams.set("warmup", "1");
   return url.toString();
 }
 

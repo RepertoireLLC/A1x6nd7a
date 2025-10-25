@@ -15,7 +15,7 @@ export interface RuntimeConfig {
 const DEFAULT_CONFIG: RuntimeConfig = {
   ai: {
     enabled: true,
-    autoInitialize: true,
+    autoInitialize: false,
     model: "Xenova/distilgpt2",
     embeddingModel: "Xenova/all-MiniLM-L6-v2",
   },

@@ -27,7 +27,7 @@ interface KeywordSets {
 const KEYWORD_SETS = loadKeywordSets();
 
 function loadKeywordSets(): KeywordSets {
-  const configPath = join(dirname(fileURLToPath(import.meta.url)), "../../filters/nsfwTerms.json");
+  const configPath = join(dirname(fileURLToPath(import.meta.url)), "../../../shared/nsfwKeywords.json");
   try {
     const raw = readFileSync(configPath, "utf-8");
     const payload = JSON.parse(raw) as KeywordConfig;

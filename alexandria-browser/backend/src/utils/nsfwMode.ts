@@ -27,7 +27,7 @@ export interface NsfwAnalysisResult {
   matches: string[];
 }
 
-const keywordPayload = require("../../filters/nsfwTerms.json") as KeywordConfig;
+const keywordPayload = require("../../../shared/nsfwKeywords.json") as KeywordConfig;
 
 const KEYWORD_SETS = parseKeywordConfig(keywordPayload);
 
