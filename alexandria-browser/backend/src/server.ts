@@ -800,7 +800,7 @@ function parseRequestUrl(req: IncomingMessage): URL {
 
 const nodeEnv = getEnv("NODE_ENV") ?? "development";
 const offlineFallbackEnv = getEnv("ENABLE_OFFLINE_FALLBACK");
-const offlineFallbackEnabled = offlineFallbackEnv === "true";
+const offlineFallbackEnabled = offlineFallbackEnv !== "false";
 const proxyEnvCandidates = [
   getEnv("HTTPS_PROXY"),
   getEnv("https_proxy"),

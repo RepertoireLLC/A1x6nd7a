@@ -125,7 +125,7 @@ npm run build --workspace alexandria-browser/frontend
 | Endpoint | Method | Description |
 | --- | --- | --- |
 | `/health` | GET | Lightweight health probe for orchestration. |
-| `/api/search` | GET | Proxies the Internet Archive Advanced Search API with fuzzy fallback (opt-in via `ENABLE_OFFLINE_FALLBACK=true`), NSFW annotations, and optional filters. Parameters: `q`, `page`, `rows`, `mediaType`, `yearFrom`, `yearTo`. |
+| `/api/search` | GET | Proxies the Internet Archive Advanced Search API with fuzzy fallback (enabled by default, disable via `ENABLE_OFFLINE_FALLBACK=false`), NSFW annotations, and optional filters. Parameters: `q`, `page`, `rows`, `mediaType`, `yearFrom`, `yearTo`. |
 | `/api/wayback` | GET | Wraps the Wayback Machine availability endpoint. Parameter: `url`. |
 | `/api/status` | GET | Performs a guarded HEAD/GET probe and falls back to Wayback availability to classify a URL as online, archived-only, or offline. Parameter: `url`. |
 | `/api/save` | POST | Relays Save Page Now requests to archive a specific `url`. Returns snapshot link metadata when provided by the service. |

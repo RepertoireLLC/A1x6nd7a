@@ -97,7 +97,7 @@ function createFriendlySearchError(error: unknown): Error {
 }
 
 const offlineFallbackPreference = import.meta.env.VITE_ENABLE_OFFLINE_FALLBACK;
-const OFFLINE_FALLBACK_ENABLED = offlineFallbackPreference === "true";
+const OFFLINE_FALLBACK_ENABLED = offlineFallbackPreference !== "false";
 
 const DEV_SERVER_PORT = (import.meta.env.VITE_DEV_SERVER_PORT ?? "5173").trim();
 
