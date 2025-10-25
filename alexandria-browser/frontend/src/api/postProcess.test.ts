@@ -53,6 +53,9 @@ describe("postProcessDirectSearchPayload", () => {
 
     expect(result.original_numFound).toBe(2);
     expect(result.filtered_count).toBe(1);
+    expect(result.page_original_count).toBe(2);
+    expect(result.page_filtered_count).toBe(1);
+    expect(result.page_hidden_count).toBe(1);
   });
 
   it("retains documents when filters are relaxed", () => {
@@ -83,5 +86,8 @@ describe("postProcessDirectSearchPayload", () => {
 
     expect(result.response?.docs).toHaveLength(1);
     expect(result.response?.docs?.[0]?.availability).toBe("archived-only");
+    expect(result.page_original_count).toBe(1);
+    expect(result.page_filtered_count).toBe(1);
+    expect(result.page_hidden_count).toBe(0);
   });
 });

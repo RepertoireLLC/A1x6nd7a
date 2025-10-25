@@ -7,7 +7,29 @@ export type NSFWSeverity = "mild" | "explicit";
 
 export type NSFWFilterMode = "safe" | "moderate" | "off" | "only";
 
+export type NSFWUserMode = "safe" | "moderate" | "unrestricted" | "only-nsfw";
+
 export type SourceTrustLevel = "high" | "medium" | "low";
+
+export type BackendAISummaryStatus = "success" | "unavailable" | "error";
+
+export type AISummaryStatus = BackendAISummaryStatus | "disabled" | "loading";
+
+export type AISummarySource = "model" | "heuristic";
+
+export type AIAvailabilityStatus = "unknown" | "ready" | "unavailable" | "error" | "disabled";
+
+export type AIChatRole = "user" | "assistant" | "system";
+
+export interface AIChatMessage {
+  id: string;
+  role: AIChatRole;
+  content: string;
+  createdAt: number;
+  error?: boolean;
+}
+
+export type AIDocumentHelperStatus = "idle" | "loading" | "success" | "error" | "unavailable" | "disabled";
 
 export interface SearchScoreBreakdown {
   keywordRelevance: number;
@@ -80,6 +102,18 @@ export interface ArchiveSearchResponse {
   alternate_queries?: string[];
   original_numFound?: number | null;
   filtered_count?: number | null;
+  page_original_count?: number | null;
+  page_filtered_count?: number | null;
+  page_hidden_count?: number | null;
+  ai_summary?: string | null;
+  ai_summary_status?: BackendAISummaryStatus;
+  ai_summary_error?: string | null;
+  ai_summary_source?: AISummarySource;
+  ai_summary_notice?: string | null;
+  ai_search_interpretation?: string | null;
+  ai_search_keywords?: string[];
+  ai_search_refined_query?: string | null;
+  ai_search_collection_hint?: string | null;
 }
 
 export interface ArchiveSearchResultSummary {
@@ -194,6 +228,7 @@ export interface StoredSettings {
   language: string;
   sourceTrust: string;
   availability: string;
+  aiAssistantEnabled?: boolean;
 }
 
 export interface SearchFilters {

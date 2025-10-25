@@ -6,6 +6,7 @@ import type {
 } from "../types";
 
 import keywordPayload from "../../../src/config/nsfwKeywords.json" assert { type: "json" };
+import { detectKeywordMatches } from "./nsfwKeywordMatcher";
 
 interface KeywordConfig {
   categories?: {
@@ -61,11 +62,11 @@ function normalizeMode(mode: NSFWFilterMode | string | undefined): NSFWFilterMod
     if (MODE_VALUES.includes(lowered as NSFWFilterMode)) {
       return lowered as NSFWFilterMode;
     }
-    if (lowered === "only_nsfw") {
-      return "only";
-    }
-    if (lowered === "none" || lowered === "no_filter") {
+    if (lowered === "unrestricted" || lowered === "none" || lowered === "no_filter") {
       return "off";
+    }
+    if (lowered === "only_nsfw" || lowered === "only-nsfw" || lowered === "nsfw") {
+      return "only";
     }
   }
   return "safe";
@@ -134,16 +135,14 @@ function classifyRecord(record: Record<string, unknown>): Classification {
   const mildMatches = new Set<string>();
 
   for (const value of collectCandidateStrings(record)) {
-    const normalized = value.toLowerCase();
-    for (const keyword of KEYWORD_SETS.explicit) {
-      if (normalized.includes(keyword)) {
-        explicitMatches.add(keyword);
-      }
+    const explicit = detectKeywordMatches(value, KEYWORD_SETS.explicit);
+    for (const keyword of explicit) {
+      explicitMatches.add(keyword);
     }
-    for (const keyword of KEYWORD_SETS.mild) {
-      if (normalized.includes(keyword)) {
-        mildMatches.add(keyword);
-      }
+
+    const mild = detectKeywordMatches(value, KEYWORD_SETS.mild);
+    for (const keyword of mild) {
+      mildMatches.add(keyword);
     }
   }
 

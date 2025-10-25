@@ -58,6 +58,10 @@ export function postProcessDirectSearchPayload(
   const annotatedDocs = docs.map((doc) => annotateDoc(doc, query));
   const filteredDocs = annotatedDocs.filter((doc) => matchesClientFilters(doc, filters));
 
+  const pageOriginalCount = annotatedDocs.length;
+  const pageFilteredCount = filteredDocs.length;
+  const pageHiddenCount = pageOriginalCount > pageFilteredCount ? pageOriginalCount - pageFilteredCount : 0;
+
   const originalCount =
     typeof response.numFound === "number" && Number.isFinite(response.numFound)
       ? response.numFound
@@ -74,6 +78,9 @@ export function postProcessDirectSearchPayload(
     },
     original_numFound: originalCount,
     filtered_count: filteredCount,
+    page_original_count: pageOriginalCount,
+    page_filtered_count: pageFilteredCount,
+    page_hidden_count: pageHiddenCount,
   };
 }
 

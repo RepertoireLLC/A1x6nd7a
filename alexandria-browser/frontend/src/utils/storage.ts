@@ -20,6 +20,12 @@ function normalizeMode(value: unknown, fallback: unknown): NSFWFilterMode {
     if (NSFW_MODE_VALUES.includes(lowered as NSFWFilterMode)) {
       return lowered as NSFWFilterMode;
     }
+    if (lowered === "unrestricted" || lowered === "none" || lowered === "no_filter") {
+      return "off";
+    }
+    if (lowered === "only-nsfw" || lowered === "only_nsfw" || lowered === "nsfw") {
+      return "only";
+    }
   }
   if (typeof fallback === "boolean") {
     return fallback ? "safe" : "off";
@@ -39,7 +45,8 @@ export const DEFAULT_SETTINGS: StoredSettings = {
   yearTo: "",
   language: "",
   sourceTrust: "any",
-  availability: "any"
+  availability: "any",
+  aiAssistantEnabled: false
 };
 
 /**
@@ -85,12 +92,14 @@ export function loadSettings(): StoredSettings {
   const nsfwMode = normalizeMode((stored as Partial<StoredSettings>).nsfwMode, stored?.filterNSFW);
   const nsfwAcknowledged = typeof stored?.nsfwAcknowledged === "boolean" ? stored.nsfwAcknowledged : false;
   const resolvedMode = nsfwAcknowledged ? nsfwMode : "safe";
+  const aiAssistantEnabled = typeof stored?.aiAssistantEnabled === "boolean" ? stored.aiAssistantEnabled : false;
   return {
     ...DEFAULT_SETTINGS,
     ...stored,
     nsfwMode: resolvedMode,
     filterNSFW: resolvedMode !== "off",
-    nsfwAcknowledged
+    nsfwAcknowledged,
+    aiAssistantEnabled
   };
 }
 
@@ -104,7 +113,8 @@ export function saveSettings(settings: StoredSettings) {
     ...settings,
     nsfwMode,
     filterNSFW: nsfwMode !== "off",
-    nsfwAcknowledged
+    nsfwAcknowledged,
+    aiAssistantEnabled: Boolean(settings.aiAssistantEnabled)
   });
 }
 
