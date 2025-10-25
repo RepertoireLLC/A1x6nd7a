@@ -9,15 +9,16 @@ const DEFAULT_TIMEOUT = 4000;
  */
 export async function checkUrlStatus(url, options = {}) {
   if (!url) return 'unknown';
-  const controller = new AbortController();
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT;
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const supportsAbort = typeof AbortController !== 'undefined';
+  const controller = supportsAbort ? new AbortController() : null;
+  const timer = supportsAbort ? setTimeout(() => controller.abort(), timeoutMs) : null;
 
   const tryRequest = async (method) => {
     try {
       const response = await fetch(url, {
         method,
-        signal: controller.signal,
+        ...(controller ? { signal: controller.signal } : {}),
         mode: 'no-cors'
       });
       // When using no-cors the status is 0, treat as unknown but not offline.
@@ -26,7 +27,7 @@ export async function checkUrlStatus(url, options = {}) {
       }
       return response.ok ? 'online' : 'offline';
     } catch (error) {
-      if (error.name === 'AbortError') {
+      if (supportsAbort && error && error.name === 'AbortError') {
         return 'unknown';
       }
       if (method === 'HEAD') {
@@ -40,6 +41,8 @@ export async function checkUrlStatus(url, options = {}) {
     const result = await tryRequest('HEAD');
     return result;
   } finally {
-    clearTimeout(timer);
+    if (timer) {
+      clearTimeout(timer);
+    }
   }
 }

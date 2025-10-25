@@ -673,20 +673,21 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
 }
 
 async function evaluateLinkStatus(targetUrl: string): Promise<LinkStatus> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), HEAD_TIMEOUT_MS);
+  const supportsAbort = typeof AbortController !== "undefined";
+  const controller = supportsAbort ? new AbortController() : null;
+  const timeout = controller ? setTimeout(() => controller.abort(), HEAD_TIMEOUT_MS) : null;
 
   try {
-    const headResponse = await fetch(
-      targetUrl,
-      applyDefaultHeaders(
-        {
-          method: "HEAD",
-          redirect: "follow",
-          signal: controller.signal
-        }
-      )
-    );
+      const headResponse = await fetch(
+        targetUrl,
+        applyDefaultHeaders(
+          {
+            method: "HEAD",
+            redirect: "follow",
+            ...(controller ? { signal: controller.signal } : {})
+          }
+        )
+      );
 
     if (headResponse.ok || (headResponse.status >= 200 && headResponse.status < 400)) {
       return "online";
@@ -699,7 +700,7 @@ async function evaluateLinkStatus(targetUrl: string): Promise<LinkStatus> {
           {
             method: "GET",
             redirect: "follow",
-            signal: controller.signal
+            ...(controller ? { signal: controller.signal } : {})
           }
         )
       );
@@ -713,7 +714,9 @@ async function evaluateLinkStatus(targetUrl: string): Promise<LinkStatus> {
       console.warn("HEAD request failed for", targetUrl, error);
     }
   } finally {
-    clearTimeout(timeout);
+    if (timeout) {
+      clearTimeout(timeout);
+    }
   }
 
   try {
