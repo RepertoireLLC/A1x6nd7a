@@ -1572,16 +1572,25 @@ function App() {
       if (mode === searchMode) {
         return;
       }
+
       setSearchMode(mode);
-      if (mode === "ai") {
-        const seed = (query || activeQuery || "").trim();
-        if (seed) {
-          setActiveQuery(seed);
-          triggerAiConversation(seed);
-        }
+
+      const seed = (query || activeQuery || "").trim();
+      if (!seed) {
+        return;
       }
+
+      setActiveQuery(seed);
+
+      if (mode === "ai") {
+        triggerAiConversation(seed);
+        return;
+      }
+
+      autoSearchReadyRef.current = true;
+      void performSearch(seed, 1, { cancelOngoing: true });
     },
-    [searchMode, query, activeQuery, triggerAiConversation]
+    [searchMode, query, activeQuery, triggerAiConversation, performSearch]
   );
 
   const handlePageChange = async (direction: "previous" | "next") => {
