@@ -10,6 +10,7 @@ import {
 
 import { BrowserNav } from "./components/BrowserNav";
 import { SearchBar } from "./components/SearchBar";
+import { SearchProviderControls } from "./components/SearchProviderControls";
 import { Sidebar } from "./components/Sidebar";
 import { ResultsList } from "./components/ResultsList";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -58,7 +59,9 @@ import type {
   AISummarySource,
   BackendAISummaryStatus,
   AIAvailabilityStatus,
-  AIChatMessage
+  AIChatMessage,
+  SearchProviderPreferences,
+  SearchProviderKey
 } from "./types";
 import type { SearchMode } from "./types/search";
 import { ItemDetailsPanel } from "./components/ItemDetailsPanel";
@@ -223,6 +226,13 @@ interface CachedMetadataEntry {
   timestamp: number;
 }
 
+const SEARCH_PROVIDER_DEFAULTS: SearchProviderPreferences = {
+  // Mirror the storage defaults so hydration and first-run UX stay consistent.
+  google: true,
+  images: false,
+  youtube: false
+};
+
 interface CachedTimelineEntry {
   payload: CdxResponse;
   timestamp: number;
@@ -332,6 +342,9 @@ function App() {
   const [aiRefinementTopics, setAiRefinementTopics] = useState<string[]>([]);
   const [aiAssistantEnabled, setAiAssistantEnabled] = useState(() => Boolean(settings.aiAssistantEnabled));
   const [searchMode, setSearchMode] = useState<SearchMode>(() => settings.searchMode ?? "legacy");
+  const [searchProviders, setSearchProviders] = useState<SearchProviderPreferences>(
+    () => ({ ...SEARCH_PROVIDER_DEFAULTS, ...settings.searchProviders })
+  );
   const [aiChatSession, setAiChatSession] = useState(0);
   const [aiPrompt, setAiPrompt] = useState<string | null>(null);
   const isLegacyMode = searchMode === "legacy";
@@ -459,7 +472,8 @@ function App() {
       uploader,
       subject,
       aiAssistantEnabled,
-      searchMode
+      searchMode,
+      searchProviders
     };
     saveSettings(settingsPayload);
   }, [
@@ -478,7 +492,8 @@ function App() {
     uploader,
     subject,
     aiAssistantEnabled,
-    searchMode
+    searchMode,
+    searchProviders
   ]);
 
   useEffect(() => {
@@ -1584,6 +1599,19 @@ function App() {
     [searchMode, query, activeQuery, triggerAiConversation]
   );
 
+  const handleSearchProviderToggle = useCallback(
+    (provider: SearchProviderKey, enabled: boolean) => {
+      setSearchProviders((previous) => {
+        if (previous[provider] === enabled) {
+          return previous;
+        }
+        // Clone the preference bag so React can detect the specific toggle change.
+        return { ...previous, [provider]: enabled };
+      });
+    },
+    []
+  );
+
   const handlePageChange = async (direction: "previous" | "next") => {
     if (!isLegacyMode) {
       return;
@@ -2341,16 +2369,23 @@ function App() {
         onHome={goHome}
         onOpenLibrary={() => setSidebarOpen(true)}
       >
-        <SearchBar
-          value={query}
-          suggestions={suggestionList}
-          onChange={setQuery}
-          onSubmit={handleSubmit}
-          onSelectSuggestion={handleSuggestionClick}
-          isLoading={isLoading}
-          searchMode={searchMode}
-          onSearchModeChange={handleSearchModeChange}
-        />
+        <>
+          <SearchBar
+            value={query}
+            suggestions={suggestionList}
+            onChange={setQuery}
+            onSubmit={handleSubmit}
+            onSelectSuggestion={handleSuggestionClick}
+            isLoading={isLoading}
+            searchMode={searchMode}
+            onSearchModeChange={handleSearchModeChange}
+          />
+          <SearchProviderControls
+            query={query}
+            providers={searchProviders}
+            onToggle={handleSearchProviderToggle}
+          />
+        </>
       </BrowserNav>
 
       <div className="search-panel harmonia-card">

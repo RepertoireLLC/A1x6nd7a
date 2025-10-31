@@ -806,7 +806,9 @@ const proxyEnvCandidates = [
   getEnv("HTTPS_PROXY"),
   getEnv("https_proxy"),
   getEnv("HTTP_PROXY"),
-  getEnv("http_proxy")
+  getEnv("http_proxy"),
+  getEnv("ALL_PROXY"),
+  getEnv("all_proxy")
 ];
 const proxyUrl = proxyEnvCandidates.find((value) => typeof value === "string" && value.trim().length > 0)?.trim() ?? null;
 const noProxyEnv = getEnv("NO_PROXY") ?? getEnv("no_proxy") ?? "";
