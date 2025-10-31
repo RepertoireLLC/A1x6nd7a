@@ -3,8 +3,8 @@ const STORAGE_KEY = 'alexandria_nsfw_keywords';
 export const NSFW_MODES = Object.freeze({
   SAFE: 'safe',
   MODERATE: 'moderate',
-  OFF: 'off',
-  ONLY: 'only'
+  UNRESTRICTED: 'unrestricted',
+  NSFW_ONLY: 'nsfw-only'
 });
 
 const DEFAULT_KEYWORD_SETS = Object.freeze({
@@ -111,11 +111,21 @@ function normalizeMode(mode) {
   }
   const normalized = mode.toLowerCase();
   if (normalized === NSFW_MODES.MODERATE) return NSFW_MODES.MODERATE;
-  if (normalized === NSFW_MODES.OFF || normalized === 'none' || normalized === 'no_filter') {
-    return NSFW_MODES.OFF;
+  if (
+    normalized === NSFW_MODES.UNRESTRICTED ||
+    normalized === 'off' ||
+    normalized === 'none' ||
+    normalized === 'no_filter'
+  ) {
+    return NSFW_MODES.UNRESTRICTED;
   }
-  if (normalized === NSFW_MODES.ONLY || normalized === 'only_nsfw') {
-    return NSFW_MODES.ONLY;
+  if (
+    normalized === NSFW_MODES.NSFW_ONLY ||
+    normalized === 'only' ||
+    normalized === 'only_nsfw' ||
+    normalized === 'nsfw'
+  ) {
+    return NSFW_MODES.NSFW_ONLY;
   }
   return NSFW_MODES.SAFE;
 }
@@ -205,7 +215,7 @@ function classifyEntry(entry, keywordData) {
 }
 
 function shouldIncludeEntry(classification, mode) {
-  if (mode === NSFW_MODES.ONLY) {
+  if (mode === NSFW_MODES.NSFW_ONLY) {
     return classification.flagged;
   }
   if (mode === NSFW_MODES.SAFE) {

@@ -45,11 +45,27 @@ export function createSettingsModal({
   const nsfwModeSelect = document.createElement('select');
   nsfwModeSelect.className = 'settings-select';
 
+  // Map legacy storage values onto the expanded toggle set so the select stays consistent.
+  const normalizeModeValue = (mode) => {
+    if (typeof mode !== 'string') {
+      return 'safe';
+    }
+    const lowered = mode.toLowerCase();
+    if (lowered === 'moderate') return 'moderate';
+    if (['unrestricted', 'off', 'none', 'no_filter'].includes(lowered)) {
+      return 'unrestricted';
+    }
+    if (['nsfw-only', 'only', 'only_nsfw', 'nsfw'].includes(lowered)) {
+      return 'nsfw-only';
+    }
+    return 'safe';
+  };
+
   const modeOptions = [
     { value: 'safe', label: 'Safe — Truthful content for all ages' },
     { value: 'moderate', label: 'Moderate — Truthful content with mature context' },
-    { value: 'off', label: 'No Restriction — All truthful content visible' },
-    { value: 'only', label: 'NSFW Only — Explicit truth-focused material only' }
+    { value: 'unrestricted', label: 'No Restriction — All truthful content visible' },
+    { value: 'nsfw-only', label: 'NSFW Only — Explicit truth-focused material only' }
   ];
 
   modeOptions.forEach((option) => {
@@ -59,12 +75,15 @@ export function createSettingsModal({
     nsfwModeSelect.appendChild(opt);
   });
 
-  nsfwModeSelect.value = modeOptions.some((option) => option.value === initialNSFWMode)
-    ? initialNSFWMode
+  const resolvedInitialMode = normalizeModeValue(initialNSFWMode);
+  nsfwModeSelect.value = modeOptions.some((option) => option.value === resolvedInitialMode)
+    ? resolvedInitialMode
     : 'safe';
 
   nsfwModeSelect.addEventListener('change', () => {
-    onChangeNSFWMode?.(nsfwModeSelect.value);
+    const nextMode = normalizeModeValue(nsfwModeSelect.value);
+    nsfwModeSelect.value = nextMode;
+    onChangeNSFWMode?.(nextMode);
   });
 
   nsfwModeWrapper.appendChild(nsfwModeSelect);
@@ -211,8 +230,9 @@ export function createSettingsModal({
   });
 
   function setNSFWMode(mode) {
-    if (modeOptions.some((option) => option.value === mode)) {
-      nsfwModeSelect.value = mode;
+    const normalized = normalizeModeValue(mode);
+    if (modeOptions.some((option) => option.value === normalized)) {
+      nsfwModeSelect.value = normalized;
     } else {
       nsfwModeSelect.value = 'safe';
     }

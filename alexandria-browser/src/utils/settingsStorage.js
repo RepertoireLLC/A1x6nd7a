@@ -1,6 +1,6 @@
 const STORAGE_KEY = 'alexandria_browser_settings';
 
-const NSFW_MODE_VALUES = ['safe', 'moderate', 'off', 'only'];
+const NSFW_MODE_VALUES = ['safe', 'moderate', 'unrestricted', 'nsfw-only'];
 
 const DEFAULT_SETTINGS = Object.freeze({
   nsfwMode: 'safe',
@@ -10,16 +10,31 @@ const DEFAULT_SETTINGS = Object.freeze({
   aiSearchEnabled: false
 });
 
-function isValidMode(mode) {
-  return typeof mode === 'string' && NSFW_MODE_VALUES.includes(mode.toLowerCase());
+// Convert legacy stored values into the expanded toggle vocabulary.
+function normalizeModeValue(mode) {
+  if (typeof mode !== 'string') {
+    return null;
+  }
+  const lowered = mode.toLowerCase();
+  if (NSFW_MODE_VALUES.includes(lowered)) {
+    return lowered;
+  }
+  if (['off', 'none', 'no_filter'].includes(lowered)) {
+    return 'unrestricted';
+  }
+  if (['only', 'only_nsfw', 'nsfw'].includes(lowered)) {
+    return 'nsfw-only';
+  }
+  return null;
 }
 
 function resolveMode(preferred, fallbackBoolean) {
-  if (isValidMode(preferred)) {
-    return preferred.toLowerCase();
+  const normalizedPreferred = normalizeModeValue(preferred);
+  if (normalizedPreferred) {
+    return normalizedPreferred;
   }
   if (typeof fallbackBoolean === 'boolean') {
-    return fallbackBoolean ? 'safe' : 'off';
+    return fallbackBoolean ? 'safe' : 'unrestricted';
   }
   return DEFAULT_SETTINGS.nsfwMode;
 }
@@ -35,7 +50,7 @@ function readSettings() {
     const nsfwMode = resolveMode(parsed?.nsfwMode, parsed?.nsfwFiltering);
     const nsfwAcknowledged = Boolean(parsed?.nsfwAcknowledged);
     const resolvedMode = nsfwAcknowledged ? nsfwMode : DEFAULT_SETTINGS.nsfwMode;
-    const nsfwFiltering = resolvedMode !== 'off';
+    const nsfwFiltering = resolvedMode !== 'unrestricted';
     return {
       nsfwMode: resolvedMode,
       nsfwFiltering,
@@ -67,7 +82,7 @@ export function saveSettings(next) {
   const nsfwAcknowledged = Boolean(next?.nsfwAcknowledged);
   const settings = {
     nsfwMode,
-    nsfwFiltering: nsfwMode !== 'off',
+    nsfwFiltering: nsfwMode !== 'unrestricted',
     nsfwAcknowledged,
     pageSize: Number.isFinite(pageSizeValue) && pageSizeValue > 0 ? pageSizeValue : DEFAULT_SETTINGS.pageSize,
     aiSearchEnabled: Boolean(next?.aiSearchEnabled)
