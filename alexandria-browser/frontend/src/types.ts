@@ -238,6 +238,10 @@ export interface WaybackAvailabilityResponse {
   [key: string]: unknown;
 }
 
+export type SearchProviderKey = "google" | "images" | "youtube";
+
+export type SearchProviderPreferences = Record<SearchProviderKey, boolean>;
+
 export interface StoredSettings {
   theme: "light" | "dark";
   filterNSFW: boolean;
@@ -256,6 +260,7 @@ export interface StoredSettings {
   subject?: string;
   aiAssistantEnabled?: boolean;
   searchMode: SearchMode;
+  searchProviders: SearchProviderPreferences;
 }
 
 export interface SearchFilters {

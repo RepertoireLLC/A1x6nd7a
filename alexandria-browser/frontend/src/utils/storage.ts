@@ -2,7 +2,8 @@ import type {
   BookmarkEntry,
   SearchHistoryEntry,
   StoredSettings,
-  NSFWFilterMode
+  NSFWFilterMode,
+  SearchProviderPreferences
 } from "../types";
 import type { SearchMode } from "../types/search";
 
@@ -45,6 +46,17 @@ function normalizeSearchMode(value: unknown): SearchMode {
   return "legacy";
 }
 
+function normalizeSearchProviders(value: unknown): SearchProviderPreferences {
+  const defaults = DEFAULT_SETTINGS.searchProviders;
+  const provided = (value ?? {}) as Partial<SearchProviderPreferences>;
+  return {
+    // Each branch ensures we never persist `undefined`, keeping downstream logic simple.
+    google: typeof provided.google === "boolean" ? provided.google : defaults.google,
+    images: typeof provided.images === "boolean" ? provided.images : defaults.images,
+    youtube: typeof provided.youtube === "boolean" ? provided.youtube : defaults.youtube
+  };
+}
+
 export const DEFAULT_SETTINGS: StoredSettings = {
   theme: "light",
   filterNSFW: true,
@@ -62,7 +74,14 @@ export const DEFAULT_SETTINGS: StoredSettings = {
   uploader: "",
   subject: "",
   aiAssistantEnabled: false,
-  searchMode: "legacy"
+  searchMode: "legacy",
+  searchProviders: {
+    // Google Search stays enabled by default so seekers can pivot out quickly when desired.
+    google: true,
+    // Disable the media-specific pivots until the user opts in to reduce accidental context switches.
+    images: false,
+    youtube: false
+  }
 };
 
 /**
@@ -110,6 +129,7 @@ export function loadSettings(): StoredSettings {
   const resolvedMode = nsfwAcknowledged ? nsfwMode : "safe";
   const aiAssistantEnabled = typeof stored?.aiAssistantEnabled === "boolean" ? stored.aiAssistantEnabled : false;
   const searchMode = normalizeSearchMode((stored as Partial<StoredSettings>).searchMode);
+  const searchProviders = normalizeSearchProviders((stored as Partial<StoredSettings>).searchProviders);
   return {
     ...DEFAULT_SETTINGS,
     ...stored,
@@ -117,7 +137,8 @@ export function loadSettings(): StoredSettings {
     filterNSFW: resolvedMode !== "unrestricted",
     nsfwAcknowledged,
     aiAssistantEnabled,
-    searchMode
+    searchMode,
+    searchProviders
   };
 }
 
@@ -128,6 +149,7 @@ export function saveSettings(settings: StoredSettings) {
   const nsfwMode = normalizeMode(settings.nsfwMode, settings.filterNSFW);
   const nsfwAcknowledged = Boolean(settings.nsfwAcknowledged);
   const searchMode = normalizeSearchMode(settings.searchMode);
+  const searchProviders = normalizeSearchProviders(settings.searchProviders);
   writeJSON(SETTINGS_KEY, {
     ...settings,
     nsfwMode,
@@ -137,7 +159,8 @@ export function saveSettings(settings: StoredSettings) {
     collection: settings.collection ?? "",
     uploader: settings.uploader ?? "",
     subject: settings.subject ?? "",
-    searchMode
+    searchMode,
+    searchProviders
   });
 }
 

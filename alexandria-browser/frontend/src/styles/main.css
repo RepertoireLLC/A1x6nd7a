@@ -177,6 +177,76 @@ html[data-theme="light"] datalist option {
   gap: 0.8rem;
 }
 
+.search-provider-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.search-provider-toggle-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.search-provider-toggle {
+  border: var(--harmonia-border-weight) solid color-mix(in srgb, var(--harmonia-border) 65%, transparent);
+  border-radius: var(--harmonia-radius-pill);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--harmonia-surface-alt) 70%, transparent),
+      color-mix(in srgb, var(--harmonia-surface-muted) 75%, transparent));
+  color: var(--harmonia-text);
+  padding: 0.35rem 0.95rem;
+  cursor: pointer;
+  transition: transform var(--harmonia-transition), box-shadow var(--harmonia-transition),
+    border-color var(--harmonia-transition), background var(--harmonia-transition);
+}
+
+.search-provider-toggle:hover,
+.search-provider-toggle:focus-visible {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--harmonia-border-strong) 70%, transparent);
+  box-shadow: 0 12px 30px -24px var(--harmonia-glow-primary);
+}
+
+.search-provider-toggle.is-active {
+  border-color: color-mix(in srgb, var(--harmonia-glow-primary) 40%, transparent);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--harmonia-glow-primary) 22%, transparent),
+      color-mix(in srgb, var(--harmonia-surface-alt) 78%, transparent));
+  box-shadow: 0 18px 38px -26px var(--harmonia-glow-primary);
+}
+
+.search-provider-toggle-label {
+  pointer-events: none;
+}
+
+.search-provider-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.search-provider-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: var(--harmonia-radius-pill);
+  border: var(--harmonia-border-weight) solid color-mix(in srgb, var(--harmonia-border) 55%, transparent);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--harmonia-surface-muted) 78%, transparent),
+      color-mix(in srgb, var(--harmonia-surface-alt) 60%, transparent));
+  padding: 0.35rem 0.9rem;
+  color: var(--harmonia-text);
+  text-decoration: none;
+  transition: transform var(--harmonia-transition), box-shadow var(--harmonia-transition),
+    border-color var(--harmonia-transition);
+}
+
+.search-provider-action:hover,
+.search-provider-action:focus-visible {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--harmonia-border-strong) 70%, transparent);
+  box-shadow: 0 14px 34px -24px var(--harmonia-glow-accent);
+}
+
 .search-bar-input {
   display: flex;
   align-items: center;
