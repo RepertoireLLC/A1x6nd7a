@@ -21,7 +21,8 @@ const state = {
   error: null,
   loadMoreError: null,
   suggestion: null,
-  nsfwMode: storedSettings.nsfwMode ?? (storedSettings.nsfwFiltering ? NSFW_MODES.SAFE : NSFW_MODES.OFF),
+  nsfwMode:
+    storedSettings.nsfwMode ?? (storedSettings.nsfwFiltering ? NSFW_MODES.SAFE : NSFW_MODES.UNRESTRICTED),
   nsfwAcknowledged: Boolean(storedSettings.nsfwAcknowledged),
   keywords: [],
   hasMore: false,
@@ -162,7 +163,7 @@ resultsContainer.addEventListener('alexandria:report', (event) => {
 function persistSettings() {
   saveSettings({
     nsfwMode: state.nsfwMode,
-    nsfwFiltering: state.nsfwMode !== NSFW_MODES.OFF,
+    nsfwFiltering: state.nsfwMode !== NSFW_MODES.UNRESTRICTED,
     nsfwAcknowledged: state.nsfwAcknowledged,
     pageSize: state.pageSize,
     aiSearchEnabled: state.aiSearchEnabled
@@ -504,7 +505,8 @@ const settingsModal = createSettingsModal({
   },
   onResetSettings: async () => {
     const defaults = resetSettings();
-    state.nsfwMode = defaults.nsfwMode ?? (defaults.nsfwFiltering ? NSFW_MODES.SAFE : NSFW_MODES.OFF);
+    state.nsfwMode =
+      defaults.nsfwMode ?? (defaults.nsfwFiltering ? NSFW_MODES.SAFE : NSFW_MODES.UNRESTRICTED);
     state.nsfwAcknowledged = Boolean(defaults.nsfwAcknowledged);
     state.pageSize = defaults.pageSize;
     state.aiSearchEnabled = Boolean(defaults.aiSearchEnabled);
